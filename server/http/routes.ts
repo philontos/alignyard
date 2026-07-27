@@ -894,6 +894,25 @@ app.post("/api/nodes/:hostId/tasks/local", async (req, res) => {
   return res.status(500).json({ error: result.message || result.error });
 });
 
+// Rename a node-owned task on the node that owns its DB + manifest. The title is
+// base64-JSON encoded for the CLI hop so whitespace, quotes and leading dashes
+// survive SSH argv unchanged.
+app.patch("/api/nodes/:hostId/tasks/:taskId", async (req, res) => {
+  const lang = langFromReq(req);
+  const host = remoteHost(req, res);
+  if (!host) return;
+  const taskId = Number(req.params.taskId);
+  if (!Number.isInteger(taskId)) return res.status(400).json({ error: "invalid task id" });
+  const title = String(req.body?.title ?? "").trim();
+  if (!title) return res.status(400).json({ error: tr(lang, "task.titleRequired") });
+  const { out, result } = await runNodeJson(host, ["rename", String(taskId), b64Json({ title })]);
+  if (!result) return sendMissingNodeCommand(req, res, "rename", out);
+  if (result.ok) return res.json({ ok: true, title: result.title });
+  if (result.error === "empty") return res.status(400).json({ error: tr(lang, "task.titleRequired") });
+  if (result.error === "notFound") return res.status(404).json({ error: tr(lang, "notFound") });
+  return res.status(500).json({ error: result.message || result.error || "rename failed" });
+});
+
 // Raw bytes travel over SSH stdin; B resolves the task, writes the file, updates
 // git excludes and pastes the reference into its own tmux session.
 app.post("/api/nodes/:hostId/tasks/:taskId/paste-image", express.raw({ type: "image/*", limit: "25mb" }), async (req, res) => {
