@@ -8,13 +8,15 @@
 //   Codex:   ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl  (no hook, so we
 //            locate it the way `codex resume --last` does: newest rollout whose
 //            session_meta.cwd == the worktree)
-//   Kimi:    launched and live in the terminal, but not parsed into Reading yet.
+//   Kimi:    ~/.kimi-code/session_index.jsonl maps the worktree to a session dir;
+//            agents/main/wire.jsonl is its durable conversation event stream.
 //
 // All file access is performed by the task's owning node. A controller asks that
 // node for higher-level task operations; it never locates or tails the node's
 // transcript files over SSH. Parsing is stateless per line, so tailing remains a
 // pure append with a simple byte cursor.
 import os from "node:os";
+import path from "node:path";
 import type { Runner } from "../fleet/runner.js";
 import { asAgentKind, type AgentKind } from "./agent.js";
 import type { Task } from "../core/db.js";
@@ -30,8 +32,8 @@ export type Entry =
 
 export interface TranscriptResult {
   agent: AgentKind;
-  /** identity of the underlying file (Claude session id / Codex rollout path). When it
-   *  changes (e.g. /clear starts a new Claude session), the client drops its cursor. */
+  /** Identity of the underlying file (Claude session id / Codex rollout path /
+   *  Kimi wire path). When it changes, the client drops its cursor. */
   source: string | null;
   entries: Entry[];
   /** byte offset to pass back as `since` on the next poll to get only what's new. */
@@ -68,6 +70,22 @@ function claudeContentStr(c: unknown): string {
   if (typeof c === "string") return c;
   if (Array.isArray(c)) return c.map((x) => (typeof x === "string" ? x : (x?.type === "text" ? x.text : x?.type === "image" ? "[image]" : ""))).join("");
   return c == null ? "" : JSON.stringify(c);
+}
+
+// Kimi ContentPart arrays use text/think plus media containers. Read mode does
+// not render binary media inline, but retaining a marker keeps an image-only
+// prompt or tool result visible in the conversation.
+function kimiContentStr(c: unknown): string {
+  if (typeof c === "string") return c;
+  if (!Array.isArray(c)) return c == null ? "" : JSON.stringify(c);
+  return c.map((x) => {
+    if (typeof x === "string") return x;
+    if (x?.type === "text" && typeof x.text === "string") return x.text;
+    if (x?.type === "think" && typeof x.think === "string") return x.think;
+    if (x?.imageUrl || x?.image_url || x?.type === "image") return "[image]";
+    if (x?.audioUrl || x?.audio_url || x?.type === "audio") return "[audio]";
+    return "";
+  }).join("");
 }
 
 // ---- per-agent line → entries (stateless; unknown/meta lines yield nothing) ----
@@ -135,6 +153,55 @@ export function parseCodexLine(o: any): Entry[] {
   return [];
 }
 
+export function parseKimiLine(o: any): Entry[] {
+  if (!o || typeof o !== "object") return [];
+
+  // turn.prompt/turn.steer are followed by this canonical context message, so
+  // parsing both would duplicate every user turn. Injections (permission mode,
+  // todo reminders, compaction summaries, etc.) are agent context, not things
+  // the person typed, and stay out of the reading view.
+  if (o.type === "context.append_message") {
+    const m = o.message ?? {};
+    if (m.role !== "user" || m.origin?.kind !== "user") return [];
+    const text = kimiContentStr(m.content);
+    return text.trim() ? [{ t: "user", text }] : [];
+  }
+
+  if (o.type !== "context.append_loop_event") return [];
+  const e = o.event ?? {};
+  if (e.type === "content.part") {
+    const p = e.part ?? {};
+    if (p.type === "text" && typeof p.text === "string" && p.text.trim()) {
+      return [{ t: "assistant", text: p.text }];
+    }
+    if ((p.type === "think" || p.type === "thinking")) {
+      const text = typeof p.think === "string" ? p.think : typeof p.thinking === "string" ? p.thinking : "";
+      return text.trim() ? [{ t: "thinking", text }] : [];
+    }
+    return [];
+  }
+  if (e.type === "tool.call") {
+    return [{
+      t: "tool_call",
+      id: String(e.toolCallId ?? e.id ?? ""),
+      name: String(e.name ?? "tool"),
+      arg: toolArg(e.args),
+      detail: toolDetail(e.args),
+    }];
+  }
+  if (e.type === "tool.result") {
+    const result = e.result ?? {};
+    const output = result.output ?? result.content ?? "";
+    return [{
+      t: "tool_result",
+      id: String(e.toolCallId ?? e.id ?? ""),
+      ok: !result.isError,
+      output: cap(kimiContentStr(output), OUT_CAP),
+    }];
+  }
+  return [];
+}
+
 // ---- file location ----
 
 const escapeClaudeCwd = (cwd: string) => cwd.replace(/[/.]/g, "-");
@@ -157,6 +224,62 @@ async function locateCodex(runner: Runner, home: string, cwd: string, taskId: nu
   const found = (await runner.exec("sh", ["-c", cmd]).catch(() => "")).trim();
   if (found) codexPathCache.set(taskId, found);
   return found || null;
+}
+
+interface KimiSessionIndexEntry {
+  sessionId: string;
+  sessionDir: string;
+  workDir: string;
+  order: number;
+}
+
+// Kimi's index is append-only: a later record replaces/deletes an earlier record
+// with the same session id. A worktree can have multiple sessions after /new or
+// /sessions, so prefer the state.json with the newest activity timestamp, using
+// index order as a deterministic fallback. Re-evaluating the small index on each
+// poll lets Read follow a session switch and causes the source id to reset cleanly.
+async function locateKimi(runner: Runner, home: string, cwd: string): Promise<string | null> {
+  const kimiHome = process.env.KIMI_CODE_HOME || path.join(home, ".kimi-code");
+  const sessionsRoot = path.resolve(kimiHome, "sessions");
+  const raw = await runner.readText(path.join(kimiHome, "session_index.jsonl")).catch(() => null);
+  if (!raw) return null;
+
+  const byId = new Map<string, KimiSessionIndexEntry>();
+  let order = 0;
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let rec: any;
+    try { rec = JSON.parse(line); } catch { continue; }
+    if (!rec || typeof rec.sessionId !== "string") continue;
+    if (rec.deleted === true) { byId.delete(rec.sessionId); continue; }
+    if (typeof rec.sessionDir !== "string" || typeof rec.workDir !== "string") continue;
+    byId.set(rec.sessionId, { ...rec, order: order++ });
+  }
+
+  let best: { file: string; activity: number; order: number } | null = null;
+  for (const rec of byId.values()) {
+    if (path.resolve(rec.workDir) !== path.resolve(cwd)) continue;
+    const sessionDir = path.resolve(rec.sessionDir);
+    const rel = path.relative(sessionsRoot, sessionDir);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel) || path.basename(sessionDir) !== rec.sessionId) continue;
+    const file = path.join(sessionDir, "agents", "main", "wire.jsonl");
+    if (!(await runner.exists(file).catch(() => false))) continue;
+
+    let activity = 0;
+    const state = await runner.readText(path.join(sessionDir, "state.json")).catch(() => null);
+    if (state) {
+      try {
+        const parsed = JSON.parse(state);
+        const recordedCwd = typeof parsed?.workDir === "string" ? path.resolve(parsed.workDir) : null;
+        if (recordedCwd && recordedCwd !== path.resolve(cwd)) continue;
+        activity = Date.parse(parsed?.updatedAt || parsed?.createdAt || "") || 0;
+      } catch {}
+    }
+    if (!best || activity > best.activity || (activity === best.activity && rec.order > best.order)) {
+      best = { file, activity, order: rec.order };
+    }
+  }
+  return best?.file ?? null;
 }
 const sh = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 const ere = (s: string) => s.replace(/[.[\]{}()*+?^$|\\]/g, "\\$&");
@@ -195,12 +318,14 @@ export async function readTranscript(
   const cwd = task.worktree_path;
   if (!cwd) return { agent, source: null, entries: [], cursor: 0 };
   const home = os.homedir();
-  if (agent === "kimi") return { agent, source: null, entries: [], cursor: 0 };
 
   let file: string | null = null;
   let source: string | null = null;
   if (agent === "codex") {
     file = await locateCodex(runner, home, cwd, task.id);
+    source = file;
+  } else if (agent === "kimi") {
+    file = await locateKimi(runner, home, cwd);
     source = file;
   } else {
     const sid = task.claude_session;
@@ -212,7 +337,7 @@ export async function readTranscript(
   const tail = await tailFrom(runner, file, from);
   if (!tail) return { agent, source, entries: [], cursor: from };
 
-  const parse = agent === "codex" ? parseCodexLine : parseClaudeLine;
+  const parse = agent === "codex" ? parseCodexLine : agent === "kimi" ? parseKimiLine : parseClaudeLine;
   const entries: Entry[] = [];
   for (const line of tail.text.split("\n")) {
     if (!line) continue;
