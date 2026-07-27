@@ -538,6 +538,9 @@ button.danger:hover { background: #f8514914; border-color: #f85149aa; }
    were inert — a non-flex parent.) box-sizing keeps the padding inside the track. */
 .tname-edit { flex: 1 1 0; min-width: 0; box-sizing: border-box; margin: 0; padding: 1px 6px; font: inherit; font-weight: 600;
   color: var(--text); background: var(--surface-2); border: 1px solid var(--accent); border-radius: 5px; }
+.tname-edit.saving { color: var(--muted); border-color: var(--border-hover); cursor: wait; opacity: .82; }
+.tname-save-state { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 500; white-space: nowrap; }
+.tname-save-state .sync-icon { width: 11px; height: 11px; animation: spin .8s linear infinite; }
 .card.clickable { cursor: pointer; transition: border-color .12s, background .12s; }
 @media (hover: hover) {
   .card.clickable:hover { border-color: var(--accent); background: var(--card-hover); }

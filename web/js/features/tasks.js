@@ -30,12 +30,12 @@ let modalProviderAvailable = true;
 // when set, the dispatch modal is in "node mode": dispatch to a remote node's OWN
 // repo (surfaced via the fleet) instead of a controller-registered repo.
 let nodeTask = null;   // { hostId, repo } or null
-// id of the task whose title is being edited inline. While set, renderList()
+// key of the task whose title is being edited inline. While set, renderList()
 // (the single place that rebuilds #m-list) bails, so NONE of the re-render paths
 // — loadTasks (4s), loadHosts (5s), loadRepos, a language switch — can blow the
 // open input away mid-edit. finish() re-renders once, on commit/cancel.
-let editingTaskId = null;
-export function isEditingTask() { return editingTaskId != null; }
+let editingTaskKey = null;
+export function isEditingTask() { return editingTaskKey != null; }
 
 // reflect the current selection onto the cards already in the DOM (no refetch).
 // Three kinds of card, matched by which key they carry:
@@ -520,19 +520,24 @@ export async function loadTasks() {
   // open card was one of them, clear the now-dangling selection.
   const keep = new Set(tasks.filter(t => t.status !== "cleaned").map(t => t.id));
   if (prunePanes(keep).includes(state.selectedTaskId)) state.selectedTaskId = null;
-  if (editingTaskId != null) return;         // a rename input is open — refresh the cache but leave the DOM alone
+  if (editingTaskKey != null) return;        // a rename input is open — refresh the cache but leave the DOM alone
   rerender();
 }
 
 // Inline rename: double-clicking a card's title swaps it for a text input.
-// Enter or click-away commits (PATCH /api/tasks/:id, title only); Esc cancels.
-// We only touch the display title — the tmux session & git branch are unchanged.
-export function renameTask(event, id) {
+// Enter or click-away commits to the owning node (local PATCH or remote relay);
+// Esc cancels. Only the display title changes — session & branch stay immutable.
+export function renameTask(event, id, hostId = null) {
   event.stopPropagation();                    // don't let the card's onclick connect()
   const span = event.currentTarget;
-  if (!span || editingTaskId === id) return;   // already editing this one
-  const current = tasksById[id]?.title ?? span.textContent;
-  editingTaskId = id;
+  const remote = hostId != null;
+  const editKey = remote ? `n${hostId}:${id}` : `local:${id}`;
+  if (!span || editingTaskKey === editKey) return; // already editing this one
+  const task = remote
+    ? state.fleet[hostId]?.tasks?.find(candidate => candidate.id === id)
+    : tasksById[id];
+  const current = task?.title ?? span.textContent;
+  editingTaskKey = editKey;
 
   const input = document.createElement("input");
   input.className = "tname-edit";
@@ -544,18 +549,38 @@ export function renameTask(event, id) {
   let done = false;                           // guards Enter-then-blur double commit
   const finish = async commit => {
     if (done) return; done = true;
-    editingTaskId = null;
     const next = input.value.trim();
     if (commit && next && next !== current) {
+      // Blur/Enter starts an async save. Keep the list's edit lock held until it
+      // settles so poll-driven renders cannot erase this visible state.
+      input.disabled = true;
+      input.classList.add("saving");
+      input.setAttribute("aria-busy", "true");
+      const saving = document.createElement("span");
+      saving.className = "tname-save-state";
+      saving.setAttribute("role", "status");
+      saving.setAttribute("aria-live", "polite");
+      saving.title = I18N.t("task.renameSaving");
+      saving.innerHTML = `<span class="sync-icon" aria-hidden="true"></span><span>${I18N.t("task.renameSaving")}</span>`;
+      input.after(saving);
       try {
-        const r = await api(`/api/tasks/${id}`, {
+        const url = remote ? `/api/nodes/${hostId}/tasks/${id}` : `/api/tasks/${id}`;
+        const r = await api(url, {
           method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: next }),
         });
-        if (tasksById[id]) tasksById[id].title = r.title;
+        // Polls keep refreshing the caches while renderList is locked. Resolve
+        // the task again after the await instead of mutating the pre-request
+        // object, which may have been replaced by a newer snapshot.
+        const latest = remote
+          ? state.fleet[hostId]?.tasks?.find(candidate => candidate.id === id)
+          : tasksById[id];
+        if (latest) latest.title = r.title;
         // a double-click opens the task in the dock first — keep its header fresh
-        if (state.selectedTaskId === id) $("term-title").textContent = `#${id} ${r.title}`;
+        const selectedId = remote ? `n${hostId}:${id}` : id;
+        if (state.selectedTaskId === selectedId) $("term-title").textContent = `#${id} ${r.title}`;
       } catch (e) { toast(e.message, "error"); }
     }
+    editingTaskKey = null;
     rerender();                               // rebuild the card from the (maybe) updated cache
   };
 

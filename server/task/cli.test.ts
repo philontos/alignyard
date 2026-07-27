@@ -124,6 +124,7 @@ function fakeDeps(db: Database.Database) {
   const createCalls: { cwd?: string | null; title?: string | null }[] = [];
   const repoCalls: any[] = [];
   const stopCalls: number[] = [];
+  const renameCalls: Array<[number, unknown]> = [];
   const lifecycleCalls: Array<[string, number]> = [];
   const branchCalls: number[] = [];
   const providerCalls: any[] = [];
@@ -175,6 +176,10 @@ function fakeDeps(db: Database.Database) {
       repoDelete: async (id: number, force: boolean) => {
         repoCalls.push(["delete", id, force]);
         return { ok: true as const, id, existing: true, retrying: false, status: "ready" as const };
+      },
+      rename: async (id: number, title: unknown) => {
+        renameCalls.push([id, title]);
+        return { ok: true as const, title: String(title) };
       },
       stop: async (id: number) => {
         stopCalls.push(id);
@@ -311,6 +316,7 @@ function fakeDeps(db: Database.Database) {
     createCalls,
     repoCalls,
     stopCalls,
+    renameCalls,
     lifecycleCalls,
     branchCalls,
     providerCalls,
@@ -616,6 +622,22 @@ test("runCli create exits 1 and prints the error when dispatch fails", async () 
   const code = await runCli(["create", b64], f.deps);
   assert.equal(code, 1);
   assert.match(f.out, /dispatchFailed/);
+});
+
+test("runCli rename decodes the title and invokes the node-local rename", async () => {
+  const f = fakeDeps(seed());
+  const payload = Buffer.from(JSON.stringify({ title: `  --修复 "quotes"  ` })).toString("base64");
+  const code = await runCli(["rename", "42", payload], f.deps);
+  assert.equal(code, 0);
+  assert.deepEqual(f.renameCalls, [[42, `  --修复 "quotes"  `]]);
+  assert.deepEqual(JSON.parse(f.out), { ok: true, title: `  --修复 "quotes"  ` });
+});
+
+test("runCli rename rejects malformed input without mutating a task", async () => {
+  const f = fakeDeps(seed());
+  assert.equal(await runCli(["rename", "nope", "anything"], f.deps), 1);
+  assert.equal(await runCli(["rename", "42", "not-json"], f.deps), 1);
+  assert.deepEqual(f.renameCalls, []);
 });
 
 test("runCli stop parses the id, invokes stop, prints JSON, exits 0", async () => {

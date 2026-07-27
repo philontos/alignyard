@@ -160,6 +160,7 @@
       // task card
       "task.waiting": "等待你授权",
       "task.renameHint": "双击重命名",
+      "task.renameSaving": "保存中…",
       "task.stopTitle": "终止任务并归档",
       "task.worktreeKept": "worktree 未删",
       "task.resume": "恢复",
@@ -458,6 +459,7 @@
 
       "task.waiting": "Waiting for your approval",
       "task.renameHint": "Double-click to rename",
+      "task.renameSaving": "Saving…",
       "task.stopTitle": "Stop task & archive",
       "task.worktreeKept": "worktree kept",
       "task.resume": "Resume",

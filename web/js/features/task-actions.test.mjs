@@ -39,6 +39,15 @@ test("local and remote stop actions confirm before calling their APIs", () => {
   assert.ok(remoteStop.indexOf("confirmDialog") < remoteStop.indexOf("/stop"));
 });
 
+test("local and remote task titles share inline rename with a visible saving state", () => {
+  assert.match(tasks, /ondblclick="renameTask\(event,\$\{t\.id\}\)"/);
+  assert.match(hosts, /ondblclick="renameTask\(event,\$\{tk\.id\},\$\{hostId\}\)"/);
+  assert.match(tasks, /\/api\/nodes\/\$\{hostId\}\/tasks\/\$\{id\}/);
+  assert.match(tasks, /input\.classList\.add\("saving"\)/);
+  assert.match(tasks, /className = "tname-save-state"/);
+  assert.match(css, /\.tname-save-state \.sync-icon\s*\{[^}]*animation:\s*spin/s);
+});
+
 test("desktop dispatch branch picker uses a larger drawn chevron", () => {
   assert.match(css, /@media \(min-width: 761px\)\s*\{[\s\S]*?#task-modal #t-base \.cs-caret\s*\{[^}]*width:\s*24px;[^}]*height:\s*24px;/);
   assert.match(css, /#task-modal #t-base \.cs-caret::before\s*\{[^}]*border-right:\s*2px solid currentColor;[^}]*border-bottom:\s*2px solid currentColor;/s);
