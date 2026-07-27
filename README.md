@@ -123,11 +123,11 @@ A host reboot or killed tmux session does not destroy the working tree. As long 
 |---|---|---|
 | **Claude Code** | Machine login or a validated Anthropic-compatible endpoint | Live terminal, resume, image paste, native permission-waiting signal, local mobile transcript |
 | **Codex** | Machine login and optional model ID | Live terminal, resume, image paste, full-access launch, local mobile transcript |
-| **Kimi Code / Kimi K3** | Machine login and optional model ID such as `k3` | Interactive `--auto` terminal, resume, and image paste |
+| **Kimi Code / Kimi K3** | Machine login and optional model ID such as `k3` | Interactive `--auto` terminal, resume, image paste, local mobile transcript |
 
 The selected agent and model belong to the task and are preserved on resume. Provider credentials stay on the machine that runs the task and are not copied to peers.
 
-Current boundary: the yellow “needs you” permission signal is Claude Code-only. Remote-node transcripts and Kimi transcripts do not yet have **Read** mode; those tasks open directly in the live terminal.
+Current boundary: the yellow “needs you” permission signal is Claude Code-only. Remote-node transcripts do not yet have **Read** mode; those tasks open directly in the live terminal.
 
 ## Built for the phone
 
