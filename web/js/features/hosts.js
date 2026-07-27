@@ -237,7 +237,7 @@ function fleetCard(hostId, tk) {
   const open = lifecycle.connectable ? ` clickable" onclick="connectNode(${hostId},${tk.id})` : "";
   return `<div class="card task task-${agent}${open}" data-pane="${paneId}">
       <button class="card-x${icon.cls}" title="${icon.title}" aria-label="${icon.title}" onclick="event.stopPropagation();${icon.fn}">${icon.glyph}</button>
-      <div class="t">${fleetDot(tk)}#${tk.id} <span class="tname">${tk.title}</span></div>
+      <div class="t">${fleetDot(tk)}#${tk.id} <span class="tname" title="${t("task.renameHint")}" ondblclick="renameTask(event,${tk.id},${hostId})">${tk.title}</span></div>
       ${meta}
       ${note}${resumeBtn}
     </div>`;

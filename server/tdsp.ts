@@ -28,6 +28,7 @@ import { clearProviderFromOwnedTasks, getOwnedRepo } from "./core/ownership.js";
 import { branchesForOwnedRepo, deleteOwnedRepo, fetchOwnedRepo, registerOwnedRepo, type OwnedRepoEnv } from "./repo/owned.js";
 import { syncReposManifest } from "./repo/manifest.js";
 import { pasteImageIntoOwnedTask } from "./task/paste-service.js";
+import { renameTask } from "./task/tasks.js";
 import {
   configureTailscalePeerRelay,
   diagnoseTailscale,
@@ -218,6 +219,16 @@ process.exitCode = await runCli(process.argv.slice(2), {
   repoFetch: (id) => fetchOwnedRepo(ownedRepoEnv, id),
   repoBranches: (id) => branchesForOwnedRepo(ownedRepoEnv, id),
   repoDelete: (id, force) => deleteOwnedRepo(ownedRepoEnv, id, force),
+  // Display titles are owned by the node too. Persist the renamed row and its
+  // co-located manifest before returning it to a remote controller.
+  rename: (id, title) => {
+    const result = renameTask(db, id, title);
+    if (!("error" in result)) {
+      const task = db.prepare("SELECT * FROM tasks WHERE id=?").get(id) as Task;
+      writeTaskManifest(DATA_DIR, task);
+    }
+    return result;
+  },
   inspectCode: (request) => inspectOwnedCode(db, localRunner, request),
   // stop one of THIS node's tasks: kill its session, mark cleaned, re-manifest.
   stop: (id) =>
