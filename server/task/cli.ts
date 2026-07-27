@@ -10,6 +10,7 @@ import type { LifecycleResult } from "./lifecycle.js";
 import { CODE_VIEW_CAPABILITY, isCodeInspectRequest, type CodeInspectRequest, type CodeInspectResult } from "../codeview/codeview.js";
 import type { OwnedRepoFailure, OwnedRepoInput, OwnedRepoResult } from "../repo/owned.js";
 import type { PasteImageResult } from "./paste-service.js";
+import type { RenameResult } from "./tasks.js";
 import { legacyOwnershipReport } from "../core/ownership.js";
 import { listOwnedRepos, listOwnedTasks } from "../core/ownership.js";
 import type {
@@ -276,6 +277,7 @@ export interface CliDeps {
   repoFetch: (id: number) => Promise<OwnedRepoResult>;
   repoBranches: (id: number) => Promise<{ ok: true; branches: string[] } | OwnedRepoFailure>;
   repoDelete: (id: number, force: boolean) => Promise<OwnedRepoResult>;
+  rename: (id: number, title: unknown) => RenameResult | Promise<RenameResult>;
   stop: (id: number) => Promise<StopResult>;
   resume: (id: number) => Promise<LifecycleResult>;
   cleanup: (id: number) => Promise<LifecycleResult>;
@@ -740,6 +742,24 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       deps.out(JSON.stringify(r));
       return 0;
     }
+    case "rename": {
+      const id = Number(argv[1]);
+      if (!Number.isInteger(id)) {
+        deps.out(JSON.stringify({ ok: false, error: "invalid id" }));
+        return 1;
+      }
+      let body: { title?: unknown };
+      try {
+        body = JSON.parse(Buffer.from(argv[2] ?? "", "base64").toString("utf8")) as { title?: unknown };
+      } catch {
+        deps.out(JSON.stringify({ ok: false, error: "invalid title" }));
+        return 1;
+      }
+      const renamed = await deps.rename(id, body?.title);
+      const result = "error" in renamed ? { ok: false, ...renamed } : renamed;
+      deps.out(JSON.stringify(result));
+      return result.ok ? 0 : 1;
+    }
     case "stop": {
       const id = Number(argv[1]);
       if (!Number.isInteger(id)) {
@@ -866,7 +886,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       return 0;
     }
     default:
-      deps.err(`Usage: tdsp <serve [status|stop|restart]|network|list|inspect-code|create-local|create|repo-create|repo-fetch|repo-branches|repo-delete|stop|resume|cleanup|delete-task|paste-image|providers-list|providers-test|providers-create|providers-delete|doctor|install|uninstall|update>\n${cmd ? `unknown command: ${cmd}` : "no command given"}`);
+      deps.err(`Usage: tdsp <serve [status|stop|restart]|network|list|inspect-code|create-local|create|repo-create|repo-fetch|repo-branches|repo-delete|rename|stop|resume|cleanup|delete-task|paste-image|providers-list|providers-test|providers-create|providers-delete|doctor|install|uninstall|update>\n${cmd ? `unknown command: ${cmd}` : "no command given"}`);
       return 1;
   }
 }
