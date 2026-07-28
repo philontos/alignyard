@@ -19,6 +19,7 @@ import { loadTasks, addTask, archive, removeWt, deleteTask, resume, connect, ope
 import { initCodeView, openRepoCode, openTaskCode, closeCodeView, repaintCodeView, isCodeViewOpen } from "./features/codeview.js";
 import { initReorder } from "./features/reorder.js";
 import { refreshProviders, repaintProviders, onProviderChange, toggleProviderPanel, onPanelInput, testProvider, addProvider, delProvider } from "./features/providers.js";
+import { canReadTarget } from "./core/reading-target.js";
 import {
   closeOnboardingModal,
   copyOnboardingPhoneUrl,
@@ -65,7 +66,7 @@ Object.assign(window, {
 // mobile.js stay decoupled from the task cache this way.
 function syncReadWaiting() {
   const tasks = allTasks();
-  reflectWaiting(state.selectedTaskId, tasks);
+  reflectWaiting(state.selectedTaskId, tasks, state.fleet);
   reflectKeysWaiting(tasks);
 }
 
@@ -116,11 +117,9 @@ try { initTerm(); } catch (e) { console.error("terminal init failed:", e); }
 setViewHooks(
   (id) => {
     if (!isMobile() || autoFollowing()) return;
-    // Readable = a real local task run by an agent. A bare SHELL (kind "local") has no
-    // transcript, so it gets no 阅读|实时 toggle and opens straight in the live terminal;
-    // same for pending placeholders and remote-node panes (string ids).
-    const t = typeof id === "number" ? allTasks().find((x) => x.id === id) : null;
-    enterTerminal(id, !!t && t.kind !== "local");
+    // Agent tasks are readable on their owning node. Remote panes additionally
+    // require transcript-v1, so an older node opens safely in Live until updated.
+    enterTerminal(id, canReadTarget(id, allTasks(), state.fleet));
     syncReadWaiting();   // a task already blocked on a prompt pops the key row now, not at the next poll
   },
   () => { if (isMobile()) enterList(); },

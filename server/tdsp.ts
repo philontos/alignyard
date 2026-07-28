@@ -24,7 +24,7 @@ import { buildRepoTaskEnv } from "./repo/repoenv.js";
 import { removeTaskManifest, writeTaskManifest } from "./task/taskmanifest.js";
 import { checkProvider, insertCheckedProvider, providersForList, providerEnv } from "./provider/providers.js";
 import { inspectOwnedCode } from "./codeview/codeview.js";
-import { clearProviderFromOwnedTasks, getOwnedRepo } from "./core/ownership.js";
+import { clearProviderFromOwnedTasks, getOwnedRepo, getOwnedTask } from "./core/ownership.js";
 import { branchesForOwnedRepo, deleteOwnedRepo, fetchOwnedRepo, registerOwnedRepo, type OwnedRepoEnv } from "./repo/owned.js";
 import { syncReposManifest } from "./repo/manifest.js";
 import { pasteImageIntoOwnedTask } from "./task/paste-service.js";
@@ -38,6 +38,7 @@ import {
   tailscaleStatus,
 } from "./network/tailscale.js";
 import { forgetOwnedServeRoute, recordOwnedServeRoute } from "./network/serve-ownership.js";
+import { readTranscript } from "./session/transcript.js";
 
 // Ensure child processes (tmux/git/claude) find Homebrew binaries regardless of
 // how tdsp was launched — a bare non-interactive ssh PATH otherwise can't resolve
@@ -230,6 +231,26 @@ process.exitCode = await runCli(process.argv.slice(2), {
     return result;
   },
   inspectCode: (request) => inspectOwnedCode(db, localRunner, request),
+  transcript: async (request) => {
+    const task = getOwnedTask(db, request.taskId);
+    if (!task) {
+      return { ok: false as const, error: "notFound" as const, message: "Task not found on this node" };
+    }
+    try {
+      return {
+        ok: true as const,
+        transcript: await readTranscript(localRunner, task, request.since, request.source),
+      };
+    } catch {
+      // A controller gets a stable semantic failure, never an owner-local path
+      // or raw filesystem diagnostic.
+      return {
+        ok: false as const,
+        error: "readFailed" as const,
+        message: "Transcript read failed on this node",
+      };
+    }
+  },
   // stop one of THIS node's tasks: kill its session, mark cleaned, re-manifest.
   stop: (id) =>
     stopTask(

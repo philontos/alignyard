@@ -32,19 +32,71 @@ export type Entry =
 
 export interface TranscriptResult {
   agent: AgentKind;
-  /** Identity of the underlying file (Claude session id / Codex rollout path /
-   *  Kimi wire path). When it changes, the client drops its cursor. */
+  /** Opaque identity of the underlying session. It deliberately contains no
+   *  owner-local path; when it changes, the client drops its cursor. */
   source: string | null;
   entries: Entry[];
   /** byte offset to pass back as `since` on the next poll to get only what's new. */
   cursor: number;
+  /** More complete lines are ready. The client may fetch the next page immediately. */
+  hasMore?: boolean;
 }
 
+export const TRANSCRIPT_CAPABILITY = "transcript-v1";
+export interface TranscriptReadRequest {
+  taskId: number;
+  since: number;
+  source: string | null;
+}
+export type TranscriptCommandResult =
+  | { ok: true; transcript: TranscriptResult }
+  | { ok: false; error: "notFound" | "invalidRequest" | "readFailed"; message: string };
+
+const SOURCE_CAP = 4096;
+const PAGE_CAP = 4 * 1024 * 1024;
 const OUT_CAP = 6000;   // truncate a single tool output to keep the payload sane
 const IN_CAP = 2000;    // truncate a tool's expanded input detail
 const oneLine = (s: string, n: number) => s.replace(/\s+/g, " ").trim().slice(0, n);
 const cap = (s: string, n: number) => (s.length > n ? s.slice(0, n) + "\n…（已截断）" : s);
 const tryParse = (s: string) => { try { return JSON.parse(s); } catch { return null; } };
+
+export function isTranscriptReadRequest(value: unknown): value is TranscriptReadRequest {
+  const request = value as Partial<TranscriptReadRequest> | null;
+  return !!request
+    && Number.isSafeInteger(request.taskId) && Number(request.taskId) > 0
+    && Number.isSafeInteger(request.since) && Number(request.since) >= 0
+    && (request.source === null || (typeof request.source === "string" && request.source.length <= SOURCE_CAP));
+}
+
+function isEntry(value: unknown): value is Entry {
+  const entry = value as Record<string, unknown> | null;
+  if (!entry || typeof entry.t !== "string") return false;
+  if (entry.t === "user" || entry.t === "assistant" || entry.t === "thinking") {
+    return typeof entry.text === "string";
+  }
+  if (entry.t === "tool_call") {
+    return typeof entry.id === "string"
+      && typeof entry.name === "string"
+      && typeof entry.arg === "string"
+      && typeof entry.detail === "string";
+  }
+  if (entry.t === "tool_result") {
+    return typeof entry.id === "string"
+      && typeof entry.ok === "boolean"
+      && typeof entry.output === "string";
+  }
+  return false;
+}
+
+export function isTranscriptResult(value: unknown): value is TranscriptResult {
+  const result = value as Partial<TranscriptResult> | null;
+  return !!result
+    && (result.agent === "claude" || result.agent === "codex" || result.agent === "kimi")
+    && (result.source === null || (typeof result.source === "string" && result.source.length <= SOURCE_CAP))
+    && Number.isSafeInteger(result.cursor) && Number(result.cursor) >= 0
+    && Array.isArray(result.entries) && result.entries.every(isEntry)
+    && (result.hasMore === undefined || typeof result.hasMore === "boolean");
+}
 
 // Best one-liner for a tool call's summary row: the command / file / pattern it acts on.
 function toolArg(input: unknown): string {
@@ -238,7 +290,7 @@ interface KimiSessionIndexEntry {
 // /sessions, so prefer the state.json with the newest activity timestamp, using
 // index order as a deterministic fallback. Re-evaluating the small index on each
 // poll lets Read follow a session switch and causes the source id to reset cleanly.
-async function locateKimi(runner: Runner, home: string, cwd: string): Promise<string | null> {
+async function locateKimi(runner: Runner, home: string, cwd: string): Promise<{ file: string; source: string } | null> {
   const kimiHome = process.env.KIMI_CODE_HOME || path.join(home, ".kimi-code");
   const sessionsRoot = path.resolve(kimiHome, "sessions");
   const raw = await runner.readText(path.join(kimiHome, "session_index.jsonl")).catch(() => null);
@@ -279,7 +331,9 @@ async function locateKimi(runner: Runner, home: string, cwd: string): Promise<st
       best = { file, activity, order: rec.order };
     }
   }
-  return best?.file ?? null;
+  if (!best) return null;
+  const sessionId = path.basename(path.dirname(path.dirname(path.dirname(best.file))));
+  return { file: best.file, source: `kimi:${sessionId}` };
 }
 const sh = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 const ere = (s: string) => s.replace(/[.[\]{}()*+?^$|\\]/g, "\\$&");
@@ -316,34 +370,53 @@ export async function readTranscript(
   if (runner.kind !== "local") throw new Error("Transcript must be read by the node that owns the task");
   const agent = asAgentKind(task.agent);
   const cwd = task.worktree_path;
-  if (!cwd) return { agent, source: null, entries: [], cursor: 0 };
+  if (!cwd) return { agent, source: null, entries: [], cursor: 0, hasMore: false };
   const home = os.homedir();
 
   let file: string | null = null;
   let source: string | null = null;
   if (agent === "codex") {
     file = await locateCodex(runner, home, cwd, task.id);
-    source = file;
+    source = file ? `codex:${path.basename(file)}` : null;
   } else if (agent === "kimi") {
-    file = await locateKimi(runner, home, cwd);
-    source = file;
+    const located = await locateKimi(runner, home, cwd);
+    file = located?.file ?? null;
+    source = located?.source ?? null;
   } else {
     const sid = task.claude_session;
-    if (sid) { file = `${home}/.claude/projects/${escapeClaudeCwd(cwd)}/${sid}.jsonl`; source = sid; }
+    if (sid) {
+      file = `${home}/.claude/projects/${escapeClaudeCwd(cwd)}/${sid}.jsonl`;
+      source = `claude:${sid}`;
+    }
   }
-  if (!file || !source) return { agent, source: null, entries: [], cursor: 0 };
+  if (!file || !source) return { agent, source: null, entries: [], cursor: 0, hasMore: false };
 
   const from = knownSource && knownSource !== source ? 0 : since;   // source changed → reload
   const tail = await tailFrom(runner, file, from);
-  if (!tail) return { agent, source, entries: [], cursor: from };
+  if (!tail) return { agent, source, entries: [], cursor: from, hasMore: false };
 
   const parse = agent === "codex" ? parseCodexLine : agent === "kimi" ? parseKimiLine : parseClaudeLine;
   const entries: Entry[] = [];
+  let cursor = from;
+  let payloadBytes = 0;
   for (const line of tail.text.split("\n")) {
-    if (!line) continue;
+    if (!line) {
+      if (cursor < tail.cursor) cursor += 1;
+      continue;
+    }
+    const lineBytes = Buffer.byteLength(line, "utf8") + 1;
     let o: any;
-    try { o = JSON.parse(line); } catch { continue; }
-    entries.push(...parse(o));
+    try { o = JSON.parse(line); } catch {
+      cursor += lineBytes;
+      continue;
+    }
+    const next = parse(o);
+    const nextBytes = Buffer.byteLength(JSON.stringify(next), "utf8");
+    if (entries.length && payloadBytes + nextBytes > PAGE_CAP) break;
+    entries.push(...next);
+    payloadBytes += nextBytes;
+    cursor += lineBytes;
   }
-  return { agent, source, entries, cursor: tail.cursor };
+  cursor = Math.min(cursor, tail.cursor);
+  return { agent, source, entries, cursor, hasMore: cursor < tail.cursor };
 }
