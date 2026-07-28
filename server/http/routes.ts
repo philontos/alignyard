@@ -13,7 +13,12 @@ import { renameTask } from "../task/tasks.js";
 import { removeWorktree } from "../repo/git.js";
 import { startSession, startShellSession, hasSession, killSession, listSessions } from "../session/tmux.js";
 import { asAgentKind } from "../session/agent.js";
-import { readTranscript } from "../session/transcript.js";
+import {
+  isTranscriptReadRequest,
+  isTranscriptResult,
+  readTranscript,
+  type TranscriptReadRequest,
+} from "../session/transcript.js";
 import { syncReposManifest } from "../repo/manifest.js";
 import { removeTaskManifest } from "../task/taskmanifest.js";
 import { localRunner, RemoteRunner, transportRunnerFor, SSH_BASE_ARGS } from "../fleet/runner.js";
@@ -575,20 +580,29 @@ app.post("/api/tasks/:id/paste-image", express.raw({ type: "image/*", limit: "25
   res.json(result);
 });
 
+function transcriptRequest(taskIdValue: string, req: Request): TranscriptReadRequest | null {
+  const request = {
+    taskId: Number(taskIdValue),
+    since: req.query.since == null ? 0 : Number(req.query.since),
+    source: req.query.source ? String(req.query.source) : null,
+  };
+  return isTranscriptReadRequest(request) ? request : null;
+}
+
 // Read a task's agent conversation as normalized entries — the data behind the mobile
 // "阅读 / Reading" view. Incremental: pass the previous ?since byte cursor + ?source id
 // to get only what's new; a changed source (e.g. /clear started a fresh Claude session)
 // makes the client reload from the top. Read-only + best-effort: a task with no
-// transcript yet returns an empty stream. Remote transcripts require a future
-// node-local read verb and never fall back to controller-side filesystem access.
+// transcript yet returns an empty stream.
 app.get("/api/tasks/:id/transcript", async (req, res) => {
   const lang = langFromReq(req);
-  const task = getTask.get(req.params.id) as Task | undefined;
+  const request = transcriptRequest(req.params.id, req);
+  if (!request) return res.status(400).json({ error: "Invalid transcript request" });
+  const task = getTask.get(request.taskId) as Task | undefined;
   if (!task) return res.status(404).json({ error: tr(lang, "notFound") });
-  const since = Math.max(0, parseInt(String(req.query.since ?? "0"), 10) || 0);
-  const source = req.query.source ? String(req.query.source) : null;
+  res.setHeader("cache-control", "no-store");
   try {
-    res.json(await readTranscript(localRunner, task, since, source));
+    res.json(await readTranscript(localRunner, task, request.since, request.source));
   } catch (e: any) {
     res.status(500).json({ error: String(e.message || e) });
   }
@@ -814,6 +828,37 @@ function sendMissingNodeCommand(req: Request, res: Response, command: string, ou
   }
   return res.status(502).json({ error: `node ${command} failed: ${(out.stderr || "no result").slice(0, 300)}` });
 }
+
+// Remote Read is a semantic owner-local RPC. The controller relays only an opaque
+// cursor/source plus numeric ids; the target node resolves its own DB row and
+// transcript path, then returns the same normalized shape as the local endpoint.
+app.get("/api/nodes/:hostId/tasks/:taskId/transcript", async (req, res) => {
+  const request = transcriptRequest(req.params.taskId, req);
+  if (!request) return res.status(400).json({ error: "Invalid transcript request" });
+  const host = remoteHost(req, res);
+  if (!host) return;
+  res.setHeader("cache-control", "no-store");
+
+  const out = await runNodeCommand(
+    host,
+    ["transcript", b64Json(request)],
+    { timeoutMs: 10_000, maxBuffer: 16 * 1024 * 1024 },
+  );
+  const result = parseNodeJson(out.stdout);
+  if (!result) return sendMissingNodeCommand(req, res, "transcript", out);
+  if (result.ok && isTranscriptResult(result.transcript)) return res.json(result.transcript);
+  if (result.error === "notFound") {
+    return res.status(404).json({ error: tr(langFromReq(req), "notFound") });
+  }
+  if (result.error === "invalidRequest") {
+    return res.status(400).json({ error: "Invalid transcript request" });
+  }
+  return res.status(502).json({
+    error: result.message === "Transcript read failed on this node"
+      ? result.message
+      : "Invalid transcript response from node",
+  });
+});
 
 // Repository CRUD is relayed as node-local commands. A never receives or uses
 // the node's mirror path or token.

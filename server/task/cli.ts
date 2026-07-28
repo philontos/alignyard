@@ -26,7 +26,14 @@ import type {
   ServeStopResult,
 } from "../core/serve-lifecycle.js";
 import type { ProfileUninstallResult } from "../fleet/profile-uninstall.js";
+import {
+  TRANSCRIPT_CAPABILITY,
+  isTranscriptReadRequest,
+  type TranscriptCommandResult,
+  type TranscriptReadRequest,
+} from "../session/transcript.js";
 export { CODE_VIEW_CAPABILITY } from "../codeview/codeview.js";
+export { TRANSCRIPT_CAPABILITY } from "../session/transcript.js";
 
 // The spec A sends to `tdsp create` (base64-JSON over ssh argv, so a multiline
 // prompt survives intact). The repo id belongs to the target node's own catalog;
@@ -68,7 +75,12 @@ type DB = Database.Database;
 export const TASK_LIST_VERSION = 3;
 export const ARCHIVED_TASK_LIFECYCLE_CAPABILITY = "archived-task-lifecycle-v1";
 export const NODE_CONTROL_CAPABILITY = "node-control-v1";
-export const TASK_CAPABILITIES = [ARCHIVED_TASK_LIFECYCLE_CAPABILITY, CODE_VIEW_CAPABILITY, NODE_CONTROL_CAPABILITY] as const;
+export const TASK_CAPABILITIES = [
+  ARCHIVED_TASK_LIFECYCLE_CAPABILITY,
+  CODE_VIEW_CAPABILITY,
+  NODE_CONTROL_CAPABILITY,
+  TRANSCRIPT_CAPABILITY,
+] as const;
 
 // A repo as a node exposes it to controllers — enough to group the node's tasks
 // by repo (name) and to dispatch a new task here using the node's OWN mirror (no
@@ -286,6 +298,9 @@ export interface CliDeps {
   readStdin: () => Promise<Buffer>;
   // Typed, read-only repository/worktree inspection for remote controllers.
   inspectCode: (request: CodeInspectRequest) => Promise<CodeInspectResult>;
+  // Typed transcript tail. The implementation resolves task ids and files only
+  // against this node's own DB/filesystem; controllers receive normalized entries.
+  transcript: (request: TranscriptReadRequest) => Promise<TranscriptCommandResult>;
   providersList: () => ProviderSummary[];
   providersTest: (body: ProviderInput) => Promise<{ ok: true } | { ok: false; error: string }>;
   providersCreate: (body: ProviderInput) => Promise<{ ok: true; id: number } | { ok: false; error: string }>;
@@ -657,6 +672,32 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       deps.out(JSON.stringify(result));
       return result.ok ? 0 : 1;
     }
+    case "transcript": {
+      let request: TranscriptReadRequest;
+      try {
+        request = JSON.parse(Buffer.from(argv[1] ?? "", "base64").toString("utf8")) as TranscriptReadRequest;
+      } catch {
+        const result: TranscriptCommandResult = {
+          ok: false,
+          error: "invalidRequest",
+          message: "transcript expects a base64 JSON request",
+        };
+        deps.out(JSON.stringify(result));
+        return 1;
+      }
+      if (!isTranscriptReadRequest(request)) {
+        const result: TranscriptCommandResult = {
+          ok: false,
+          error: "invalidRequest",
+          message: "Invalid transcript request",
+        };
+        deps.out(JSON.stringify(result));
+        return 1;
+      }
+      const result = await deps.transcript(request);
+      deps.out(JSON.stringify(result));
+      return result.ok ? 0 : 1;
+    }
     case "create-local": {
       const f = parseFlags(argv.slice(1));
       const r = await deps.createLocal({ cwd: f.cwd ?? null, title: f.title ?? null });
@@ -886,7 +927,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       return 0;
     }
     default:
-      deps.err(`Usage: tdsp <serve [status|stop|restart]|network|list|inspect-code|create-local|create|repo-create|repo-fetch|repo-branches|repo-delete|rename|stop|resume|cleanup|delete-task|paste-image|providers-list|providers-test|providers-create|providers-delete|doctor|install|uninstall|update>\n${cmd ? `unknown command: ${cmd}` : "no command given"}`);
+      deps.err(`Usage: tdsp <serve [status|stop|restart]|network|list|inspect-code|transcript|create-local|create|repo-create|repo-fetch|repo-branches|repo-delete|rename|stop|resume|cleanup|delete-task|paste-image|providers-list|providers-test|providers-create|providers-delete|doctor|install|uninstall|update>\n${cmd ? `unknown command: ${cmd}` : "no command given"}`);
       return 1;
   }
 }
