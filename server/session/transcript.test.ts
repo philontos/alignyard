@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Task } from "../core/db.ts";
 import type { Runner } from "../fleet/runner.ts";
-import { parseKimiLine, readTranscript } from "./transcript.ts";
+import { isTranscriptReadRequest, isTranscriptResult, parseKimiLine, readTranscript } from "./transcript.ts";
 
 function task(agent: Task["agent"] = "kimi"): Task {
   return {
@@ -19,6 +19,26 @@ function task(agent: Task["agent"] = "kimi"): Task {
 test("transcript reading refuses a remote runner", async () => {
   const remote = { kind: "ssh" } as Runner;
   await assert.rejects(() => readTranscript(remote, task("claude")), /node that owns the task/);
+});
+
+test("transcript cursor requests accept only bounded owner-opaque values", () => {
+  assert.equal(isTranscriptReadRequest({ taskId: 7, since: 0, source: null }), true);
+  assert.equal(isTranscriptReadRequest({ taskId: 7, since: 42, source: "kimi:session-7" }), true);
+  assert.equal(isTranscriptReadRequest({ taskId: 0, since: 0, source: null }), false);
+  assert.equal(isTranscriptReadRequest({ taskId: 7, since: -1, source: null }), false);
+  assert.equal(isTranscriptReadRequest({ taskId: 7, since: 0, source: "x".repeat(4097) }), false);
+  assert.equal(isTranscriptResult({
+    agent: "kimi",
+    source: "kimi:session-7",
+    entries: [{ t: "assistant", text: "done" }],
+    cursor: 42,
+  }), true);
+  assert.equal(isTranscriptResult({
+    agent: "kimi",
+    source: "kimi:session-7",
+    entries: [{ t: "assistant", text: 7 }],
+    cursor: 42,
+  }), false);
 });
 
 test("parseKimiLine maps visible messages and loop events while dropping injected context", () => {
@@ -99,7 +119,8 @@ test("readTranscript locates the most recently active Kimi session, tails it, an
   } satisfies Runner;
 
   const first = await readTranscript(runner, task());
-  assert.equal(first.source, firstWire);
+  assert.equal(first.source, "kimi:session-first");
+  assert.doesNotMatch(first.source!, /worktrees|sessions|wire\.jsonl/);
   assert.deepEqual(first.entries, [
     { t: "user", text: "first prompt" },
     { t: "assistant", text: "first answer" },
@@ -112,7 +133,49 @@ test("readTranscript locates the most recently active Kimi session, tails it, an
 
   index += JSON.stringify({ sessionId: "session-second", sessionDir: secondDir, workDir: "/worktrees/7" }) + "\n";
   const switched = await readTranscript(runner, task(), first.cursor, first.source);
-  assert.equal(switched.source, secondWire);
+  assert.equal(switched.source, "kimi:session-second");
   assert.deepEqual(switched.entries, [{ t: "user", text: "new prompt" }]);
   assert.equal(switched.cursor, Buffer.byteLength(secondBody, "utf8"));
+});
+
+test("readTranscript pages a large normalized history without skipping a complete line", async () => {
+  const t = task("claude");
+  t.claude_session = "session-large";
+  const file = path.join(os.homedir(), ".claude", "projects", "-worktrees-7", "session-large.jsonl");
+  const text = "x".repeat(2_200_000);
+  const lines = [
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: text + " first" }] } }),
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: text + " second" }] } }),
+  ];
+  const body = lines.join("\n") + "\n";
+  const runner = {
+    kind: "local" as const,
+    dataDir: "/data",
+    async exec(command: string, args: string[]) {
+      if (command === "wc") return `${Buffer.byteLength(body, "utf8")} ${file}\n`;
+      if (command === "tail") {
+        const from = Math.max(0, Number((args[1] || "+1").slice(1)) - 1);
+        return Buffer.from(body, "utf8").subarray(from).toString("utf8");
+      }
+      throw new Error(`unexpected exec: ${command}`);
+    },
+    async exists(p: string) { return p === file; },
+    async readText() { return null; },
+    async mkdirp() {},
+    async rmrf() {},
+    async putDir() {},
+    async putFile() {},
+  } satisfies Runner;
+
+  const first = await readTranscript(runner, t);
+  assert.equal(first.source, "claude:session-large");
+  assert.equal(first.entries.length, 1);
+  assert.equal(first.hasMore, true);
+  assert.equal(first.cursor, Buffer.byteLength(lines[0] + "\n", "utf8"));
+
+  const second = await readTranscript(runner, t, first.cursor, first.source);
+  assert.equal(second.entries.length, 1);
+  assert.match((second.entries[0] as any).text, / second$/);
+  assert.equal(second.hasMore, false);
+  assert.equal(second.cursor, Buffer.byteLength(body, "utf8"));
 });

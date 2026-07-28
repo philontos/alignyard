@@ -121,13 +121,13 @@ A host reboot or killed tmux session does not destroy the working tree. As long 
 
 | Agent | Task configuration | Current Switchyard integration |
 |---|---|---|
-| **Claude Code** | Machine login or a validated Anthropic-compatible endpoint | Live terminal, resume, image paste, native permission-waiting signal, local mobile transcript |
-| **Codex** | Machine login and optional model ID | Live terminal, resume, image paste, full-access launch, local mobile transcript |
-| **Kimi Code / Kimi K3** | Machine login and optional model ID such as `k3` | Interactive `--auto` terminal, resume, image paste, local mobile transcript |
+| **Claude Code** | Machine login or a validated Anthropic-compatible endpoint | Live terminal, resume, image paste, native permission-waiting signal, local and remote mobile transcript |
+| **Codex** | Machine login and optional model ID | Live terminal, resume, image paste, full-access launch, local and remote mobile transcript |
+| **Kimi Code / Kimi K3** | Machine login and optional model ID such as `k3` | Interactive `--auto` terminal, resume, image paste, local and remote mobile transcript |
 
 The selected agent and model belong to the task and are preserved on resume. Provider credentials stay on the machine that runs the task and are not copied to peers.
 
-Current boundary: the yellow “needs you” permission signal is Claude Code-only. Remote-node transcripts do not yet have **Read** mode; those tasks open directly in the live terminal.
+Current boundary: the yellow “needs you” permission signal is Claude Code-only. Remote **Read** requires `transcript-v1`; tasks on older nodes open directly in the live terminal until that node is updated.
 
 ## Built for the phone
 
