@@ -5,7 +5,7 @@
 // (rendered here, created via addLocalTask in tasks.js).
 import { $, api } from "../core/dom.js";
 import { hideLoading, showLoading, toast } from "../core/feedback.js";
-import { confirmDialog } from "../core/dialog.js";
+import { confirmDialog, confirmDialogWithCheckbox } from "../core/dialog.js";
 import { Selects } from "../core/select.js";
 import { taskLifecycle } from "../core/task-lifecycle.js";
 import { remoteFollowTasks } from "../core/host-follow.js";
@@ -138,9 +138,16 @@ export function connectNode(hostId, taskId) {
 export async function stopNodeTask(hostId, taskId) {
   const task = state.fleet[hostId]?.tasks?.find((candidate) => candidate.id === taskId);
   const taskLabel = task ? `#${task.id} ${task.title}` : `#${taskId}`;
-  if (!(await confirmDialog(t("task.stopConfirm", { task: taskLabel }), { title: t("task.stopTitle"), okText: t("common.stop"), danger: true }))) return;
+  const decision = await confirmDialogWithCheckbox(t("task.stopConfirm", { task: taskLabel }), {
+    title: t("task.stopTitle"),
+    okText: t("common.stop"),
+    danger: true,
+    checkbox: task?.hasWorktree ? { label: t("task.stopRemoveWorktree"), checked: true } : null,
+  });
+  if (!decision.confirmed) return;
   try {
-    await api(`/api/nodes/${hostId}/tasks/${taskId}/stop`, { method: "POST" });
+    const action = decision.checked ? "cleanup" : "stop";
+    await api(`/api/nodes/${hostId}/tasks/${taskId}/${action}`, { method: "POST" });
     await loadFleet();
   } catch (e) {
     revealNodeUpdate(hostId, e);

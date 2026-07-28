@@ -4,7 +4,7 @@
 // and is shared with hosts.js (a remote shell clears the task selection).
 import { $, api } from "../core/dom.js";
 import { toast, showLoading, hideLoading } from "../core/feedback.js";
-import { confirmDialog } from "../core/dialog.js";
+import { confirmDialog, confirmDialogWithCheckbox } from "../core/dialog.js";
 import { Selects } from "../core/select.js";
 import { state } from "../core/state.js";
 import { openPty, disposePty, prunePanes, setClaudeSession,
@@ -606,8 +606,14 @@ export function taskById(id) { return tasksById[id] || null; }
 export async function archive(id){
   const task = tasksById[id];
   const taskLabel = task ? `#${task.id} ${task.title}` : `#${id}`;
-  if(!await confirmDialog(t("task.stopConfirm",{task:taskLabel}),{title:t("task.stopTitle"),okText:t("common.stop"),danger:true}))return;
-  await api(`/api/tasks/${id}/archive`,{method:"POST"});
+  const decision = await confirmDialogWithCheckbox(t("task.stopConfirm",{task:taskLabel}),{
+    title:t("task.stopTitle"),
+    okText:t("common.stop"),
+    danger:true,
+    checkbox:task?.hasWorktree ? {label:t("task.stopRemoveWorktree"),checked:true} : null,
+  });
+  if(!decision.confirmed)return;
+  await api(`/api/tasks/${id}/${decision.checked ? "cleanup" : "archive"}`,{method:"POST"});
   disposePty(id);                                    // session is killed → tear the pane down
   if (id === state.selectedTaskId) state.selectedTaskId = null;
   toast(t("toast.killed"),"success"); loadTasks();
