@@ -81,7 +81,7 @@ function showTermView() {
   document.body.classList.add("view-terminal");
   document.body.classList.toggle("no-read", !curCanRead);   // shells: hide the 阅读|实时 toggle
   // Landing: a readable (agent) task opens in 阅读 (openReading auto-nudges to 实时 if it
-  // has no conversation yet); a shell / pending / node task opens straight in 实时.
+  // has no conversation yet); a shell, pending task, or old remote node opens in 实时.
   setMode(curCanRead ? "read" : "live");
   syncViewport();               // fix --vvh/--vvt before the fixed termcol paints
   // the term column was display:none in list view, so its pane couldn't be
@@ -152,7 +152,7 @@ export function setMode(m) {
   $("tm-read")?.classList.toggle("on", !live);
   $("tm-live")?.classList.toggle("on", live);
   if (live) { closeReading(); requestAnimationFrame(fitActiveNow); }
-  else if (typeof curDockId === "number") openReading(curDockId);
+  else openReading(curDockId);
 }
 
 // ---- quick-key auto-expand on a permission prompt ----
@@ -247,7 +247,7 @@ function sendLine() {
     return;
   }
   if (!document.body.classList.contains("mode-live")) {
-    if (typeof curDockId === "number") echoUser(curDockId, v);   // show it now; the poll settles it
+    if (curCanRead) echoUser(curDockId, v);   // show it now; the owner-node poll settles it
     scrollReadingToBottom();
   }
   f.value = "";

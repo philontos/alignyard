@@ -1,25 +1,28 @@
 // Mobile "阅读 / Reading" view. Renders a task's agent conversation — fetched from
-// GET /api/tasks/:id/transcript as a normalized Entry stream — into a native,
-// smooth-scrolling chat, and auto-tails new messages while it's open. Read-only: the
-// shared input bar sends, and the live terminal (实时) is where you watch/act. The one
+// the owning node's transcript endpoint as a normalized Entry stream — into a
+// native, smooth-scrolling chat, and auto-tails new messages while it's open.
+// Read-only: the shared input bar sends, and the live terminal (实时) is where you watch/act. The one
 // write-ish exception is echoUser(): a just-sent message is echoed optimistically so it
 // shows before the next poll; the transcript stays the source of truth (see below).
 //
-// Imports only dom.js. The mode plumbing runs the OTHER way (mobile.js calls
+// Imports only DOM + pure target helpers. The mode plumbing runs the OTHER way (mobile.js calls
 // openReading/closeReading; the empty-transcript "go live" nudge is an injected
 // callback; the "去实时" button is window-bridged), so there's no import cycle.
 import { $, api } from "../core/dom.js";
+import { targetWaiting, transcriptUrl } from "../core/reading-target.js";
 
 const POLL_MS = 2500;
+const MAX_POLL_MS = 15000;
 
 let box = null;                 // #term-read scroll container
-let taskId = null;              // the task being read (null = closed)
+let paneId = null;              // local numeric id or "n<host>:<task>" (null = unopened)
 let agent = "claude";           // for the assistant role label
 let source = null, cursor = 0;  // tail state: file identity + byte cursor (see server)
 let lastRole = null;            // drives role-change headers
 let hasContent = false;
 let atBottom = true;
 let timer = null;
+let polling = false;
 let onEmpty = null;             // called once when a fresh load has no conversation (→ 实时)
 const tools = new Map();        // tool_call id → { body, status } nodes, to fold results in
 const pending = [];             // optimistic echoes awaiting their transcript entry: { nodes, text }
@@ -34,17 +37,22 @@ export function initReading(opts = {}) {
   $("read-jump").addEventListener("click", () => { atBottom = true; box.scrollTop = box.scrollHeight; $("read-jump").classList.remove("show"); });
 }
 
-// Begin (or resume) reading a task. Only real numeric task ids have a transcript;
-// pending/new tasks are shown live instead, so those are ignored here.
+// Begin (or resume) reading a local or transcript-capable remote task. Pending/new
+// pane ids have no semantic endpoint and are ignored here.
 export function openReading(id) {
-  if (typeof id !== "number") return;
-  if (id !== taskId) reset(id);
+  if (!transcriptUrl(id)) return;
+  if (id !== paneId) reset(id);
   stopPoll();
+  polling = true;
   tick();
-  timer = setInterval(tick, POLL_MS);
 }
-export function closeReading() { stopPoll(); }
-function stopPoll() { if (timer) { clearInterval(timer); timer = null; } }
+export function closeReading() { polling = false; stopPoll(); }
+function stopPoll() { if (timer) { clearTimeout(timer); timer = null; } }
+function schedulePoll(delay) {
+  if (!polling) return;
+  stopPoll();
+  timer = setTimeout(tick, delay);
+}
 
 export function scrollReadingToBottom() {
   if (!box) return;
@@ -65,7 +73,7 @@ export function scrollReadingToBottom() {
 // caller doesn't need to know whether reading is open). Empty text = a bare Enter
 // accepting some prompt's default — not a message, nothing to echo.
 export function echoUser(id, text) {
-  if (id !== taskId || !box) return;
+  if (id !== paneId || !box) return;
   const t = String(text ?? "").trim();
   if (!t) return;
   const nodes = [roleHeader("user"), entryNode({ t: "user", text: t })];
@@ -93,7 +101,8 @@ function clearPending() {
 }
 
 function reset(id) {
-  taskId = id; source = null; cursor = 0; lastRole = null; hasContent = false; atBottom = true;
+  paneId = id; source = null; cursor = 0; lastRole = null; hasContent = false; atBottom = true;
+  failures = 0;
   tools.clear(); clearPending();
   box.innerHTML = `<div class="rd-state" id="rd-state">${esc(I18N.t("read.loading"))}</div>`;
 }
@@ -103,19 +112,27 @@ function reset(id) {
 // not-yet-advanced cursor and each append the same window (the "my message showed up 3×"
 // bug). A tick arriving mid-flight coalesces into ONE follow-up run instead, so opening /
 // switching during a slow fetch still refreshes promptly rather than waiting a full poll.
-let busy = false, again = false;
+let busy = false, again = false, failures = 0;
 async function tick() {
   if (busy) { again = true; return; }
   busy = true;
+  let immediate = false;
   try {
-    const id = taskId;
-    if (id == null) return;
+    const id = paneId;
+    const endpoint = transcriptUrl(id);
+    if (!endpoint) return;
     const q = new URLSearchParams({ since: String(cursor) });
     if (source) q.set("source", source);
     let data;
-    try { data = await api(`/api/tasks/${id}/transcript?` + q.toString()); }
-    catch { return; }
-    if (taskId !== id) return;                                 // switched away mid-fetch
+    try {
+      data = await api(endpoint + "?" + q.toString());
+    } catch {
+      failures++;
+      if (paneId === id && !hasContent) showState(I18N.t("read.unavailable"));
+      return;
+    }
+    if (paneId !== id) return;                                 // switched away mid-fetch
+    failures = 0;
     agent = data.agent || agent;
     if (source !== null && data.source !== source) clearRendered();   // a new session started → reload
     const firstLoad = source === null;
@@ -123,9 +140,15 @@ async function tick() {
     if (data.entries && data.entries.length) { hasContent = true; hideState(); appendAll(data.entries); }
     else if (firstLoad && !hasContent) { showState(I18N.t("read.empty")); if (onEmpty) onEmpty(); }
     cursor = data.cursor ?? cursor;
+    immediate = !!data.hasMore;
   } finally {
     busy = false;
-    if (again) { again = false; tick(); }
+    if (!polling) { again = false; return; }
+    if (again || immediate) { again = false; tick(); }
+    else {
+      const retryMs = Math.min(MAX_POLL_MS, POLL_MS * (2 ** Math.max(0, failures - 1)));
+      schedulePoll(retryMs);
+    }
   }
 }
 
@@ -207,11 +230,12 @@ function foldResult(e) {
 // Update the "needs you" banner: shown while reading a task that is blocked on a
 // permission prompt (task.waiting, the same amber-light signal the list uses). Fed by
 // main.js after each task poll so reading.js stays decoupled from the task cache.
-export function reflectWaiting(selId, tasks) {
+export function reflectWaiting(selId, tasks, fleet) {
   const banner = $("read-banner");
   if (!banner) return;
-  const t = taskId != null && tasks ? tasks.find((x) => x.id === taskId) : null;
-  const show = !!t && !!t.waiting && !document.body.classList.contains("mode-live");
+  const show = selId === paneId
+    && targetWaiting(paneId, tasks, fleet)
+    && !document.body.classList.contains("mode-live");
   banner.classList.toggle("show", show);
 }
 

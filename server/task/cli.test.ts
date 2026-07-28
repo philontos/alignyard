@@ -9,6 +9,7 @@ import {
   ARCHIVED_TASK_LIFECYCLE_CAPABILITY,
   CODE_VIEW_CAPABILITY,
   NODE_CONTROL_CAPABILITY,
+  TRANSCRIPT_CAPABILITY,
   isUnknownTdspCommand,
   type CliDeps,
   type TaskLiveness,
@@ -38,7 +39,12 @@ test("taskListPayload wraps the local tasks in a versioned envelope", async () =
   const db = seed();
   const payload = await taskListPayload(db, noLive);
   assert.equal(payload.schema_version, 3);
-  assert.deepEqual(payload.capabilities, [ARCHIVED_TASK_LIFECYCLE_CAPABILITY, CODE_VIEW_CAPABILITY, NODE_CONTROL_CAPABILITY]);
+  assert.deepEqual(payload.capabilities, [
+    ARCHIVED_TASK_LIFECYCLE_CAPABILITY,
+    CODE_VIEW_CAPABILITY,
+    NODE_CONTROL_CAPABILITY,
+    TRANSCRIPT_CAPABILITY,
+  ]);
   assert.equal(payload.tasks.length, 1);
   assert.equal(payload.tasks[0].title, "old");
   assert.equal(payload.tasks[0].session, "tdsp-1-r-old");
@@ -129,6 +135,7 @@ function fakeDeps(db: Database.Database) {
   const branchCalls: number[] = [];
   const providerCalls: any[] = [];
   const inspectCalls: any[] = [];
+  const transcriptCalls: any[] = [];
   const installCalls: Array<string | undefined> = [];
   const uninstallCalls: Array<[string, boolean]> = [];
   const networkCalls: any[] = [];
@@ -201,6 +208,19 @@ function fakeDeps(db: Database.Database) {
         inspectCalls.push(request);
         return { ok: true as const, kind: "tree" as const, files: ["README.md"], truncated: false,
           revision: { label: "main", commit: "a".repeat(40) }, generatedAt: "now" };
+      },
+      transcript: async (request: any) => {
+        transcriptCalls.push(request);
+        return {
+          ok: true as const,
+          transcript: {
+            agent: "kimi" as const,
+            source: "kimi:session-7",
+            entries: [{ t: "assistant" as const, text: "done" }],
+            cursor: 42,
+            hasMore: false,
+          },
+        };
       },
       providersList: () => [{ id: 2, name: "GLM", model: "glm-5.2" }],
       providersTest: async (body: any) => {
@@ -321,6 +341,7 @@ function fakeDeps(db: Database.Database) {
     branchCalls,
     providerCalls,
     inspectCalls,
+    transcriptCalls,
     installCalls,
     uninstallCalls,
     networkCalls,
@@ -355,6 +376,7 @@ test("runCli list --json prints the versioned task envelope and exits 0", async 
   assert.ok(parsed.capabilities.includes(ARCHIVED_TASK_LIFECYCLE_CAPABILITY));
   assert.ok(parsed.capabilities.includes(CODE_VIEW_CAPABILITY));
   assert.ok(parsed.capabilities.includes(NODE_CONTROL_CAPABILITY));
+  assert.ok(parsed.capabilities.includes(TRANSCRIPT_CAPABILITY));
   assert.equal(parsed.tasks[0].title, "old");
 });
 
@@ -382,6 +404,35 @@ test("runCli inspect-code rejects a parsed but invalid request shape", async () 
   assert.equal(code, 1);
   assert.equal(f.inspectCalls.length, 0);
   assert.equal(JSON.parse(f.out).error, "invalidRequest");
+});
+
+test("runCli transcript decodes a typed cursor request and prints normalized entries", async () => {
+  const f = fakeDeps(seed());
+  const request = { taskId: 7, since: 12, source: "kimi:session-7" };
+  const encoded = Buffer.from(JSON.stringify(request)).toString("base64");
+  const code = await runCli(["transcript", encoded], f.deps);
+  assert.equal(code, 0);
+  assert.deepEqual(f.transcriptCalls, [request]);
+  assert.deepEqual(JSON.parse(f.out).transcript, {
+    agent: "kimi",
+    source: "kimi:session-7",
+    entries: [{ t: "assistant", text: "done" }],
+    cursor: 42,
+    hasMore: false,
+  });
+});
+
+test("runCli transcript rejects malformed or unsafe cursor requests without reading", async () => {
+  const malformed = fakeDeps(seed());
+  assert.equal(await runCli(["transcript", "not-json"], malformed.deps), 1);
+  assert.equal(malformed.transcriptCalls.length, 0);
+  assert.equal(JSON.parse(malformed.out).error, "invalidRequest");
+
+  const unsafe = fakeDeps(seed());
+  const encoded = Buffer.from(JSON.stringify({ taskId: 7, since: -1, source: null })).toString("base64");
+  assert.equal(await runCli(["transcript", encoded], unsafe.deps), 1);
+  assert.equal(unsafe.transcriptCalls.length, 0);
+  assert.equal(JSON.parse(unsafe.out).error, "invalidRequest");
 });
 
 test("runCli serve boots the local server and exits 0", async () => {
