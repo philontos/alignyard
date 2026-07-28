@@ -33,10 +33,16 @@ test("dispatch modal ignores backdrop clicks and keeps explicit cancellation", (
 test("local and remote stop actions confirm before calling their APIs", () => {
   const localStop = tasks.match(/export async function archive\(id\)\{([\s\S]*?)\n\}/)?.[1] || "";
   const remoteStop = hosts.match(/export async function stopNodeTask\(hostId, taskId\) \{([\s\S]*?)\n\}/)?.[1] || "";
-  assert.match(localStop, /confirmDialog\(t\("task\.stopConfirm"/);
-  assert.ok(localStop.indexOf("confirmDialog") < localStop.indexOf("/archive"));
-  assert.match(remoteStop, /confirmDialog\(t\("task\.stopConfirm"/);
-  assert.ok(remoteStop.indexOf("confirmDialog") < remoteStop.indexOf("/stop"));
+  assert.match(localStop, /confirmDialogWithCheckbox\(t\("task\.stopConfirm"/);
+  assert.match(localStop, /checkbox:task\?\.hasWorktree \? \{label:t\("task\.stopRemoveWorktree"\),checked:true\}/);
+  assert.match(localStop, /decision\.checked \? "cleanup" : "archive"/);
+  assert.ok(localStop.indexOf("confirmDialogWithCheckbox") < localStop.indexOf("decision.checked"));
+  assert.match(remoteStop, /confirmDialogWithCheckbox\(t\("task\.stopConfirm"/);
+  assert.match(remoteStop, /checkbox: task\?\.hasWorktree \? \{ label: t\("task\.stopRemoveWorktree"\), checked: true \}/);
+  assert.match(remoteStop, /decision\.checked \? "cleanup" : "stop"/);
+  assert.ok(remoteStop.indexOf("confirmDialogWithCheckbox") < remoteStop.indexOf("decision.checked"));
+  assert.match(html, /id="dlg-check-input" type="checkbox"/);
+  assert.match(css, /\.dlg-check input\s*\{[^}]*accent-color:\s*var\(--red\)/s);
 });
 
 test("local and remote task titles share inline rename with a visible saving state", () => {

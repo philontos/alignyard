@@ -86,7 +86,8 @@
       "dialog.ok": "确定",
       "common.delete": "删除",
       "common.stop": "终止任务",
-      "task.stopConfirm": "确定要终止任务“{task}”吗？当前会话会立即结束并归档，worktree 将保留。",
+      "task.stopConfirm": "确定要终止任务“{task}”吗？当前会话会立即结束并归档。",
+      "task.stopRemoveWorktree": "同时删除 worktree（不可恢复）",
 
       // repo modal
       "repo.modalTitle": "新建仓库",
@@ -391,7 +392,8 @@
       "dialog.ok": "OK",
       "common.delete": "Delete",
       "common.stop": "Stop task",
-      "task.stopConfirm": "Stop “{task}”? Its session will end immediately and the task will be archived; the worktree will be kept.",
+      "task.stopConfirm": "Stop “{task}”? Its session will end immediately and the task will be archived.",
+      "task.stopRemoveWorktree": "Also remove the worktree (not recoverable)",
 
       "repo.modalTitle": "New repository",
       "repo.urlLabel": "Git URL *",
