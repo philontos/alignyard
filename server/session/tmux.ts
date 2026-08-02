@@ -1,6 +1,10 @@
 import type { CommandRunner } from "../fleet/runner.js";
 import { agentArgv, type AgentKind } from "./agent.js";
 
+const KIMI_READY_TEXT = "Welcome to Kimi Code!";
+const KIMI_READY_POLL_MS = 100;
+const KIMI_READY_ATTEMPTS = 100;
+
 async function tmux(runner: CommandRunner, args: string[]): Promise<string> {
   return runner.exec("tmux", args);
 }
@@ -9,6 +13,20 @@ async function kimiBinary(runner: CommandRunner): Promise<string> {
   const script = "command -v kimi 2>/dev/null || { p=\"$HOME/.kimi-code/bin/kimi\"; [ -x \"$p\" ] && printf '%s\\n' \"$p\"; }";
   const out = (await runner.exec("sh", ["-c", script]).catch(() => "")).trim();
   return out.split("\n").find(Boolean) || "kimi";
+}
+
+async function waitForKimiReady(runner: CommandRunner, session: string): Promise<void> {
+  for (let attempt = 0; attempt < KIMI_READY_ATTEMPTS; attempt++) {
+    // Include scrollback: on a short pane the welcome card can move above the
+    // visible screen once startup notices and the editor have rendered.
+    const pane = await tmux(runner, ["capture-pane", "-p", "-t", session, "-S", "-100"]);
+    if (pane.includes(KIMI_READY_TEXT)) return;
+    if (attempt + 1 < KIMI_READY_ATTEMPTS) {
+      await new Promise<void>((resolve) => setTimeout(resolve, KIMI_READY_POLL_MS));
+    }
+  }
+  // A future Kimi release may change the welcome copy. After the bounded wait,
+  // still submit so a cosmetic change does not permanently drop every opening.
 }
 
 function absGitPath(cwd: string, p: string): string {
@@ -90,6 +108,10 @@ export async function startSession(
   await tmux(runner, cmd);
   await ensureSessionOptions(runner, session);
   if (agent === "kimi" && !opts?.continue && prompt?.trim()) {
+    // tmux reports a detached session before Kimi has switched the pane into TUI
+    // input mode. Text sent in that window is merely echoed by the terminal and
+    // never reaches Kimi, so wait for its first complete render before pasting.
+    await waitForKimiReady(runner, session);
     await pasteSubmit(runner, session, prompt);
   }
 }

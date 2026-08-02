@@ -14,6 +14,7 @@ function fakeRunner(exec?: Runner["exec"]) {
       calls.push({ file, args });
       if (file === "git" && args.includes("--git-dir")) return "/mirror/worktrees/1-49\n";
       if (file === "git" && args.includes("--git-common-dir")) return "/mirror\n";
+      if (file === "tmux" && args[0] === "capture-pane") return "Welcome to Kimi Code!\n";
       return "";
     }),
     async mkdirp() {},
@@ -202,11 +203,44 @@ test("startSession(agent='kimi') launches Kimi TUI, then submits the prompt", as
   ] });
   const launch = calls.find((call) => call.args[0] === "new-session")!;
   assert.ok(!launch.args.includes("-p") && !launch.args.includes("--prompt"), "Kimi stays interactive");
+  const ready = calls.findIndex((call) => call.args[0] === "capture-pane");
+  const paste = calls.findIndex((call) => call.args[0] === "set-buffer");
+  assert.ok(ready > calls.indexOf(launch) && ready < paste, "the opening waits for Kimi's TUI before it is pasted");
   assert.deepEqual(calls.slice(-3), [
     { file: "tmux", args: ["set-buffer", "-b", "tdsp-paste", "--", "do it"] },
     { file: "tmux", args: ["paste-buffer", "-t", "tdsp-1-x", "-b", "tdsp-paste", "-p", "-d"] },
     { file: "tmux", args: ["send-keys", "-t", "tdsp-1-x", "Enter"] },
   ]);
+});
+
+test("startSession(agent='kimi') keeps polling until the TUI is ready", async () => {
+  const calls: { file: string; args: string[] }[] = [];
+  let captures = 0;
+  const runner = {
+    kind: "local",
+    dataDir: "/tmp",
+    exec: async (file: string, args: string[]) => {
+      calls.push({ file, args });
+      if (file === "git" && args.includes("--git-dir")) return "/mirror/worktrees/1-49\n";
+      if (file === "git" && args.includes("--git-common-dir")) return "/mirror\n";
+      if (file === "tmux" && args[0] === "capture-pane") {
+        captures++;
+        return captures === 1 ? "" : "Welcome to Kimi Code!\n";
+      }
+      return "";
+    },
+    async mkdirp() {},
+    async exists() { return false; },
+    async rmrf() {},
+    async putDir() {},
+  } as unknown as Runner;
+
+  await startSession(runner, "tdsp-1-x", "/wt", "do it", { agent: "kimi" });
+
+  assert.equal(captures, 2);
+  const secondCapture = calls.map((call) => call.args[0]).lastIndexOf("capture-pane");
+  const paste = calls.findIndex((call) => call.args[0] === "set-buffer");
+  assert.ok(secondCapture < paste, "the prompt is not pasted during Kimi startup");
 });
 
 test("startSession(agent='kimi', continue) resumes with `kimi --auto --continue` and does not resend prompt", async () => {
