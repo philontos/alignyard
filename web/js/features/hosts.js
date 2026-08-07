@@ -10,7 +10,7 @@ import { Selects } from "../core/select.js";
 import { taskLifecycle } from "../core/task-lifecycle.js";
 import { remoteFollowTasks } from "../core/host-follow.js";
 import { state } from "../core/state.js";
-import { repoGroupHead } from "./repos.js";
+import { repoGroupHead, repaintRepoDetails } from "./repos.js";
 import { paintSelection, taskCard, allTasks, isEditingTask, connect,
          pendingRepoCards, pendingNodeRepoCards, pendingShellCards,
          isShadowedByPending, isShadowedByNodePending, pendingCard } from "./tasks.js";
@@ -102,6 +102,7 @@ export async function loadFleet() {
   }
   if (pruneNodePanes(keep).includes(state.selectedTaskId)) state.selectedTaskId = null;
   renderList();
+  repaintRepoDetails();
 }
 
 // An older node can still list its tasks, but it does not understand the newer
@@ -493,7 +494,7 @@ function renderListHtml() {
       const del = remoteReady ? `<button class="grp-del" title="${t("repo.delTitle")}" onclick="event.stopPropagation();delNodeRepo(${h.id},${r.id})">🗑</button>` : "";
       const add = remoteReady && ready ? `<button class="grp-act" title="${t("node.newTask")}" onclick="event.stopPropagation();openNodeTaskModal(${h.id},${r.id})">＋</button>` : "";
       const status = r.status && r.status !== "ready" ? `<span class="grp-status ${r.status === "error" ? "error" : ""}">${esc(r.status)}</span>` : "";
-      return `<div class="grp open"><div class="grp-head static"><span class="grp-name">📦 ${esc(r.name)}</span><span class="grp-repo-id">#${Number(r.id)}</span>${status}${code}${del}${add}</div>
+      return `<div class="grp open"><div class="grp-head repo-head" role="button" tabindex="0" title="${esc(t("repo.infoOpen"))}" onclick="openRepoDetails(${Number(r.id)},${h.id})" onkeydown="openRepoDetailsKey(event,${Number(r.id)},${h.id})"><span class="grp-name">📦 ${esc(r.name)}</span><span class="grp-repo-id">#${Number(r.id)}</span>${status}${code}${del}${add}</div>
         ${cards || `<div class="grp-empty">${t("repo.noTasks")}</div>`}${r.error ? `<div class="grp-error-detail">${esc(r.error)}</div>` : ""}</div>`;
     }).join("") || `<div class="muted mempty">${t("host.noRepos")}</div>`;
     const nodeShells = live.filter(tk => tk.kind === "local" && !isShadowedByNodePending(h.id, tk));

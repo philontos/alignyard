@@ -5,11 +5,13 @@
 import { $, api } from "../core/dom.js";
 import { toast } from "../core/feedback.js";
 import { confirmDialog } from "../core/dialog.js";
+import { repoDetailsData } from "../core/repo-details.js";
 import { state } from "../core/state.js";
 import { rerender, loadFleet } from "./hosts.js";
 
 let repoHostId = null;   // which machine the register-repo modal targets
 let repoSubmitting = false;
+let repoDetailsTarget = null; // { id, hostId|null }; null hostId = controller-local repo
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (ch) => ({
@@ -54,6 +56,7 @@ export async function loadRepos() {
   if (!r) return; // server transiently down — stay quiet, poller will retry
   state.repos = r;
   rerender();
+  repaintRepoDetails();
 }
 // A repo is a collapsible group header in col2; its tasks are nested under it by
 // renderList (hosts.js). `online` = is this repo's machine reachable — dispatch
@@ -78,6 +81,8 @@ export async function loadRepos() {
 export function repoGroupHead(r, online, collapsed, tasks = []) {
   const statusText = repoStatusText(r);
   const dot = r.status === "cloning" ? `<span class="sdot cloning" title="${esc(statusText)}"></span>` : "";
+  const toggleTitle = t(collapsed ? "repo.expandTasks" : "repo.collapseTasks");
+  const toggle = `<button type="button" class="grp-toggle" title="${esc(toggleTitle)}" aria-label="${esc(toggleTitle)}" aria-expanded="${collapsed ? "false" : "true"}" onclick="event.stopPropagation();toggleRepo(${r.id})"><span aria-hidden="true"></span></button>`;
   const disp = r.status === "ready"
     ? `<button class="grp-act" title="${t("task.dispatch")}" ${online ? "" : "disabled"} onclick="event.stopPropagation();openTaskModal(${r.id})">＋</button>` : "";
   const code = r.status === "ready"
@@ -87,7 +92,8 @@ export function repoGroupHead(r, online, collapsed, tasks = []) {
       + (tasks.some(tk => tk.alive && tk.waiting) ? `<span class="sdot waiting" title="${t("task.waiting")}"></span>` : "")
       + (tasks.some(tk => tk.alive && !tk.waiting) ? `<span class="sdot live" title="live"></span>` : "")
     : "";
-  return `<div class="grp-head${r.status === "error" ? " err" : ""}" onclick="toggleRepo(${r.id})">
+  return `<div class="grp-head repo-head${r.status === "error" ? " err" : ""}" role="button" tabindex="0" title="${esc(t("repo.infoOpen"))}" onclick="openRepoDetails(${r.id})" onkeydown="openRepoDetailsKey(event,${r.id})">
+    ${toggle}
     ${dot}
     <span class="grp-name"><span aria-hidden="true">📦</span> ${esc(r.name)}</span>
     <span class="grp-repo-id">#${Number(r.id)}</span>
@@ -98,6 +104,73 @@ export function repoGroupHead(r, online, collapsed, tasks = []) {
     <button class="grp-del" title="${t("repo.delTitle")}" onclick="event.stopPropagation();delRepo(${r.id})">🗑</button>
     ${disp}
   </div>${r.status === "error" && r.error ? `<div class="grp-error-detail">${esc(r.error)}</div>` : ""}`;
+}
+
+function findRepoDetailsTarget() {
+  if (!repoDetailsTarget) return null;
+  const { id, hostId } = repoDetailsTarget;
+  const repo = hostId == null
+    ? state.repos.find((candidate) => Number(candidate.id) === id)
+    : state.fleet[hostId]?.repos?.find((candidate) => Number(candidate.id) === id);
+  if (!repo) return null;
+  const ownerId = hostId == null ? Number(repo.host_id ?? state.activeHostId) : hostId;
+  return { repo, host: state.hostsById[ownerId] };
+}
+
+function paintRepoDetails() {
+  const target = findRepoDetailsTarget();
+  if (!target) return false;
+  const details = repoDetailsData(target.repo, target.host, t, I18N.lang);
+  $("ri-id").textContent = `#${details.id}`;
+  $("ri-name").textContent = details.name;
+  $("ri-host").textContent = details.host;
+  $("ri-branch").textContent = details.branch;
+  $("ri-status").textContent = details.statusLabel;
+  $("ri-status").className = `repo-info-status ${details.status}`;
+
+  const urlRow = $("ri-url-row");
+  urlRow.hidden = !details.gitUrl;
+  $("ri-url").textContent = details.gitUrl;
+  const createdRow = $("ri-created-row");
+  createdRow.hidden = !details.createdAt;
+  $("ri-created").textContent = details.createdAt;
+  const error = $("ri-error");
+  error.hidden = !details.error;
+  error.textContent = details.error;
+  $("ri-close").setAttribute("aria-label", t("common.close"));
+  return true;
+}
+
+// Clicking a repo shows metadata without replacing or disconnecting the task
+// terminal. Remote fleet summaries intentionally expose fewer fields; optional
+// rows simply stay hidden when an older/remote node did not send them.
+export function openRepoDetails(id, hostId = null) {
+  repoDetailsTarget = {
+    id: Number(id),
+    hostId: hostId == null ? null : Number(hostId),
+  };
+  if (!paintRepoDetails()) {
+    repoDetailsTarget = null;
+    toast(t("repo.infoUnavailable"), "error");
+    return;
+  }
+  $("repo-info-modal").style.display = "flex";
+  setTimeout(() => $("ri-close").focus(), 30);
+}
+
+export function openRepoDetailsKey(event, id, hostId = null) {
+  if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+  event.preventDefault();
+  openRepoDetails(id, hostId);
+}
+
+export function closeRepoDetails() {
+  $("repo-info-modal").style.display = "none";
+  repoDetailsTarget = null;
+}
+
+export function repaintRepoDetails() {
+  if (repoDetailsTarget && $("repo-info-modal").style.display === "flex") paintRepoDetails();
 }
 // Plain delete refuses (409) if the repo still has running tasks — then we offer
 // a force delete that tears them (sessions + worktrees) down with the repo.
