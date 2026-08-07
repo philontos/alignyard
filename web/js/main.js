@@ -13,7 +13,7 @@ import { initTerm, showTermEmpty, applyTermTheme, setViewHooks, setCodeViewOpene
 import { initMobile, isOn as isMobile, autoFollowing, enterTerminal, enterList, mobileBack, setMode, reflectKeysWaiting } from "./features/mobile.js";
 import { initReading, reflectWaiting } from "./features/reading.js";
 import { state } from "./core/state.js";
-import { loadRepos, openRepoModal, closeRepoModal, addRepo, delRepo } from "./features/repos.js";
+import { loadRepos, openRepoModal, closeRepoModal, addRepo, delRepo, openRepoDetails, openRepoDetailsKey, closeRepoDetails, repaintRepoDetails } from "./features/repos.js";
 import { loadHosts, selectHost, openHostModal, closeHostModal, addHost, delHost, toggleRepo, toggleArchived, toggleHostMenu, initHostMenuDismiss, loadFleet, bootstrapHost, connectNode, stopNodeTask, removeNodeWt, resumeNodeTask, deleteNodeTask, delNodeRepo, updateHost, updateSelf, openDiscoveryModal, closeDiscoveryModal, openManualHostModal, discoverNodes, connectDiscoveredAt } from "./features/hosts.js";
 import { loadTasks, addTask, archive, removeWt, deleteTask, resume, connect, openTaskModal, closeTaskModal, cancelTaskModal, addLocalTask, renameTask, focusPending, openNodeTaskModal, selectAgent, addNodeShell, allTasks } from "./features/tasks.js";
 import { initCodeView, openRepoCode, openTaskCode, closeCodeView, repaintCodeView, isCodeViewOpen } from "./features/codeview.js";
@@ -43,6 +43,7 @@ Object.assign(window, {
   addLocalTask, renameTask, focusPending, openNodeTaskModal, selectAgent,
   // repos
   delRepo, delNodeRepo, openRepoModal, closeRepoModal, addRepo, openRepoCode,
+  openRepoDetails, openRepoDetailsKey, closeRepoDetails,
   // read-only code explorer
   openTaskCode,
   // hosts
@@ -93,6 +94,7 @@ I18N.onChange = () => {
   if (pv) { pv.ph = t("provider.default"); }
   repaintProviders();   // re-localize the "Anthropic 默认" option + manage list
   repaintCodeView();
+  repaintRepoDetails();
   repaintOnboarding();
   loadRepos();
   loadHosts();
@@ -149,6 +151,7 @@ setInterval(loadFleet, 15000);  // refresh each node's live task count (slower �
 // excluded: an accidental click in the wide desktop scrim must not discard it;
 // its Cancel button / Esc key are the explicit cancellation paths.
 $("repo-modal").addEventListener("click", e => { if (e.target.id === "repo-modal") closeRepoModal(); });
+$("repo-info-modal").addEventListener("click", e => { if (e.target.id === "repo-info-modal") closeRepoDetails(); });
 $("host-modal").addEventListener("click", e => { if (e.target.id === "host-modal") closeHostModal(); });
 $("onboarding-modal").addEventListener("click", e => { if (e.target.id === "onboarding-modal") closeOnboardingModal(); });
 $("discovery-modal").addEventListener("click", e => { if (e.target.id === "discovery-modal") closeDiscoveryModal(); });
@@ -157,7 +160,7 @@ document.addEventListener("keydown", e => {
   if (document.querySelector(".cs.open")) { Object.values(Selects).forEach(s => s.close()); return; }
   if (isCodeViewOpen()) { closeCodeView(); return; }
   if ($("dialog").style.display === "flex") closeDialog(null);
-  else { closeRepoModal(); cancelTaskModal(); closeHostModal(); closeOnboardingModal(); closeDiscoveryModal(); }
+  else { closeRepoDetails(); closeRepoModal(); cancelTaskModal(); closeHostModal(); closeOnboardingModal(); closeDiscoveryModal(); }
 });
 // poll repos so cloning -> ready (and clone errors) show up without manual refresh
 setInterval(() => { if (state.repos.some(r => r.status === "cloning")) loadRepos(); }, 2000);
