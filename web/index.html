@@ -193,6 +193,30 @@
   </div>
 </div>
 
+<div id="repo-info-modal" class="modal-bg" style="display:none">
+  <div class="modal repo-info-modal" role="dialog" aria-modal="true" aria-labelledby="ri-name">
+    <div class="repo-info-head">
+      <span class="repo-info-icon" aria-hidden="true">📦</span>
+      <div class="repo-info-title">
+        <div class="repo-info-kicker"><span data-i18n="repo.infoTitle"></span><span aria-hidden="true"> · </span><span id="ri-id"></span></div>
+        <h2 id="ri-name"></h2>
+      </div>
+      <button id="ri-close" class="repo-info-close" type="button" onclick="closeRepoDetails()" data-i18n-title="common.close">×</button>
+    </div>
+    <dl class="repo-info-list">
+      <div class="repo-info-row"><dt data-i18n="repo.infoMachine"></dt><dd id="ri-host"></dd></div>
+      <div id="ri-url-row" class="repo-info-row"><dt data-i18n="repo.infoUrl"></dt><dd><code id="ri-url"></code></dd></div>
+      <div class="repo-info-row"><dt data-i18n="repo.infoBranch"></dt><dd><code id="ri-branch"></code></dd></div>
+      <div class="repo-info-row"><dt data-i18n="repo.infoStatus"></dt><dd><span id="ri-status" class="repo-info-status"></span></dd></div>
+      <div id="ri-created-row" class="repo-info-row"><dt data-i18n="repo.infoCreated"></dt><dd id="ri-created"></dd></div>
+    </dl>
+    <div id="ri-error" class="repo-info-error" hidden></div>
+    <div class="dlg-actions repo-info-actions">
+      <button class="sec" type="button" onclick="closeRepoDetails()" data-i18n="common.close"></button>
+    </div>
+  </div>
+</div>
+
 <div id="onboarding-modal" class="modal-bg" style="display:none">
   <div class="modal onboarding-modal">
     <div class="onboarding-head">
