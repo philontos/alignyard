@@ -5,8 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { initSchema } from "../core/schema.ts";
-import { writeTaskManifest } from "./taskmanifest.ts";
-import type { Task } from "../core/db.ts";
+import { writeTaskManifestFromDb } from "./taskmanifest.ts";
 import {
   createLocalTask,
   createRepoTask,
@@ -165,31 +164,51 @@ test("stopTask reports notFound for an unknown id and does nothing", async () =>
 // grouped behind setupWorktree (the prod env fills in the real git/putDir/hooks);
 // the core owns ordering, naming, opening-message, cleanup and manifest.
 const REPO: RepoRef = { id: 4, name: "switchyard", mirror_path: "/data/mirrors/4-switchyard.git" };
+const REFERENCE_REPO = { id: 8, name: "backend", mirror_path: "/data/mirrors/8-backend.git" };
 
 function makeRepoEnv(overrides: Partial<RepoTaskEnv> = {}) {
   const db = new Database(":memory:");
   initSchema(db, opts);
+  db.prepare("INSERT INTO hosts (id,name,target,kind,status) VALUES (1,'local','','local','online')").run();
+  db.prepare(
+    "INSERT INTO repos (id,host_id,name,git_url,default_branch,mirror_path,status) VALUES (4,1,'switchyard','git@example/switchyard','main',?,'ready')",
+  ).run(REPO.mirror_path);
+  db.prepare(
+    "INSERT INTO repos (id,host_id,name,git_url,default_branch,mirror_path,status) VALUES (8,1,'backend','git@example/backend','develop',?,'ready')",
+  ).run(REFERENCE_REPO.mirror_path);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tdsp-cr-"));
   const calls: string[] = [];
   let setupArgs: any = null;
+  let startArgs: any = null;
   const env: RepoTaskEnv = {
     db,
     ns: "abcd1234",
-    writeManifest: (id) => writeTaskManifest(dir, db.prepare("SELECT * FROM tasks WHERE id=?").get(id) as Task),
+    writeManifest: (id) => writeTaskManifestFromDb(dir, db, id),
     setupWorktree: async (a) => {
       calls.push("setup");
       setupArgs = a;
       return "a".repeat(40);
     },
-    startSession: async (_session, _worktree, opening) => {
+    setupReference: async ({ mirror, worktree, requestedRef }) => {
+      calls.push(`ref:${mirror}:${worktree}:${requestedRef}`);
+      return "b".repeat(40);
+    },
+    startSession: async (session, worktree, opening, sessionOpts) => {
       calls.push(`start:${opening ?? "∅"}`);
+      startArgs = { session, worktree, opening, opts: sessionOpts };
     },
     removeWorktree: async () => {
       calls.push("remove");
     },
+    removeReference: async (mirror, worktree) => {
+      calls.push(`remove-ref:${mirror}:${worktree}`);
+    },
+    removeReferenceRoot: async (taskId) => {
+      calls.push(`remove-ref-root:${taskId}`);
+    },
     ...overrides,
   };
-  return { env, dir, db, calls, getSetup: () => setupArgs };
+  return { env, dir, db, calls, getSetup: () => setupArgs, getStart: () => startArgs };
 }
 
 test("createRepoTask inserts a running task, prepares the worktree, starts the session, writes manifest", async () => {
@@ -218,6 +237,102 @@ test("createRepoTask inserts a running task, prepares the worktree, starts the s
 
     const m = JSON.parse(fs.readFileSync(path.join(dir, "tasks", String(r.id), "task.json"), "utf8"));
     assert.equal(m.task.work_branch, `feat/${r.id}-fix-login`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("createRepoTask materializes pinned repository references and gives them to the agent", async () => {
+  const { env, dir, db, calls, getStart } = makeRepoEnv();
+  try {
+    const r = await createRepoTask(env, REPO, {
+      baseBranch: "main",
+      title: "cross repo change",
+      prompt: "trace the API contract",
+      agent: "codex",
+      references: [{ repo_id: REFERENCE_REPO.id, ref: "develop", alias: "api" }],
+    });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+
+    const refPath = path.resolve(`/data/worktrees/refs/${r.id}/api`);
+    const reference = db.prepare("SELECT * FROM task_references WHERE task_id=?").get(r.id) as any;
+    assert.equal(reference.repo_id, REFERENCE_REPO.id);
+    assert.equal(reference.requested_ref, "develop");
+    assert.equal(reference.resolved_commit, "b".repeat(40));
+    assert.equal(reference.worktree_path, refPath);
+    assert.ok(calls.includes(`ref:${REFERENCE_REPO.mirror_path}:${refPath}:develop`));
+
+    const started = getStart();
+    assert.deepEqual(started.opts.addDirs, [refPath]);
+    assert.match(started.opening, /Primary repository \(editable\): switchyard/);
+    assert.match(started.opening, /ref:api \(reference-only\): backend\/develop@bbbbbbbbbbbb/);
+    assert.match(started.opening, /trace the API contract/);
+    assert.equal(
+      (db.prepare("SELECT prompt FROM tasks WHERE id=?").get(r.id) as { prompt: string }).prompt,
+      "trace the API contract",
+      "the stored user prompt is not replaced by launch-only workspace context",
+    );
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, "tasks", String(r.id), "task.json"), "utf8"));
+    assert.equal(manifest.references[0].alias, "api");
+    assert.equal(manifest.references[0].resolved_commit, "b".repeat(40));
+    const workspace = JSON.parse(fs.readFileSync(path.join(dir, "tasks", String(r.id), "workspace.json"), "utf8"));
+    assert.equal(workspace.primary.mode, "editable");
+    assert.equal(workspace.references[0].path ?? workspace.references[0].worktree_path, refPath);
+    assert.equal(workspace.references[0].mode, "reference");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("createRepoTask rejects a reference outside the owning node before creating a task", async () => {
+  const { env, dir, db, calls } = makeRepoEnv();
+  try {
+    const r = await createRepoTask(env, REPO, {
+      baseBranch: "main",
+      title: "bad ref",
+      references: [{ repo_id: 999, ref: "main", alias: "missing" }],
+    });
+    assert.deepEqual(r, {
+      ok: false,
+      error: "invalidReference",
+      message: "reference repository 999 was not found on this node",
+    });
+    assert.equal((db.prepare("SELECT count(*) AS c FROM tasks").get() as { c: number }).c, 0);
+    assert.deepEqual(calls, []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("createRepoTask rolls back a partially-created reference worktree", async () => {
+  let attemptedPath = "";
+  const { env, dir, db, calls } = makeRepoEnv({
+    setupReference: async ({ worktree }) => {
+      attemptedPath = worktree;
+      calls.push("ref-failed");
+      throw new Error("reference checkout failed");
+    },
+  });
+  try {
+    const r = await createRepoTask(env, REPO, {
+      baseBranch: "main",
+      title: "broken ref",
+      references: [{ repo_id: REFERENCE_REPO.id, ref: "develop", alias: "api" }],
+    });
+    assert.equal(r.ok, false);
+    if (r.ok) return;
+    assert.equal(r.error, "dispatchFailed");
+    assert.deepEqual(calls, [
+      "setup",
+      "ref-failed",
+      `remove-ref:${REFERENCE_REPO.mirror_path}:${attemptedPath}`,
+      `remove-ref-root:${r.id}`,
+      "remove",
+    ]);
+    assert.equal((db.prepare("SELECT count(*) AS c FROM task_references").get() as { c: number }).c, 0);
+    assert.equal((db.prepare("SELECT status FROM tasks WHERE id=?").get(r.id) as { status: string }).status, "error");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

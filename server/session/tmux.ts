@@ -57,6 +57,22 @@ async function extraWritableGitDirs(runner: CommandRunner, cwd: string, agent: A
   return [...new Set(dirs.filter((d): d is string => !!d))];
 }
 
+async function sessionAddDirs(
+  runner: CommandRunner,
+  cwd: string,
+  agent: AgentKind,
+  additionalRoots: string[] = [],
+): Promise<string[]> {
+  const roots = [...new Set(additionalRoots.map((dir) => dir.trim()).filter(Boolean))];
+  // Codex/Kimi sandbox roots must also cover the linked worktree's per-worktree
+  // gitdir and shared bare mirror. Claude already follows Git metadata from each
+  // --add-dir root using its own permission model.
+  const metadata = agent === "codex" || agent === "kimi"
+    ? (await Promise.all([cwd, ...roots].map((root) => extraWritableGitDirs(runner, root, agent)))).flat()
+    : [];
+  return [...new Set([...roots, ...metadata])];
+}
+
 /**
  * Build an `env K=V ...` prefix that sets per-session vars directly on the
  * launched process. `tmux new-session` does NOT propagate arbitrary env vars
@@ -92,7 +108,13 @@ export async function startSession(
   session: string,
   cwd: string,
   prompt?: string | null,
-  opts?: { continue?: boolean; env?: Record<string, string>; agent?: AgentKind; model?: string | null },
+  opts?: {
+    continue?: boolean;
+    env?: Record<string, string>;
+    agent?: AgentKind;
+    model?: string | null;
+    addDirs?: string[];
+  },
 ) {
   requireOwnerNode(runner);
   // resume reattaches to the prior conversation (agents key it by cwd). The
@@ -101,7 +123,7 @@ export async function startSession(
   // agent process.
   const agent = opts?.agent ?? "claude";
   const pre = envPrefix(opts?.env);
-  const addDirs = await extraWritableGitDirs(runner, cwd, agent);
+  const addDirs = await sessionAddDirs(runner, cwd, agent, opts?.addDirs);
   const launch = agentArgv(agent, { prompt, model: opts?.model, resume: opts?.continue, addDirs });
   if (agent === "kimi") launch[0] = await kimiBinary(runner);
   const cmd = ["new-session", "-d", "-s", session, "-c", cwd, ...pre, ...launch];

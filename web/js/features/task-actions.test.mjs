@@ -58,3 +58,13 @@ test("desktop dispatch branch picker uses a larger drawn chevron", () => {
   assert.match(css, /@media \(min-width: 761px\)\s*\{[\s\S]*?#task-modal #t-base \.cs-caret\s*\{[^}]*width:\s*24px;[^}]*height:\s*24px;/);
   assert.match(css, /#task-modal #t-base \.cs-caret::before\s*\{[^}]*border-right:\s*2px solid currentColor;[^}]*border-bottom:\s*2px solid currentColor;/s);
 });
+
+test("dispatch supports task-scoped repository references on local and capable remote nodes", () => {
+  assert.match(html, /id="t-ref-sec"[\s\S]*?id="t-ref-add"[\s\S]*?id="t-ref-list"/);
+  assert.match(tasks, /const TASK_REFERENCES_CAPABILITY = "task-references-v1"/);
+  assert.match(tasks, /state\.fleet\[nodeTask\.hostId\]\?\.capabilities/);
+  assert.match(tasks, /\breferences,\s*\n/);
+  assert.match(tasks, /\/api\/nodes\/\$\{nodeTask\.hostId\}\/repos\/\$\{reference\.repoId\}\/branches/);
+  assert.match(css, /\.tm-ref-row\s*\{[^}]*grid-template-columns:/s);
+  assert.match(css, /@media \(max-width: 760px\)[\s\S]*?\.tm-ref-alias\s*\{[^}]*grid-column:\s*1 \/ 3;/s);
+});

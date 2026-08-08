@@ -9,6 +9,7 @@ import type { Task } from "../core/db.ts";
 import {
   taskManifest,
   writeTaskManifest,
+  writeTaskManifestFromDb,
   readTaskManifests,
   adoptTaskManifests,
 } from "./taskmanifest.ts";
@@ -40,7 +41,7 @@ test("taskManifest wraps a task row in a versioned envelope", () => {
   const db = seedDb();
   const task = insertTask(db, "alpha");
   const m = taskManifest(task);
-  assert.equal(m.schema_version, 1);
+  assert.equal(m.schema_version, 2);
   assert.equal(m.task.title, "alpha");
   assert.equal(m.task.session, "tdsp-1-r-alpha");
 });
@@ -57,7 +58,33 @@ test("writeTaskManifest then readTaskManifests round-trips the task as edge-resi
     assert.equal(all.length, 1);
     assert.equal(all[0].task.title, "beta");
     assert.equal(all[0].task.base_commit, "a".repeat(40));
-    assert.equal(all[0].schema_version, 1);
+    assert.equal(all[0].schema_version, 2);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeTaskManifestFromDb records the primary workspace and pinned references", () => {
+  const db = seedDb();
+  db.prepare(
+    "INSERT INTO repos (id,host_id,name,git_url,mirror_path,status) VALUES (2,1,'api','git@example/api','/mirror/api.git','ready')",
+  ).run();
+  const task = insertTask(db, "cross-repo");
+  db.prepare(
+    "INSERT INTO task_references (task_id,repo_id,alias,requested_ref,resolved_commit,worktree_path) VALUES (?,?,?,?,?,?)",
+  ).run(task.id, 2, "api", "develop", "b".repeat(40), `/wt/refs/${task.id}/api`);
+  const dir = tmpDir();
+  try {
+    writeTaskManifestFromDb(dir, db, task.id);
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, "tasks", String(task.id), "task.json"), "utf8"));
+    assert.equal(manifest.references[0].repo_name, "api");
+    assert.equal(manifest.references[0].resolved_commit, "b".repeat(40));
+
+    const workspace = JSON.parse(fs.readFileSync(path.join(dir, "tasks", String(task.id), "workspace.json"), "utf8"));
+    assert.equal(workspace.primary.repo_name, "repo");
+    assert.equal(workspace.primary.mode, "editable");
+    assert.equal(workspace.references[0].alias, "api");
+    assert.equal(workspace.references[0].mode, "reference");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -86,6 +113,30 @@ test("adoptTaskManifests inserts a manifest the DB doesn't have (sit-down-and-se
   assert.equal(row.title, "gamma");
   assert.equal(row.session, "tdsp-1-r-gamma");
   assert.equal(row.base_commit, "a".repeat(40));
+});
+
+test("adoptTaskManifests restores valid reference rows from the task manifest", () => {
+  const db = seedDb();
+  db.prepare(
+    "INSERT INTO repos (id,host_id,name,git_url,mirror_path,status) VALUES (2,1,'api','git@example/api','/mirror/api.git','ready')",
+  ).run();
+  const other = seedDb();
+  const task = insertTask(other, "recover-refs");
+  const manifest = taskManifest(task, [{
+    task_id: task.id,
+    repo_id: 2,
+    alias: "api",
+    requested_ref: "develop",
+    resolved_commit: "c".repeat(40),
+    worktree_path: `/wt/refs/${task.id}/api`,
+    mode: "reference",
+  }]);
+
+  assert.equal(adoptTaskManifests(db, [manifest]), 1);
+  const reference = db.prepare("SELECT * FROM task_references WHERE task_id=?").get(task.id) as any;
+  assert.equal(reference.repo_id, 2);
+  assert.equal(reference.alias, "api");
+  assert.equal(reference.resolved_commit, "c".repeat(40));
 });
 
 test("adoptTaskManifests skips a task the DB already owns (no duplicate, no clobber)", () => {

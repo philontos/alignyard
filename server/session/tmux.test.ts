@@ -126,6 +126,17 @@ test("startSession({ continue: true }) runs claude --continue and ignores any pr
   assert.deepEqual(calls[0], { file: "tmux", args: ["new-session", "-d", "-s", "tdsp-1-x", "-c", "/wt", "claude", "--continue"] });
 });
 
+test("startSession passes task reference roots through the Claude adapter", async () => {
+  const { runner, calls } = fakeRunner();
+  await startSession(runner, "tdsp-1-x", "/wt", "inspect api", {
+    addDirs: ["/refs/api"],
+  });
+  assert.deepEqual(calls[0], { file: "tmux", args: [
+    "new-session", "-d", "-s", "tdsp-1-x", "-c", "/wt",
+    "claude", "--add-dir", "/refs/api", "--", "inspect api",
+  ] });
+});
+
 test("startSession injects opts.env as an `env K=V ... claude` prefix (alternate provider)", async () => {
   const { runner, calls } = fakeRunner();
   // tmux new-session won't carry arbitrary env into the session, so the vars are
@@ -191,6 +202,22 @@ test("startSession(agent='codex', model) passes -m <model> before the prompt", a
     "new-session", "-d", "-s", "tdsp-1-x", "-c", "/wt",
     "codex", "-a", "on-request", "-s", "danger-full-access",
     "--add-dir", "/mirror/worktrees/1-49", "--add-dir", "/mirror", "-m", "gpt-5.4", "go",
+  ] });
+});
+
+test("startSession(agent='codex') exposes references and their linked Git metadata", async () => {
+  const { runner, calls } = fakeRunner();
+  await startSession(runner, "tdsp-1-x", "/wt", "compare", {
+    agent: "codex",
+    addDirs: ["/refs/api", "/refs/api"],
+  });
+  assert.deepEqual(calls.find((call) => call.args[0] === "new-session"), { file: "tmux", args: [
+    "new-session", "-d", "-s", "tdsp-1-x", "-c", "/wt",
+    "codex", "-a", "on-request", "-s", "danger-full-access",
+    "--add-dir", "/refs/api",
+    "--add-dir", "/mirror/worktrees/1-49",
+    "--add-dir", "/mirror",
+    "compare",
   ] });
 });
 
