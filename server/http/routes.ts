@@ -31,6 +31,13 @@ import {
 import { fleetTargets, type FleetTarget } from "../fleet/fleet.js";
 import { bootstrapMachine, validProfileName } from "../fleet/bootstrap.js";
 import { createLocalTask, createRepoTask, type RepoTaskEnv } from "../task/createtask.js";
+import {
+  listTaskReferences,
+  publicTaskReferences,
+  referenceRootPath,
+  referenceWorktreePaths,
+  removeTaskReferenceRows,
+} from "../task/references.js";
 import { buildRepoTaskEnv } from "../repo/repoenv.js";
 import { probeHost } from "../fleet/liveness.js";
 import { NS, DATA_DIR, ROOT } from "../core/paths.js";
@@ -142,6 +149,8 @@ const ownedRepoEnv: OwnedRepoEnv = {
   syncRepos: syncReposManifest,
   removeTaskManifest: (id) => removeTaskManifest(DATA_DIR, id),
   killSession: (session) => killSession(localRunner, session),
+  syncTaskManifest: (id) => syncTaskManifest(id),
+  removeReferenceRoot: (id) => localRunner.rmrf(referenceRootPath(DATA_DIR, id)),
 };
 
 function sendRepoFailure(req: Request, res: Response, result: any) {
@@ -501,6 +510,7 @@ app.get("/api/tasks", async (_req, res) => {
       }
       return {
         ...t,
+        references: publicTaskReferences(db, t.id),
         claude_session: claudeSession,
         alive: t.status === "cleaned" ? false : await hasSession(runner, t.session).catch(() => false),
         hasWorktree: hasWt,
@@ -521,7 +531,7 @@ function repoTaskEnvFor(): RepoTaskEnv {
 }
 
 app.post("/api/tasks", async (req, res) => {
-  const { repo_id, base_branch, title, prompt, provider_id, agent, agent_model } = req.body ?? {};
+  const { repo_id, base_branch, title, prompt, provider_id, agent, agent_model, references } = req.body ?? {};
   const lang = langFromReq(req);
   const requestedHost = req.body?.host_id;
   if (requestedHost != null && Number(requestedHost) !== localHostId(db)) {
@@ -542,9 +552,19 @@ app.post("/api/tasks", async (req, res) => {
   const r = await createRepoTask(
     repoTaskEnvFor(),
     { id: repo.id, name: repo.name, mirror_path: repo.mirror_path },
-    { baseBranch: base_branch, title, prompt, providerId: provider ? provider.id : null, env: providerEnv(provider), agent: agentKind, model: agent_model ?? null },
+    {
+      baseBranch: base_branch,
+      title,
+      prompt,
+      providerId: provider ? provider.id : null,
+      env: providerEnv(provider),
+      agent: agentKind,
+      model: agent_model ?? null,
+      references,
+    },
   );
   if (r.ok) return res.json({ id: r.id, session: r.session, work_branch: r.workBranch });
+  if (r.error === "invalidReference") return res.status(400).json({ error: r.message });
   return res.status(500).json({ error: r.message });
 });
 
@@ -631,7 +651,15 @@ app.post("/api/tasks/:id/cleanup", async (req, res) => {
   const repo = getRepo.get(task.repo_id) as Repo | undefined;
   try {
     await killSession(localRunner, task.session);
+    for (const reference of listTaskReferences(db, task.id)) {
+      const referenceRepo = getRepo.get(reference.repo_id) as Repo | undefined;
+      if (referenceRepo?.mirror_path) {
+        await removeWorktree(localRunner, referenceRepo.mirror_path, reference.worktree_path);
+      }
+    }
     if (repo?.mirror_path) await removeWorktree(localRunner, repo.mirror_path, task.worktree_path, task.work_branch);
+    await localRunner.rmrf(referenceRootPath(DATA_DIR, task.id));
+    removeTaskReferenceRows(db, task.id);
     db.prepare("UPDATE tasks SET status='cleaned' WHERE id=?").run(task.id);
     syncTaskManifest(task.id);
     res.json({ ok: true });
@@ -653,6 +681,12 @@ app.post("/api/tasks/:id/resume", async (req, res) => {
   if (!(await localRunner.exists(task.worktree_path).catch(() => false))) {
     return res.status(409).json({ error: tr(lang, "task.worktreeGone") });
   }
+  const referencePaths = referenceWorktreePaths(db, task.id);
+  for (const referencePath of referencePaths) {
+    if (!(await localRunner.exists(referencePath).catch(() => false))) {
+      return res.status(409).json({ error: tr(lang, "task.worktreeGone") });
+    }
+  }
   try {
     const alreadyAlive = await hasSession(localRunner, task.session).catch(() => false);
     // resume on the SAME agent + model/backend the task was created with: claude
@@ -660,7 +694,11 @@ app.post("/api/tasks/:id/resume", async (req, res) => {
     // recorded model. providerEnv is empty for a codex task (provider_id is NULL).
     const provider = task.provider_id ? (getProvider.get(task.provider_id) as Provider | undefined) : undefined;
     if (!alreadyAlive) await startSession(localRunner, task.session, task.worktree_path, null, {
-      continue: true, env: providerEnv(provider), agent: asAgentKind(task.agent), model: task.agent_model,
+      continue: true,
+      env: providerEnv(provider),
+      agent: asAgentKind(task.agent),
+      model: task.agent_model,
+      addDirs: referencePaths,
     });
     db.prepare("UPDATE tasks SET status='running' WHERE id=?").run(task.id);
     syncTaskManifest(task.id);
@@ -690,6 +728,12 @@ app.delete("/api/tasks/:id", async (req, res) => {
   if (task.worktree_path && (await localRunner.exists(task.worktree_path).catch(() => false))) {
     return res.status(409).json({ error: tr(langFromReq(req), "task.worktreeExists") });
   }
+  for (const reference of listTaskReferences(db, task.id)) {
+    if (reference.worktree_path && (await localRunner.exists(reference.worktree_path).catch(() => false))) {
+      return res.status(409).json({ error: tr(langFromReq(req), "task.worktreeExists") });
+    }
+  }
+  removeTaskReferenceRows(db, task.id);
   db.prepare("DELETE FROM tasks WHERE id=?").run(req.params.id);
   removeTaskManifest(DATA_DIR, Number(req.params.id));
   res.json({ ok: true });
@@ -917,12 +961,14 @@ app.post("/api/nodes/:hostId/tasks", async (req, res) => {
     agent: agentKind,
     model: req.body?.model ?? req.body?.agent_model ?? null,
     provider_id: agentKind === "claude" && provider_id ? Number(provider_id) : null,
+    references: req.body?.references,
   };
   const { out, result } = await runNodeJson(host, ["create", b64Json(spec)]);
   if (!result) return sendMissingNodeCommand(req, res, "create", out);
   if (result.ok) return res.json({ id: result.id, session: result.session, work_branch: result.workBranch, node: host.id });
   if (result.error === "repoNotFound") return res.status(404).json({ error: tr(lang, "repo.notFound") });
   if (result.error === "repoNotReady") return res.status(409).json({ error: tr(lang, "repo.status", { status: result.message || "unknown" }) });
+  if (result.error === "invalidReference") return res.status(400).json({ error: result.message });
   return res.status(500).json({ error: result.message || result.error });
 });
 

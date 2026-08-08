@@ -15,7 +15,7 @@ import { initReading, reflectWaiting } from "./features/reading.js";
 import { state } from "./core/state.js";
 import { loadRepos, openRepoModal, closeRepoModal, addRepo, delRepo, openRepoDetails, openRepoDetailsKey, closeRepoDetails, repaintRepoDetails } from "./features/repos.js";
 import { loadHosts, selectHost, openHostModal, closeHostModal, addHost, delHost, toggleRepo, toggleArchived, toggleHostMenu, initHostMenuDismiss, loadFleet, bootstrapHost, connectNode, stopNodeTask, removeNodeWt, resumeNodeTask, deleteNodeTask, delNodeRepo, updateHost, updateSelf, openDiscoveryModal, closeDiscoveryModal, openManualHostModal, discoverNodes, connectDiscoveredAt } from "./features/hosts.js";
-import { loadTasks, addTask, archive, removeWt, deleteTask, resume, connect, openTaskModal, closeTaskModal, cancelTaskModal, addLocalTask, renameTask, focusPending, openNodeTaskModal, selectAgent, addNodeShell, allTasks } from "./features/tasks.js";
+import { loadTasks, addTask, archive, removeWt, deleteTask, resume, connect, openTaskModal, closeTaskModal, cancelTaskModal, addLocalTask, renameTask, focusPending, openNodeTaskModal, selectAgent, addNodeShell, allTasks, addTaskReference, repaintTaskReferences } from "./features/tasks.js";
 import { initCodeView, openRepoCode, openTaskCode, closeCodeView, repaintCodeView, isCodeViewOpen } from "./features/codeview.js";
 import { initReorder } from "./features/reorder.js";
 import { refreshProviders, repaintProviders, onProviderChange, toggleProviderPanel, onPanelInput, testProvider, addProvider, delProvider } from "./features/providers.js";
@@ -39,7 +39,7 @@ import {
 // that exposes them. (I18N is already global, set by i18n.js.)
 Object.assign(window, {
   // tasks
-  addTask, openTaskModal, cancelTaskModal, connect, archive, removeWt, deleteTask, resume,
+  addTask, addTaskReference, openTaskModal, cancelTaskModal, connect, archive, removeWt, deleteTask, resume,
   addLocalTask, renameTask, focusPending, openNodeTaskModal, selectAgent,
   // repos
   delRepo, delNodeRepo, openRepoModal, closeRepoModal, addRepo, openRepoCode,
@@ -93,6 +93,7 @@ I18N.onChange = () => {
   const pv = Selects["t-provider"];
   if (pv) { pv.ph = t("provider.default"); }
   repaintProviders();   // re-localize the "Anthropic 默认" option + manage list
+  repaintTaskReferences();
   repaintCodeView();
   repaintRepoDetails();
   repaintOnboarding();

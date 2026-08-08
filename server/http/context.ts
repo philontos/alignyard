@@ -3,7 +3,7 @@
 // verbatim out of the old monolithic index.ts.
 import fs from "node:fs";
 import { db, Task, Host } from "../core/db.js";
-import { writeTaskManifest } from "../task/taskmanifest.js";
+import { writeTaskManifestFromDb } from "../task/taskmanifest.js";
 import { DATA_DIR } from "../core/paths.js";
 export { str, providerEnv, checkProvider } from "../provider/providers.js";
 
@@ -49,7 +49,7 @@ export function offline(host: Host | undefined): boolean {
 export function syncTaskManifest(id: number) {
   const t = getTask.get(id) as Task | undefined;
   if (!t) return;
-  writeTaskManifest(DATA_DIR, t);
+  writeTaskManifestFromDb(DATA_DIR, db, t.id);
 }
 
 // matches dispatcher-owned sessions: tdsp-[<ns>-]<id>[-slug] (+ legacy task-N).

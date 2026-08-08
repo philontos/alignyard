@@ -34,6 +34,10 @@ test("initSchema on a fresh DB has worktree_path and the newer columns", () => {
   const cols = (db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name);
   for (const c of ["worktree_path", "base_commit", "kind", "host_id", "cwd"]) assert.ok(cols.includes(c), `missing ${c}`);
   assert.ok(!cols.includes("skills"), "removed skills metadata is not recreated");
+  const referenceCols = (db.prepare("PRAGMA table_info(task_references)").all() as { name: string }[]).map((c) => c.name);
+  assert.deepEqual(referenceCols, [
+    "task_id", "repo_id", "alias", "requested_ref", "resolved_commit", "worktree_path", "mode", "created_at",
+  ]);
 });
 
 test("initSchema adds stable peer identity and managed SSH state to hosts", () => {
@@ -117,12 +121,18 @@ test("initSchema creates onboarding evidence storage without a completion flag",
 });
 
 test("path migration runs only when didMigrate is true", () => {
-  const seed = (db: Database.Database) =>
+  const seed = (db: Database.Database) => {
     db.prepare(
       "INSERT INTO tasks (repo_id, base_branch, work_branch, title, worktree_path, session) VALUES (1,'m','f','t',?, 's')",
     ).run("/legacy/wt/x");
+    db.prepare(
+      "INSERT INTO task_references (task_id,repo_id,alias,requested_ref,resolved_commit,worktree_path) VALUES (1,2,'api','main',?,?)",
+    ).run("a".repeat(40), "/legacy/worktrees/refs/1/api");
+  };
   const wt = (db: Database.Database) =>
     (db.prepare("SELECT worktree_path FROM tasks WHERE id=1").get() as { worktree_path: string }).worktree_path;
+  const refWt = (db: Database.Database) =>
+    (db.prepare("SELECT worktree_path FROM task_references WHERE task_id=1").get() as { worktree_path: string }).worktree_path;
 
   // didMigrate=false → stored legacy path left untouched
   const skip = new Database(":memory:");
@@ -130,6 +140,7 @@ test("path migration runs only when didMigrate is true", () => {
   seed(skip);
   initSchema(skip, opts(false));
   assert.equal(wt(skip), "/legacy/wt/x");
+  assert.equal(refWt(skip), "/legacy/worktrees/refs/1/api");
 
   // explicit migration → prefix rewritten to the new data dir
   const mig = new Database(":memory:");
@@ -137,4 +148,5 @@ test("path migration runs only when didMigrate is true", () => {
   seed(mig);
   runPathMigration(mig, "/legacy", "/data");
   assert.equal(wt(mig), "/data/wt/x");
+  assert.equal(refWt(mig), "/data/worktrees/refs/1/api");
 });

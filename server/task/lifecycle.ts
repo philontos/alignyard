@@ -5,6 +5,7 @@
 import type Database from "better-sqlite3";
 import type { Task } from "../core/db.js";
 import { getOwnedRepo, getOwnedTask } from "../core/ownership.js";
+import { listTaskReferences, removeTaskReferenceRows } from "./references.js";
 
 type DB = Database.Database;
 
@@ -36,7 +37,8 @@ export interface ResumeTaskEnv extends ManifestEnv {
 
 export interface CleanupTaskEnv extends ManifestEnv {
   killSession(session: string): Promise<void>;
-  removeWorktree(mirror: string, worktree: string, workBranch: string): Promise<void>;
+  removeWorktree(mirror: string, worktree: string, workBranch?: string): Promise<void>;
+  removeReferenceRoot?(taskId: number): Promise<void>;
 }
 
 export interface DeleteTaskEnv {
@@ -62,6 +64,11 @@ export async function resumeTask(env: ResumeTaskEnv, id: number): Promise<Lifecy
     // A failed filesystem probe cannot safely be treated as a resumable task.
   }
   if (!hasWorktree) return { ok: false, error: "worktreeGone" };
+  for (const reference of listTaskReferences(env.db, id)) {
+    if (!reference.worktree_path || !(await env.exists(reference.worktree_path).catch(() => false))) {
+      return { ok: false, error: "worktreeGone" };
+    }
+  }
 
   try {
     const alreadyAlive = await env.hasSession(task.session).catch(() => false);
@@ -82,9 +89,17 @@ export async function cleanupTask(env: CleanupTaskEnv, id: number): Promise<Life
 
   try {
     await env.killSession(task.session);
+    for (const reference of listTaskReferences(env.db, id)) {
+      const referenceRepo = getOwnedRepo(env.db, reference.repo_id);
+      if (referenceRepo?.mirror_path && reference.worktree_path) {
+        await env.removeWorktree(referenceRepo.mirror_path, reference.worktree_path);
+      }
+    }
     if (repo?.mirror_path && task.worktree_path) {
       await env.removeWorktree(repo.mirror_path, task.worktree_path, task.work_branch);
     }
+    await env.removeReferenceRoot?.(id);
+    removeTaskReferenceRows(env.db, id);
     env.db.prepare("UPDATE tasks SET status='cleaned' WHERE id=?").run(id);
     await env.writeManifest(id);
     return { ok: true };
@@ -111,6 +126,12 @@ export async function deleteTaskRecord(env: DeleteTaskEnv, id: number): Promise<
     if (task.worktree_path && (await env.exists(task.worktree_path))) {
       return { ok: false, error: "worktreeExists" };
     }
+    for (const reference of listTaskReferences(env.db, id)) {
+      if (reference.worktree_path && (await env.exists(reference.worktree_path))) {
+        return { ok: false, error: "worktreeExists" };
+      }
+    }
+    removeTaskReferenceRows(env.db, id);
     env.db.prepare("DELETE FROM tasks WHERE id=?").run(id);
     await env.removeManifest(id);
     return { ok: true };
