@@ -56,10 +56,31 @@ test("resumeTask refuses a task whose retained worktree is gone", async () => {
   assert.deepEqual(result, { ok: false, error: "worktreeGone" });
 });
 
+test("resumeTask refuses a task whose pinned reference worktree is gone", async () => {
+  const db = seed();
+  db.prepare(
+    "INSERT INTO task_references (task_id,repo_id,alias,requested_ref,resolved_commit,worktree_path) " +
+      "VALUES (7,1,'api','main',?, '/wt/refs/7/api')",
+  ).run("a".repeat(40));
+  let started = false;
+  const result = await resumeTask(
+    {
+      db,
+      exists: async (target) => target === "/wt/7",
+      hasSession: async () => false,
+      startSession: async () => { started = true; },
+      writeManifest: () => {},
+    },
+    7,
+  );
+  assert.deepEqual(result, { ok: false, error: "worktreeGone" });
+  assert.equal(started, false);
+});
+
 test("cleanupTask removes the worktree and persists the cleaned task", async () => {
   const db = seed();
   const killed: string[] = [];
-  const removed: string[][] = [];
+  const removed: Array<Array<string | undefined>> = [];
   const manifested: number[] = [];
   const result = await cleanupTask(
     {
@@ -75,6 +96,34 @@ test("cleanupTask removes the worktree and persists the cleaned task", async () 
   assert.deepEqual(killed, ["tdsp-7"]);
   assert.deepEqual(removed, [["/mirror/repo.git", "/wt/7", "feat/7"]]);
   assert.deepEqual(manifested, [7]);
+});
+
+test("cleanupTask removes reference worktrees before the primary worktree", async () => {
+  const db = seed();
+  db.prepare(
+    "INSERT INTO repos (id,host_id,name,git_url,mirror_path,status) VALUES (2,1,'api','git@example/api','/mirror/api.git','ready')",
+  ).run();
+  db.prepare(
+    "INSERT INTO task_references (task_id,repo_id,alias,requested_ref,resolved_commit,worktree_path) " +
+      "VALUES (7,2,'api','develop',?, '/wt/refs/7/api')",
+  ).run("b".repeat(40));
+  const removed: Array<Array<string | undefined>> = [];
+  const result = await cleanupTask(
+    {
+      db,
+      killSession: async () => {},
+      removeWorktree: async (...args) => { removed.push(args); },
+      writeManifest: () => {},
+    },
+    7,
+  );
+
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(removed, [
+    ["/mirror/api.git", "/wt/refs/7/api"],
+    ["/mirror/repo.git", "/wt/7", "feat/7"],
+  ]);
+  assert.equal((db.prepare("SELECT count(*) AS c FROM task_references WHERE task_id=7").get() as { c: number }).c, 0);
 });
 
 test("deleteTaskRecord refuses a retained worktree, then deletes after cleanup", async () => {
@@ -94,6 +143,29 @@ test("deleteTaskRecord refuses a retained worktree, then deletes after cleanup",
   assert.deepEqual(deleted, { ok: true });
   assert.equal(db.prepare("SELECT id FROM tasks WHERE id=7").get(), undefined);
   assert.deepEqual(manifests, [7]);
+});
+
+test("deleteTaskRecord refuses a retained reference worktree", async () => {
+  const db = seed();
+  db.prepare(
+    "INSERT INTO task_references (task_id,repo_id,alias,requested_ref,resolved_commit,worktree_path) " +
+      "VALUES (7,1,'same','main',?, '/wt/refs/7/same')",
+  ).run("c".repeat(40));
+  const probed: string[] = [];
+  const result = await deleteTaskRecord(
+    {
+      db,
+      exists: async (target) => {
+        probed.push(target);
+        return target === "/wt/refs/7/same";
+      },
+      removeManifest: () => {},
+    },
+    7,
+  );
+  assert.deepEqual(result, { ok: false, error: "worktreeExists" });
+  assert.deepEqual(probed, ["/wt/7", "/wt/refs/7/same"]);
+  assert.ok(db.prepare("SELECT id FROM tasks WHERE id=7").get());
 });
 
 test("deleteTaskRecord leaves historical remote rows and manifests untouched", async () => {

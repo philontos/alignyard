@@ -106,7 +106,7 @@ Manual SSH host entry remains available as an advanced fallback when automatic d
 ## The task loop
 
 1. **Register a repository.** Add a GitHub or GitLab URL; Switchyard creates a local mirror.
-2. **Dispatch a task.** Pick the target machine, repo, base branch, agent, optional model, and opening prompt.
+2. **Dispatch a task.** Pick the target machine, repo, base branch, agent, optional model, opening prompt, and any additional repositories to reference.
 3. **Let it run.** Switchyard creates a work branch, isolated worktree, and tmux session on that target machine.
 4. **Check in only when useful.** Watch the terminal, read a mobile transcript, paste an image, answer a permission prompt, or attach with tmux.
 5. **Wrap up deliberately.** Archive the session while retaining its worktree, clean up both, or remove the record.
@@ -116,6 +116,8 @@ Manual SSH host entry remains available as an advanced fallback when automatic d
 </p>
 
 A host reboot or killed tmux session does not destroy the working tree. As long as the worktree remains, **Resume** recreates the session with the saved agent, model, and endpoint. You can also create a repo-free shell from any node's **Shells** group for debugging and one-off commands.
+
+Repository references are resolved on the target node, pinned to an exact commit, and checked out detached under `worktrees/refs/<task-id>/<alias>`. They are restored on Resume, described in the task's `workspace.json`, and presented to the agent as reference-only workspace roots.
 
 ## Agents and models
 

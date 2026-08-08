@@ -83,3 +83,39 @@ test("owner repo service refuses a RemoteRunner even for a local row", async () 
   assert.equal(s.db.prepare("SELECT id FROM repos").all().length, 0);
   assert.equal(s.calls.length, 0);
 });
+
+test("repo deletion accounts for live tasks that reference the repository", async () => {
+  const s = setup();
+  s.db.prepare(
+    "INSERT INTO repos (id,host_id,name,git_url,mirror_path,status) VALUES (10,1,'primary','git@example/primary','/mirror/primary.git','ready')",
+  ).run();
+  s.db.prepare(
+    "INSERT INTO repos (id,host_id,name,git_url,mirror_path,status) VALUES (11,1,'api','git@example/api','/mirror/api.git','ready')",
+  ).run();
+  s.db.prepare(
+    "INSERT INTO tasks (id,repo_id,base_branch,work_branch,title,worktree_path,session,status) " +
+      "VALUES (7,10,'main','feat/7','task','/wt/7','tdsp-7','running')",
+  ).run();
+  s.db.prepare(
+    "INSERT INTO task_references (task_id,repo_id,alias,requested_ref,resolved_commit,worktree_path) " +
+      "VALUES (7,11,'api','develop',?, '/wt/refs/7/api')",
+  ).run("a".repeat(40));
+  const manifested: number[] = [];
+  const roots: number[] = [];
+  s.env.syncTaskManifest = (id) => { manifested.push(id); };
+  s.env.removeReferenceRoot = async (id) => { roots.push(id); };
+
+  assert.deepEqual(await deleteOwnedRepo(s.env, 11), {
+    ok: false,
+    error: "hasLiveTasks",
+    liveCount: 1,
+  });
+  assert.ok(s.db.prepare("SELECT id FROM repos WHERE id=11").get());
+
+  assert.equal((await deleteOwnedRepo(s.env, 11, true)).ok, true);
+  assert.ok(s.db.prepare("SELECT id FROM tasks WHERE id=7").get(), "the primary task survives a forced reference removal");
+  assert.equal(s.db.prepare("SELECT 1 FROM task_references WHERE task_id=7").get(), undefined);
+  assert.deepEqual(manifested, [7]);
+  assert.deepEqual(roots, [7]);
+  assert.ok(s.calls.some((call) => call.cwd === "/mirror/api.git" && call.args.slice(0, 3).join(" ") === "worktree remove --force"));
+});

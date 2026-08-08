@@ -27,6 +27,16 @@ test("agentArgv claude resume is `claude --continue`, ignoring any prompt", () =
 test("agentArgv claude ignores model (claude's model rides the provider env, not -m)", () => {
   assert.deepEqual(agentArgv("claude", { prompt: "go", model: "glm-4.6" }), ["claude", "go"]);
 });
+test("agentArgv claude exposes referenced repositories via --add-dir", () => {
+  assert.deepEqual(agentArgv("claude", { prompt: "go", addDirs: ["/refs/api", "/refs/web"] }), [
+    "claude", "--add-dir", "/refs/api", "/refs/web", "--", "go",
+  ]);
+});
+test("agentArgv claude resume restores referenced repository roots", () => {
+  assert.deepEqual(agentArgv("claude", { resume: true, addDirs: ["/refs/api"] }), [
+    "claude", "--continue", "--add-dir", "/refs/api",
+  ]);
+});
 
 // ---- agentArgv: codex (full-access: -a on-request -s danger-full-access, so tasks can push/gh/network) ----
 test("agentArgv codex with a prompt is full-access + the prompt", () => {

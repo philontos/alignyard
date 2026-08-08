@@ -9,6 +9,7 @@ import {
   ARCHIVED_TASK_LIFECYCLE_CAPABILITY,
   CODE_VIEW_CAPABILITY,
   NODE_CONTROL_CAPABILITY,
+  TASK_REFERENCES_CAPABILITY,
   TRANSCRIPT_CAPABILITY,
   isUnknownTdspCommand,
   type CliDeps,
@@ -43,6 +44,7 @@ test("taskListPayload wraps the local tasks in a versioned envelope", async () =
     ARCHIVED_TASK_LIFECYCLE_CAPABILITY,
     CODE_VIEW_CAPABILITY,
     NODE_CONTROL_CAPABILITY,
+    TASK_REFERENCES_CAPABILITY,
     TRANSCRIPT_CAPABILITY,
   ]);
   assert.equal(payload.tasks.length, 1);
@@ -376,6 +378,7 @@ test("runCli list --json prints the versioned task envelope and exits 0", async 
   assert.ok(parsed.capabilities.includes(ARCHIVED_TASK_LIFECYCLE_CAPABILITY));
   assert.ok(parsed.capabilities.includes(CODE_VIEW_CAPABILITY));
   assert.ok(parsed.capabilities.includes(NODE_CONTROL_CAPABILITY));
+  assert.ok(parsed.capabilities.includes(TASK_REFERENCES_CAPABILITY));
   assert.ok(parsed.capabilities.includes(TRANSCRIPT_CAPABILITY));
   assert.equal(parsed.tasks[0].title, "old");
 });
@@ -643,6 +646,16 @@ test("runCli create round-trips provider_id in the spec (node-local provider)", 
   const code = await runCli(["create", b64], f.deps);
   assert.equal(code, 0);
   assert.equal(f.repoCalls[0].provider_id, 9);
+});
+
+test("runCli create round-trips repository references in the node-local spec", async () => {
+  const f = fakeDeps(seed());
+  const references = [{ repo_id: 8, ref: "develop", alias: "api" }];
+  const spec = { repo_id: 5, base: "main", title: "cross repo", prompt: "go", references };
+  const b64 = Buffer.from(JSON.stringify(spec)).toString("base64");
+  const code = await runCli(["create", b64], f.deps);
+  assert.equal(code, 0);
+  assert.deepEqual(f.repoCalls[0].references, references);
 });
 
 test("runCli provider verbs manage this node's provider catalog", async () => {

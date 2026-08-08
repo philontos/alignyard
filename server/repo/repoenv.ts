@@ -5,11 +5,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { addWorktreeFromBranch, removeWorktree } from "./git.js";
+import { addDetachedWorktreeFromBranch, addWorktreeFromBranch, removeWorktree } from "./git.js";
 import { startSession } from "../session/tmux.js";
 import { hookSettingsJson } from "../session/hooks.js";
 import type { Runner } from "../fleet/runner.js";
 import type { RepoTaskEnv } from "../task/createtask.js";
+import { referenceRootPath } from "../task/references.js";
 import type Database from "better-sqlite3";
 
 type DB = Database.Database;
@@ -67,7 +68,11 @@ export function buildRepoTaskEnv(opts: RepoEnvOpts): RepoTaskEnv {
     ns: opts.ns,
     writeManifest: opts.writeManifest,
     setupWorktree: setupWorktreeOn(opts.runner, opts.ns),
+    setupReference: ({ mirror, worktree, requestedRef }) =>
+      addDetachedWorktreeFromBranch(opts.runner, mirror, worktree, requestedRef),
     startSession: (session, worktree, opening, sopts) => startSession(opts.runner, session, worktree, opening, sopts),
     removeWorktree: (mirror, worktree, workBranch) => removeWorktree(opts.runner, mirror, worktree, workBranch).then(() => {}),
+    removeReference: (mirror, worktree) => removeWorktree(opts.runner, mirror, worktree).then(() => {}),
+    removeReferenceRoot: (taskId) => opts.runner.rmrf(referenceRootPath(opts.runner.dataDir, taskId)),
   };
 }

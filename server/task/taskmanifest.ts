@@ -10,22 +10,29 @@
 import fs from "node:fs";
 import path from "node:path";
 import type Database from "better-sqlite3";
-import type { Task } from "../core/db.js";
+import type { Task, TaskReference } from "../core/db.js";
 import { getOwnedRepo, localHostId } from "../core/ownership.js";
+import { listTaskReferences } from "./references.js";
 
 type DB = Database.Database;
 
 // Bump ONLY for additive, backward-compatible changes (see the cross-version
 // contract): an older node writes vN, a newer reader must still parse it.
-export const TASK_MANIFEST_VERSION = 1;
+export const TASK_MANIFEST_VERSION = 2;
+
+export type TaskReferenceManifest = Omit<TaskReference, "created_at"> & {
+  created_at?: string;
+  repo_name?: string;
+};
 
 export interface TaskManifest {
   schema_version: number;
   task: Task;
+  references?: TaskReferenceManifest[];
 }
 
-export function taskManifest(task: Task): TaskManifest {
-  return { schema_version: TASK_MANIFEST_VERSION, task };
+export function taskManifest(task: Task, references: TaskReferenceManifest[] = []): TaskManifest {
+  return { schema_version: TASK_MANIFEST_VERSION, task, references };
 }
 
 /** <dataDir>/tasks/<id>/task.json — the task's own folder on its machine. */
@@ -34,10 +41,52 @@ export function taskManifestPath(dataDir: string, id: number): string {
 }
 
 /** Write (or overwrite) a task's manifest — the single durable record of it. */
-export function writeTaskManifest(dataDir: string, task: Task): void {
+export function writeTaskManifest(
+  dataDir: string,
+  task: Task,
+  references: TaskReferenceManifest[] = [],
+  primaryName?: string,
+): void {
   const p = taskManifestPath(dataDir, task.id);
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(taskManifest(task), null, 2));
+  fs.writeFileSync(p, JSON.stringify(taskManifest(task, references), null, 2));
+  fs.writeFileSync(path.join(path.dirname(p), "workspace.json"), JSON.stringify({
+    schema_version: 1,
+    task_id: task.id,
+    primary: task.kind === "local"
+      ? { kind: "local", path: task.cwd }
+      : {
+          kind: "repository",
+          repo_id: task.repo_id,
+          repo_name: primaryName ?? null,
+          branch: task.work_branch,
+          base_commit: task.base_commit,
+          path: task.worktree_path,
+          mode: "editable",
+        },
+    references: references.map((reference) => ({
+      alias: reference.alias,
+      repo_id: reference.repo_id,
+      repo_name: reference.repo_name ?? null,
+      requested_ref: reference.requested_ref,
+      resolved_commit: reference.resolved_commit,
+      path: reference.worktree_path,
+      mode: "reference",
+    })),
+  }, null, 2));
+}
+
+/** Re-project the DB's task row + normalized reference rows into the durable
+ * manifest pair. Production mutations use this so a rename/resume never drops
+ * reference metadata from disk. */
+export function writeTaskManifestFromDb(dataDir: string, db: DB, id: number): void {
+  const task = db.prepare("SELECT * FROM tasks WHERE id=?").get(id) as Task | undefined;
+  if (!task) return;
+  const references = listTaskReferences(db, id).map(({ mirror_path: _mirror, ...reference }) => reference);
+  const repo = task.kind === "local"
+    ? undefined
+    : db.prepare("SELECT name FROM repos WHERE id=?").get(task.repo_id) as { name: string } | undefined;
+  writeTaskManifest(dataDir, task, references, repo?.name);
 }
 
 /** Remove a task's manifest folder — call when the task record is deleted. */
@@ -105,6 +154,30 @@ export function adoptTaskManifests(db: DB, manifests: TaskManifest[]): number {
       if (c === "agent" && t[c] == null) return "claude";
       return (t[c] ?? null) as unknown;
     }));
+    const insertReference = db.prepare(
+      "INSERT OR IGNORE INTO task_references " +
+        "(task_id,repo_id,alias,requested_ref,resolved_commit,worktree_path,mode,created_at) " +
+        "VALUES (?,?,?,?,?,?,?,?)",
+    );
+    for (const reference of Array.isArray(m.references) ? m.references : []) {
+      const repoId = Number(reference?.repo_id);
+      if (!Number.isInteger(repoId) || !getOwnedRepo(db, repoId)) continue;
+      const alias = String(reference?.alias ?? "").trim();
+      const requestedRef = String(reference?.requested_ref ?? "").trim();
+      const commit = String(reference?.resolved_commit ?? "").trim();
+      const worktree = String(reference?.worktree_path ?? "").trim();
+      if (!alias || !requestedRef || !commit || !worktree) continue;
+      insertReference.run(
+        t.id,
+        repoId,
+        alias,
+        requestedRef,
+        commit,
+        worktree,
+        "reference",
+        reference.created_at ?? new Date().toISOString(),
+      );
+    }
     have.add(t.id);
     adopted++;
   }
