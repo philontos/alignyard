@@ -21,7 +21,7 @@ import { cleanupTask, deleteTaskRecord, resumeTask } from "./task/lifecycle.js";
 import { asAgentKind } from "./session/agent.js";
 import { removeWorktree } from "./repo/git.js";
 import { buildRepoTaskEnv } from "./repo/repoenv.js";
-import { removeTaskManifest, writeTaskManifest } from "./task/taskmanifest.js";
+import { removeTaskManifest, writeTaskManifestFromDb } from "./task/taskmanifest.js";
 import { checkProvider, insertCheckedProvider, providersForList, providerEnv } from "./provider/providers.js";
 import { inspectOwnedCode } from "./codeview/codeview.js";
 import { clearProviderFromOwnedTasks, getOwnedRepo, getOwnedTask } from "./core/ownership.js";
@@ -29,6 +29,7 @@ import { branchesForOwnedRepo, deleteOwnedRepo, fetchOwnedRepo, registerOwnedRep
 import { syncReposManifest } from "./repo/manifest.js";
 import { pasteImageIntoOwnedTask } from "./task/paste-service.js";
 import { renameTask } from "./task/tasks.js";
+import { referenceRootPath, referenceWorktreePaths } from "./task/references.js";
 import {
   configureTailscalePeerRelay,
   diagnoseTailscale,
@@ -95,6 +96,8 @@ const ownedRepoEnv: OwnedRepoEnv = {
   syncRepos: syncReposManifest,
   removeTaskManifest: (id) => removeTaskManifest(DATA_DIR, id),
   killSession: (session) => killSession(localRunner, session),
+  syncTaskManifest: (id) => writeTaskManifestFromDb(DATA_DIR, db, id),
+  removeReferenceRoot: (id) => localRunner.rmrf(referenceRootPath(DATA_DIR, id)),
 };
 
 const serveLifecycle = new ServeLifecycle({
@@ -202,7 +205,7 @@ process.exitCode = await runCli(process.argv.slice(2), {
         db,
         ns: NS,
         runner: localRunner,
-        writeManifest: (id) => writeTaskManifest(DATA_DIR, db.prepare("SELECT * FROM tasks WHERE id=?").get(id) as Task),
+        writeManifest: (id) => writeTaskManifestFromDb(DATA_DIR, db, id),
       }),
       { id: repo.id, name: repo.name, mirror_path: repo.mirror_path },
       {
@@ -213,6 +216,7 @@ process.exitCode = await runCli(process.argv.slice(2), {
         env: providerEnv(provider),
         agent: asAgentKind(spec.agent),
         model: spec.model ?? null,
+        references: spec.references,
       },
     );
   },
@@ -226,7 +230,7 @@ process.exitCode = await runCli(process.argv.slice(2), {
     const result = renameTask(db, id, title);
     if (!("error" in result)) {
       const task = db.prepare("SELECT * FROM tasks WHERE id=?").get(id) as Task;
-      writeTaskManifest(DATA_DIR, task);
+      writeTaskManifestFromDb(DATA_DIR, db, task.id);
     }
     return result;
   },
@@ -257,7 +261,7 @@ process.exitCode = await runCli(process.argv.slice(2), {
       {
         db,
         killSession: (session) => killSession(localRunner, session),
-        writeManifest: (tid) => writeTaskManifest(DATA_DIR, db.prepare("SELECT * FROM tasks WHERE id=?").get(tid) as Task),
+        writeManifest: (tid) => writeTaskManifestFromDb(DATA_DIR, db, tid),
       },
       id,
     ),
@@ -278,9 +282,10 @@ process.exitCode = await runCli(process.argv.slice(2), {
             env: providerEnv(provider),
             agent: asAgentKind(task.agent),
             model: task.agent_model,
+            addDirs: referenceWorktreePaths(db, task.id),
           });
         },
-        writeManifest: (tid) => writeTaskManifest(DATA_DIR, db.prepare("SELECT * FROM tasks WHERE id=?").get(tid) as Task),
+        writeManifest: (tid) => writeTaskManifestFromDb(DATA_DIR, db, tid),
       },
       id,
     ),
@@ -290,7 +295,8 @@ process.exitCode = await runCli(process.argv.slice(2), {
         db,
         killSession: (session) => killSession(localRunner, session),
         removeWorktree: (mirror, worktree, workBranch) => removeWorktree(localRunner, mirror, worktree, workBranch),
-        writeManifest: (tid) => writeTaskManifest(DATA_DIR, db.prepare("SELECT * FROM tasks WHERE id=?").get(tid) as Task),
+        removeReferenceRoot: (tid) => localRunner.rmrf(referenceRootPath(DATA_DIR, tid)),
+        writeManifest: (tid) => writeTaskManifestFromDb(DATA_DIR, db, tid),
       },
       id,
     ),

@@ -26,6 +26,7 @@ import type {
   ServeStopResult,
 } from "../core/serve-lifecycle.js";
 import type { ProfileUninstallResult } from "../fleet/profile-uninstall.js";
+import type { TaskReferenceInput } from "./references.js";
 import {
   TRANSCRIPT_CAPABILITY,
   isTranscriptReadRequest,
@@ -51,6 +52,7 @@ export interface CreateRepoSpec {
   // Target-node local provider id. The controller never interprets this for a
   // remote node; it only relays the id selected from that node's provider list.
   provider_id?: number | null;
+  references?: TaskReferenceInput[];
 }
 
 export interface ProviderInput {
@@ -75,10 +77,12 @@ type DB = Database.Database;
 export const TASK_LIST_VERSION = 3;
 export const ARCHIVED_TASK_LIFECYCLE_CAPABILITY = "archived-task-lifecycle-v1";
 export const NODE_CONTROL_CAPABILITY = "node-control-v1";
+export const TASK_REFERENCES_CAPABILITY = "task-references-v1";
 export const TASK_CAPABILITIES = [
   ARCHIVED_TASK_LIFECYCLE_CAPABILITY,
   CODE_VIEW_CAPABILITY,
   NODE_CONTROL_CAPABILITY,
+  TASK_REFERENCES_CAPABILITY,
   TRANSCRIPT_CAPABILITY,
 ] as const;
 

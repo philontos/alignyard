@@ -120,6 +120,24 @@ export async function addWorktreeFromBranch(
   await addWorktree(runner, mirror, dest, workBranch, startPoint);
 }
 
+/** Create a reference-only checkout for another repository. The selected branch
+ * is refreshed into the mirror, resolved once to an immutable commit, and then
+ * checked out detached so it never claims or advances a branch. */
+export async function addDetachedWorktreeFromBranch(
+  runner: Runner, mirror: string, dest: string, baseBranch: string,
+): Promise<string> {
+  // A reference selected from the repository catalog means the remote branch's
+  // current tip. Unlike a primary task base (which may intentionally be an
+  // unpushed local work branch), do not silently fall back to stale/local state.
+  await fetchBranch(runner, mirror, baseBranch);
+  const startPoint = `origin/${baseBranch}`;
+  const commit = (await git(runner, mirror, ["rev-parse", "--verify", `${startPoint}^{commit}`])).trim();
+  if (!commit) throw new Error(`could not resolve reference branch ${baseBranch}`);
+  await runner.mkdirp(path.dirname(dest));
+  await git(runner, mirror, ["worktree", "add", "--detach", dest, commit]);
+  return commit;
+}
+
 export async function removeWorktree(runner: Runner, mirror: string, dest: string, workBranch?: string) {
   await git(runner, mirror, ["worktree", "remove", "--force", dest]).catch(async () => {
     // fall back to manual cleanup if worktree metadata is gone

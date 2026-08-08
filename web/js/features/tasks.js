@@ -30,12 +30,195 @@ let modalProviderAvailable = true;
 // when set, the dispatch modal is in "node mode": dispatch to a remote node's OWN
 // repo (surfaced via the fleet) instead of a controller-registered repo.
 let nodeTask = null;   // { hostId, repo } or null
+const TASK_REFERENCES_CAPABILITY = "task-references-v1";
+let taskReferences = [], referenceSeq = 0;
 // key of the task whose title is being edited inline. While set, renderList()
 // (the single place that rebuilds #m-list) bails, so NONE of the re-render paths
 // — loadTasks (4s), loadHosts (5s), loadRepos, a language switch — can blow the
 // open input away mid-edit. finish() re-renders once, on commit/cancel.
 let editingTaskKey = null;
 export function isEditingTask() { return editingTaskKey != null; }
+
+function referenceAlias(value, repoId) {
+  const slug = String(value || "").toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[._-]+|[._-]+$/g, "")
+    .slice(0, 32);
+  return slug || `repo-${repoId}`;
+}
+
+function uniqueReferenceAlias(value, repoId, key = null) {
+  const seed = referenceAlias(value, repoId);
+  const used = new Set(taskReferences
+    .filter(reference => reference.key !== key)
+    .map(reference => referenceAlias(reference.alias, reference.repoId)));
+  if (!used.has(seed)) return seed;
+  for (let n = 2; n < 1000; n++) {
+    const suffix = `-${n}`;
+    const candidate = seed.slice(0, 32 - suffix.length) + suffix;
+    if (!used.has(candidate)) return candidate;
+  }
+  return `${seed.slice(0, 28)}-ref`;
+}
+
+function referenceCatalog() {
+  const primaryId = Number(nodeTask?.repo?.id ?? taskRepoId);
+  const repos = nodeTask
+    ? (state.fleet[nodeTask.hostId]?.repos || [])
+    : state.repos;
+  return repos.filter(repo => Number(repo.id) !== primaryId && (!repo.status || repo.status === "ready"));
+}
+
+function referencesSupported() {
+  if (!nodeTask) return true;
+  return (state.fleet[nodeTask.hostId]?.capabilities || []).includes(TASK_REFERENCES_CAPABILITY);
+}
+
+function abortReferenceRequests() {
+  taskReferences.forEach(reference => reference.controller?.abort());
+}
+
+function resetTaskReferences() {
+  abortReferenceRequests();
+  taskReferences = [];
+  renderTaskReferences();
+}
+
+function option(value, label, selected = false) {
+  const el = document.createElement("option");
+  el.value = String(value);
+  el.textContent = String(label);
+  el.selected = selected;
+  return el;
+}
+
+function renderTaskReferences() {
+  const sec = $("t-ref-sec"), list = $("t-ref-list"), add = $("t-ref-add"), hint = $("t-ref-hint");
+  if (!sec || !list || !add || !hint) return;
+  const supported = referencesSupported();
+  const repos = referenceCatalog();
+  sec.classList.toggle("has-refs", taskReferences.length > 0);
+  add.disabled = !supported || !repos.length || taskReferences.length >= 8;
+  hint.textContent = !supported
+    ? t("task.referencesUnsupported")
+    : repos.length ? t("task.referencesHint") : t("task.noReferenceRepos");
+  list.replaceChildren();
+
+  for (const reference of taskReferences) {
+    const row = document.createElement("div");
+    row.className = "tm-ref-row";
+
+    const repoSelect = document.createElement("select");
+    repoSelect.setAttribute("aria-label", t("task.referenceRepo"));
+    for (const repo of repos) repoSelect.append(option(repo.id, repo.name, Number(repo.id) === reference.repoId));
+    repoSelect.addEventListener("change", () => {
+      reference.repoId = Number(repoSelect.value);
+      const repo = repos.find(candidate => Number(candidate.id) === reference.repoId);
+      reference.alias = uniqueReferenceAlias(repo?.name, reference.repoId, reference.key);
+      reference.branch = repo?.default_branch || "main";
+      reference.branches = [];
+      void loadReferenceBranches(reference);
+      renderTaskReferences();
+    });
+
+    const branchSelect = document.createElement("select");
+    branchSelect.setAttribute("aria-label", t("task.referenceBranch"));
+    if (reference.loading) {
+      branchSelect.append(option("", t("task.referenceLoading"), true));
+      branchSelect.disabled = true;
+    } else {
+      const branches = reference.branches.length ? reference.branches : [reference.branch].filter(Boolean);
+      for (const branch of branches) branchSelect.append(option(branch, branch, branch === reference.branch));
+      branchSelect.addEventListener("change", () => { reference.branch = branchSelect.value; });
+    }
+
+    const alias = document.createElement("input");
+    alias.className = "tm-ref-alias";
+    alias.value = reference.alias;
+    alias.placeholder = t("task.referenceAlias");
+    alias.setAttribute("aria-label", t("task.referenceAlias"));
+    alias.addEventListener("input", () => {
+      reference.alias = alias.value;
+    });
+    alias.addEventListener("blur", () => {
+      reference.alias = uniqueReferenceAlias(alias.value, reference.repoId, reference.key);
+      alias.value = reference.alias;
+    });
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "tm-ref-remove";
+    remove.textContent = "×";
+    remove.title = t("task.referenceRemove");
+    remove.setAttribute("aria-label", t("task.referenceRemove"));
+    remove.addEventListener("click", () => {
+      reference.controller?.abort();
+      taskReferences = taskReferences.filter(candidate => candidate.key !== reference.key);
+      renderTaskReferences();
+    });
+
+    row.append(repoSelect, branchSelect, alias, remove);
+    list.append(row);
+  }
+}
+
+async function loadReferenceBranches(reference) {
+  reference.controller?.abort();
+  const controller = reference.controller = new AbortController();
+  reference.loading = true;
+  renderTaskReferences();
+  const repo = referenceCatalog().find(candidate => Number(candidate.id) === reference.repoId);
+  try {
+    const url = nodeTask
+      ? `/api/nodes/${nodeTask.hostId}/repos/${reference.repoId}/branches`
+      : `/api/repos/${reference.repoId}/branches`;
+    const branches = await api(url, { signal: controller.signal });
+    reference.branches = branches;
+    reference.branch = branches.includes(reference.branch)
+      ? reference.branch
+      : (branches.includes(repo?.default_branch) ? repo.default_branch : branches[0] || repo?.default_branch || "");
+  } catch (error) {
+    if (error.name === "AbortError") return;
+    reference.branches = [repo?.default_branch || reference.branch || "main"];
+    reference.branch = reference.branches[0];
+  } finally {
+    if (reference.controller === controller) {
+      reference.loading = false;
+      renderTaskReferences();
+    }
+  }
+}
+
+export function addTaskReference() {
+  if (!referencesSupported() || taskReferences.length >= 8) return;
+  const repos = referenceCatalog();
+  const used = new Set(taskReferences.map(reference => reference.repoId));
+  const repo = repos.find(candidate => !used.has(Number(candidate.id))) || repos[0];
+  if (!repo) return;
+  const reference = {
+    key: ++referenceSeq,
+    repoId: Number(repo.id),
+    branch: repo.default_branch || "main",
+    branches: [],
+    alias: uniqueReferenceAlias(repo.name, repo.id),
+    loading: false,
+    controller: null,
+  };
+  taskReferences.push(reference);
+  renderTaskReferences();
+  void loadReferenceBranches(reference);
+}
+
+export function repaintTaskReferences() { renderTaskReferences(); }
+
+function referencePayload() {
+  if (taskReferences.some(reference => reference.loading || !reference.branch || !String(reference.alias).trim())) return null;
+  return taskReferences.map(reference => ({
+    repo_id: reference.repoId,
+    ref: reference.branch,
+    alias: reference.alias,
+  }));
+}
 
 // reflect the current selection onto the cards already in the DOM (no refetch).
 // Three kinds of card, matched by which key they carry:
@@ -117,6 +300,7 @@ export function openTaskModal(repoId) {
   if (!repo) return toast(t("toast.repoNotReady"), "error");
   nodeTask = null;
   taskRepoId = repoId;
+  resetTaskReferences();
   $("tm-repo").textContent = repo.name;
   $("t-title").value = ""; $("t-prompt").value = "";   // fresh form each open
   $("prov-panel").style.display = "none";              // collapse the manage panel
@@ -143,6 +327,8 @@ export function closeTaskModal() {
   if (modal.contains(document.activeElement)) document.activeElement.blur();
   modal.style.display = "none";
   branchReq?.abort();
+  abortReferenceRequests();
+  taskReferences = [];
   nodeTask = null;
 }
 // Cancel paths (取消 button / backdrop / Esc) additionally consume the sheet's
@@ -159,6 +345,7 @@ export function openNodeTaskModal(hostId, repoId) {
   if (!repo) return toast(t("toast.repoNotReady"), "error");
   nodeTask = { hostId, repo };
   taskRepoId = null;
+  resetTaskReferences();
   const hostName = state.hostsById[hostId]?.name || hostId;
   $("tm-repo").textContent = `${repo.name} @ ${hostName}`;
   $("t-title").value = ""; $("t-prompt").value = "";
@@ -260,6 +447,8 @@ async function loadBranches() {
 // over ssh can be slow), then settle into the node's live terminal.
 async function addNodeTask() {
   const { hostId, repo } = nodeTask;
+  const references = referencePayload();
+  if (references == null) return toast(t("toast.taskFieldsRequired"), "error");
   const external = selectedAgent !== "claude";
   const providerShown = $("t-provider-sec").style.display !== "none";
   const body = {
@@ -269,6 +458,7 @@ async function addNodeTask() {
     provider_id: providerShown ? selectedProviderId() : null,
     agent: selectedAgent,
     model: external ? ($("t-codex-model").value.trim() || null) : null,
+    references,
   };
   if (!body.base || !body.title) return toast(t("toast.taskFieldsRequired"), "error");
   // Same optimistic feedback as a local dispatch (addTask): a dock loading window +
@@ -296,6 +486,8 @@ async function addNodeTask() {
 
 export async function addTask() {
   if (nodeTask) return addNodeTask();
+  const references = referencePayload();
+  if (references == null) return toast(t("toast.taskFieldsRequired"), "error");
   // provider_id belongs to the target node's own provider catalog. A hidden picker
   // sends null, which means the target node's default Claude login.
   const providerShown = $("t-provider-sec").style.display !== "none";
@@ -306,6 +498,7 @@ export async function addTask() {
     provider_id: providerShown ? selectedProviderId() : null,   // null == default claude login
     agent: selectedAgent,
     agent_model: external ? ($("t-codex-model").value.trim() || null) : null,
+    references,
   };
   if (!body.repo_id || !body.base_branch || !body.title) return toast(t("toast.taskFieldsRequired"), "error");
   // Spin up BOTH placeholders before clearing the form (so the title can label them):

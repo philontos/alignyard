@@ -490,6 +490,19 @@ button.danger:hover { background: #f8514914; border-color: #f85149aa; }
   background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; font-family: inherit; }
 .agent-opt:hover { border-color: var(--border-hover); }
 .agent-opt.selected { border-color: var(--accent); color: var(--accent-text); background: #d977571f; }
+/* task-scoped additional repository references */
+#task-modal .modal { width: 560px; max-height: min(860px, 92dvh); overflow-y: auto; }
+.tm-ref-sec { margin: 1px 0 9px; padding: 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); }
+.tm-ref-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.tm-ref-head .tm-lbl { flex: 1; margin: 0; }
+.tm-ref-add { flex: none; width: auto; min-height: 0; margin: 0; padding: 3px 8px; font-size: 11px; background: transparent; color: var(--accent-text); }
+.tm-ref-list { display: flex; flex-direction: column; gap: 6px; }
+.tm-ref-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(82px, .7fr) 28px; gap: 6px; align-items: center; }
+.tm-ref-row select, .tm-ref-row input { min-width: 0; height: 32px; margin: 0; padding: 4px 7px; font-size: 11.5px; }
+.tm-ref-remove { width: 28px; height: 28px; min-height: 0; margin: 0; padding: 0; border: 1px solid transparent; background: transparent; color: var(--faint); }
+.tm-ref-remove:hover { color: var(--red-text); border-color: color-mix(in srgb, var(--red) 28%, var(--border)); background: #f8514910; }
+.tm-ref-sec .hint { margin-top: 5px; }
+.tm-ref-sec.has-refs .hint { display: none; }
 /* dispatch modal: model-backend picker + inline add/remove panel */
 .tm-prov { display: flex; gap: 8px; align-items: center; margin-bottom: 7px; }
 .tm-prov .cs { flex: 1; margin-bottom: 0; }
@@ -1159,6 +1172,11 @@ a { color: var(--accent-bar); }
   .tm-lbl { font-size: 12px; margin-bottom: 6px; }
   .agent-seg { gap: 8px; margin-bottom: 12px; }
   .agent-opt { min-height: 44px; padding: 9px 10px; border-radius: 10px; font-size: 15px; }
+  .tm-ref-sec { padding: 10px; border-radius: 10px; }
+  .tm-ref-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 38px; gap: 8px; }
+  .tm-ref-row select, .tm-ref-row input { height: 42px; font-size: 16px; }
+  .tm-ref-alias { grid-column: 1 / 3; }
+  .tm-ref-remove { grid-column: 3; grid-row: 1 / 3; width: 38px; height: 38px; }
   .tm-prov { gap: 9px; margin-bottom: 10px; }
   .prov-add-btn { width: 46px; height: 46px; padding: 0; font-size: 20px; }
   .prov-panel { border-radius: 10px; padding: 12px; margin-bottom: 10px; }

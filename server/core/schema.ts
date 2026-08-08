@@ -39,6 +39,21 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Additional repository snapshots attached to one task. Each row owns a
+-- detached worktree under worktrees/refs/<task-id>/<alias>; the referenced
+-- repository's bare mirror remains the shared Git object store.
+CREATE TABLE IF NOT EXISTS task_references (
+  task_id INTEGER NOT NULL,
+  repo_id INTEGER NOT NULL,
+  alias TEXT NOT NULL,
+  requested_ref TEXT NOT NULL,
+  resolved_commit TEXT NOT NULL,
+  worktree_path TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'reference',
+  created_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (task_id, alias)
+);
+
 -- registered machines reachable over ssh/mosh. Business operations are sent to
 -- the target's Switchyard command surface; paths/tasks/repos stay in its own DB.
 CREATE TABLE IF NOT EXISTS hosts (
@@ -138,6 +153,7 @@ function reconcileColumns(db: DB) {
   addColumn(db, "tasks", "agent", "TEXT DEFAULT 'claude'");
   addColumn(db, "tasks", "agent_model", "TEXT");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS hosts_node_id_unique ON hosts(node_id) WHERE node_id IS NOT NULL");
+  db.exec("CREATE INDEX IF NOT EXISTS task_references_repo_id ON task_references(repo_id)");
 }
 
 /**
@@ -149,6 +165,8 @@ export function runPathMigration(db: DB, legacyDir: string, dataDir: string) {
   db.prepare("UPDATE repos SET mirror_path = replace(mirror_path, ?, ?) WHERE mirror_path LIKE ? || '%'")
     .run(legacyDir, dataDir, legacyDir);
   db.prepare("UPDATE tasks SET worktree_path = replace(worktree_path, ?, ?) WHERE worktree_path LIKE ? || '%'")
+    .run(legacyDir, dataDir, legacyDir);
+  db.prepare("UPDATE task_references SET worktree_path = replace(worktree_path, ?, ?) WHERE worktree_path LIKE ? || '%'")
     .run(legacyDir, dataDir, legacyDir);
 }
 

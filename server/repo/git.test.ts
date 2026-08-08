@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fetchBranch, fetchMirror, addWorktreeFromBranch } from "./git.ts";
+import { fetchBranch, fetchMirror, addDetachedWorktreeFromBranch, addWorktreeFromBranch } from "./git.ts";
 import { localRunner } from "../fleet/runner.ts";
 import type { Runner } from "../fleet/runner.ts";
 
@@ -129,6 +129,33 @@ test("falls back to the local head when the base branch is not on origin (unpush
 
     assert.ok(fs.existsSync(wtNew), "new worktree was created from the local head");
     assert.equal(await headOf(wtNew), "feat/100-x");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reference worktrees are detached and remain pinned to the resolved commit", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sw-git-ref-"));
+  try {
+    const { seed, mirror } = await scaffold(root);
+    const expected = (await git(seed, "rev-parse", "feat/base")).trim();
+    const wtReference = path.join(root, "refs", "api");
+
+    const resolved = await addDetachedWorktreeFromBranch(localRunner, mirror, wtReference, "feat/base");
+    assert.equal(resolved, expected);
+    assert.equal(await headOf(wtReference), "HEAD", "a reference does not claim a branch");
+    assert.equal((await git(wtReference, "rev-parse", "HEAD")).trim(), expected);
+    assert.equal(fs.readFileSync(path.join(wtReference, "b.txt"), "utf8"), "b");
+
+    fs.writeFileSync(path.join(seed, "c.txt"), "new remote tip");
+    await git(seed, "add", ".");
+    await git(seed, "commit", "-m", "advance");
+    await git(seed, "push", "origin", "feat/base");
+    assert.equal(
+      (await git(wtReference, "rev-parse", "HEAD")).trim(),
+      expected,
+      "the task keeps the exact snapshot it was dispatched with",
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

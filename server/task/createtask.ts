@@ -4,12 +4,16 @@
 // shell-starter and cwd-check are injected (real localRunner in prod, fakes in
 // tests). The durable record is the manifest, written here as the single writer.
 import path from "node:path";
-import { writeTaskManifest } from "./taskmanifest.js";
+import { writeTaskManifestFromDb } from "./taskmanifest.js";
 import { resolveCwd } from "../fleet/local.js";
 import type { AgentKind } from "../session/agent.js";
 import type Database from "better-sqlite3";
-import type { Task } from "../core/db.js";
 import { getOwnedTask } from "../core/ownership.js";
+import {
+  referencePrompt,
+  resolveReferenceInputs,
+  type TaskReferenceInput,
+} from "./references.js";
 
 type DB = Database.Database;
 
@@ -64,7 +68,7 @@ export async function createLocalTask(env: LocalTaskEnv, opts: CreateLocalOpts):
   const title = provided || `Local task #${id}`;
   const session = `tdsp-${env.ns}-${id}-local-${slug(title)}`;
 
-  const manifest = () => writeTaskManifest(env.dataDir, env.db.prepare("SELECT * FROM tasks WHERE id=?").get(id) as Task);
+  const manifest = () => writeTaskManifestFromDb(env.dataDir, env.db, id);
   try {
     await env.startShell(session, cwd);
   } catch (e: any) {
@@ -127,6 +131,12 @@ export interface RepoTaskEnv {
     baseBranch: string;
     agent: AgentKind;
   }): Promise<string>; // exact HEAD immediately after worktree creation
+  // Create a detached, commit-pinned checkout for one referenced repository.
+  setupReference(args: {
+    mirror: string;
+    worktree: string;
+    requestedRef: string;
+  }): Promise<string>;
   // Launch the agent in the worktree (opening = freeform prompt or null).
   // opts.env injects ANTHROPIC_* vars for claude's alternate model backend;
   // opts.agent picks the CLI (claude default | codex | kimi); opts.model is the
@@ -135,10 +145,12 @@ export interface RepoTaskEnv {
     session: string,
     worktree: string,
     opening: string | null,
-    opts?: { env?: Record<string, string>; agent?: AgentKind; model?: string | null },
+    opts?: { env?: Record<string, string>; agent?: AgentKind; model?: string | null; addDirs?: string[] },
   ): Promise<void>;
   // Tear down a partially-built worktree after a failed dispatch.
   removeWorktree(mirror: string, worktree: string, workBranch: string): Promise<void>;
+  removeReference(mirror: string, worktree: string): Promise<void>;
+  removeReferenceRoot(taskId: number): Promise<void>;
 }
 
 export interface CreateRepoOpts {
@@ -155,10 +167,12 @@ export interface CreateRepoOpts {
   // optional non-Claude -m model. Recorded so resume rebuilds the same launch.
   agent?: AgentKind;
   model?: string | null;
+  references?: TaskReferenceInput[];
 }
 
 export type CreateRepoResult =
   | { ok: true; id: number; session: string; workBranch: string }
+  | { ok: false; error: "invalidReference"; message: string }
   | { ok: false; error: "dispatchFailed"; id: number; message: string };
 
 /**
@@ -170,6 +184,13 @@ export type CreateRepoResult =
  */
 export async function createRepoTask(env: RepoTaskEnv, repo: RepoRef, opts: CreateRepoOpts): Promise<CreateRepoResult> {
   const agent = opts.agent ?? "claude";
+  const resolvedReferences = resolveReferenceInputs(env.db, opts.references);
+  if (!resolvedReferences.ok) {
+    return { ok: false, error: "invalidReference", message: resolvedReferences.error };
+  }
+  if (resolvedReferences.references.some((reference) => reference.repo.id === repo.id)) {
+    return { ok: false, error: "invalidReference", message: "the primary repository cannot also be a task reference" };
+  }
   const info = env.db
     .prepare(
       "INSERT INTO tasks (repo_id, base_branch, work_branch, title, prompt, worktree_path, session, status, provider_id, agent, agent_model) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -179,14 +200,75 @@ export async function createRepoTask(env: RepoTaskEnv, repo: RepoRef, opts: Crea
   const s = slug(opts.title);
   const workBranch = `feat/${id}-${s}`;
   const worktree = path.resolve(path.join(path.dirname(repo.mirror_path), "..", "worktrees", `${repo.id}-${id}`));
+  const referenceRoot = path.resolve(path.join(path.dirname(repo.mirror_path), "..", "worktrees", "refs", String(id)));
   const session = `tdsp-${env.ns}-${id}-${slug(repo.name)}-${s}`;
+  const materialized: Array<{
+    task_id: number;
+    repo_id: number;
+    alias: string;
+    repo_name: string;
+    mirror_path: string;
+    requested_ref: string;
+    resolved_commit: string;
+    worktree_path: string;
+    mode: "reference";
+  }> = [];
+  const referenceCleanup: Array<{ mirror: string; worktree: string }> = [];
 
   try {
     const baseCommit = await env.setupWorktree({ id, mirror: repo.mirror_path, worktree, workBranch, baseBranch: opts.baseBranch, agent });
-    // Preserve the prompt verbatim; trim only decides whether there is an
-    // opening message at all.
-    const opening = opts.prompt || "";
-    await env.startSession(session, worktree, opening.trim() ? opening : null, { env: opts.env, agent, model: opts.model });
+    for (const reference of resolvedReferences.references) {
+      const referenceWorktree = path.join(referenceRoot, reference.alias);
+      referenceCleanup.push({ mirror: reference.repo.mirror_path, worktree: referenceWorktree });
+      const commit = await env.setupReference({
+        mirror: reference.repo.mirror_path,
+        worktree: referenceWorktree,
+        requestedRef: reference.requested_ref,
+      });
+      materialized.push({
+        task_id: id,
+        repo_id: reference.repo.id,
+        alias: reference.alias,
+        repo_name: reference.repo.name,
+        mirror_path: reference.repo.mirror_path,
+        requested_ref: reference.requested_ref,
+        resolved_commit: commit,
+        worktree_path: referenceWorktree,
+        mode: "reference",
+      });
+    }
+    if (materialized.length) {
+      const insert = env.db.prepare(
+        "INSERT INTO task_references " +
+          "(task_id,repo_id,alias,requested_ref,resolved_commit,worktree_path,mode) VALUES (?,?,?,?,?,?,?)",
+      );
+      env.db.transaction(() => {
+        for (const reference of materialized) {
+          insert.run(
+            reference.task_id,
+            reference.repo_id,
+            reference.alias,
+            reference.requested_ref,
+            reference.resolved_commit,
+            reference.worktree_path,
+            reference.mode,
+          );
+        }
+      })();
+    }
+    // Preserve the user's prompt verbatim in the task row. The launch-only
+    // opening prepends a compact alias/path contract when references exist.
+    const opening = referencePrompt(
+      { name: repo.name, path: worktree },
+      materialized,
+      opts.prompt,
+    );
+    await env.startSession(session, worktree, opening, {
+      env: opts.env,
+      agent,
+      model: opts.model,
+      addDirs: materialized.map((reference) => reference.worktree_path),
+    });
     env.db.prepare("UPDATE tasks SET base_commit=?, work_branch=?, worktree_path=?, session=?, status='running' WHERE id=?")
       .run(baseCommit, workBranch, worktree, session, id);
     await env.writeManifest(id);
@@ -194,6 +276,11 @@ export async function createRepoTask(env: RepoTaskEnv, repo: RepoRef, opts: Crea
   } catch (e: any) {
     // a partial dispatch (e.g. session start failed after the worktree was made)
     // would orphan the worktree — remove it so nothing is left behind
+    for (const reference of [...referenceCleanup].reverse()) {
+      await env.removeReference(reference.mirror, reference.worktree).catch(() => {});
+    }
+    if (referenceCleanup.length) await env.removeReferenceRoot(id).catch(() => {});
+    env.db.prepare("DELETE FROM task_references WHERE task_id=?").run(id);
     await env.removeWorktree(repo.mirror_path, worktree, workBranch).catch(() => {});
     env.db.prepare("UPDATE tasks SET status='error', error=? WHERE id=?").run(String(e?.message || e), id);
     await env.writeManifest(id);

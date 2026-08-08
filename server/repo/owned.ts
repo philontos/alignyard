@@ -4,6 +4,7 @@ import type { Runner } from "../fleet/runner.js";
 import { getOwnedRepo, localHostId } from "../core/ownership.js";
 import { findRepoByGitUrl } from "./catalog.js";
 import { fetchMirror, initMirror, listBranches, mirrorPath, removeWorktree } from "./git.js";
+import { listTaskReferences, removeTaskReferenceRows } from "../task/references.js";
 
 type DB = Database.Database;
 
@@ -26,6 +27,8 @@ export interface OwnedRepoEnv {
   syncRepos(): void;
   removeTaskManifest(id: number): void;
   killSession(session: string): Promise<void>;
+  syncTaskManifest?(id: number): void;
+  removeReferenceRoot?(taskId: number): Promise<void>;
 }
 
 function messageOf(error: unknown): string {
@@ -115,18 +118,48 @@ export async function deleteOwnedRepo(env: OwnedRepoEnv, id: number, force = fal
   const repo = getOwnedRepo(env.db, id);
   if (!repo) return { ok: false, error: "notFound" };
   const tasks = env.db.prepare("SELECT * FROM tasks WHERE repo_id=?").all(repo.id) as Task[];
-  const live = tasks.filter((task) => task.status !== "cleaned");
-  if (live.length && !force) return { ok: false, error: "hasLiveTasks", liveCount: live.length };
+  const referencedTasks = env.db.prepare(
+    "SELECT DISTINCT t.* FROM tasks t JOIN task_references tr ON tr.task_id=t.id WHERE tr.repo_id=?",
+  ).all(repo.id) as Task[];
+  const liveIds = new Set([
+    ...tasks.filter((task) => task.status !== "cleaned").map((task) => task.id),
+    ...referencedTasks.filter((task) => task.status !== "cleaned").map((task) => task.id),
+  ]);
+  if (liveIds.size && !force) return { ok: false, error: "hasLiveTasks", liveCount: liveIds.size };
 
   try {
+    const primaryTaskIds = new Set(tasks.map((task) => task.id));
+    // Tasks rooted in another repository survive this deletion; detach only the
+    // reference that points at the repository being removed.
+    for (const task of referencedTasks.filter((candidate) => !primaryTaskIds.has(candidate.id))) {
+      const references = listTaskReferences(env.db, task.id).filter((reference) => reference.repo_id === repo.id);
+      for (const reference of references) {
+        if (repo.mirror_path && reference.worktree_path) {
+          await removeWorktree(env.runner, repo.mirror_path, reference.worktree_path);
+        }
+        env.db.prepare("DELETE FROM task_references WHERE task_id=? AND alias=?").run(task.id, reference.alias);
+      }
+      const remaining = env.db.prepare("SELECT 1 FROM task_references WHERE task_id=? LIMIT 1").get(task.id);
+      if (!remaining) await env.removeReferenceRoot?.(task.id);
+      env.syncTaskManifest?.(task.id);
+    }
     for (const task of tasks) {
       if (task.session) await env.killSession(task.session).catch(() => {});
+      for (const reference of listTaskReferences(env.db, task.id)) {
+        const referenceRepo = getOwnedRepo(env.db, reference.repo_id);
+        if (referenceRepo?.mirror_path && reference.worktree_path) {
+          await removeWorktree(env.runner, referenceRepo.mirror_path, reference.worktree_path);
+        }
+      }
+      await env.removeReferenceRoot?.(task.id);
+      removeTaskReferenceRows(env.db, task.id);
       if (task.worktree_path && repo.mirror_path && (await env.runner.exists(task.worktree_path).catch(() => false))) {
         await removeWorktree(env.runner, repo.mirror_path, task.worktree_path, task.work_branch);
       }
       env.removeTaskManifest(task.id);
     }
     env.db.prepare("DELETE FROM tasks WHERE repo_id=?").run(repo.id);
+    env.db.prepare("DELETE FROM task_references WHERE repo_id=?").run(repo.id);
     if (repo.mirror_path) await env.runner.rmrf(repo.mirror_path).catch(() => {});
     env.db.prepare("DELETE FROM repos WHERE id=?").run(repo.id);
     env.syncRepos();

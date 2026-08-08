@@ -19,14 +19,17 @@ export interface LaunchOpts {
   model?: string | null;
   /** resume the prior conversation in this cwd instead of starting fresh */
   resume?: boolean;
-  /** codex/kimi: extra writable roots (`--add-dir`), e.g. a linked worktree's gitdir.
-   *  Redundant under `-s danger-full-access` (the sandbox is off) but harmless;
-   *  kept so the plumbing survives if the sandbox is ever tightened again. */
+  /** Additional workspace roots translated to each agent CLI's `--add-dir`.
+   *  For codex/kimi this also carries linked-worktree Git metadata directories. */
   addDirs?: string[];
 }
 
 const hasText = (s?: string | null): s is string => !!s && !!s.trim();
 const addDirArgs = (dirs?: string[]) => (dirs ?? []).flatMap((d) => hasText(d) ? ["--add-dir", d.trim()] : []);
+const claudeAddDirArgs = (dirs?: string[]) => {
+  const clean = (dirs ?? []).filter(hasText).map((dir) => dir.trim());
+  return clean.length ? ["--add-dir", ...clean] : [];
+};
 
 /**
  * Build the agent's launch argv — the binary plus its args, WITHOUT the tmux
@@ -59,7 +62,11 @@ export function agentArgv(agent: AgentKind, opts: LaunchOpts = {}): string[] {
     if (hasText(opts.model)) argv.push("-m", opts.model.trim());
     return argv;
   }
-  // claude
-  if (opts.resume) return ["claude", "--continue"];
-  return hasText(opts.prompt) ? ["claude", opts.prompt] : ["claude"];
+  // Claude's --add-dir is variadic (one flag followed by every directory),
+  // unlike Codex/Kimi's repeatable single-dir option. `--` terminates that
+  // variadic value before the positional opening prompt.
+  const dirs = claudeAddDirArgs(opts.addDirs);
+  if (opts.resume) return ["claude", "--continue", ...dirs];
+  if (!hasText(opts.prompt)) return ["claude", ...dirs];
+  return dirs.length ? ["claude", ...dirs, "--", opts.prompt] : ["claude", opts.prompt];
 }
