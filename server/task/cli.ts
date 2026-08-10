@@ -3,7 +3,7 @@
 // both the HTTP server (tdsp serve) and the one-shot CLI verbs. A node is the
 // sole authority for its own tasks; these read/return that local truth.
 import type Database from "better-sqlite3";
-import type { Repo, Task } from "../core/db.js";
+import type { Repo, Task, TaskReference } from "../core/db.js";
 import type { ProviderSummary } from "../provider/providers.js";
 import type { CreateLocalOpts, CreateLocalResult, CreateRepoResult, StopResult } from "./createtask.js";
 import type { LifecycleResult } from "./lifecycle.js";
@@ -26,7 +26,8 @@ import type {
   ServeStopResult,
 } from "../core/serve-lifecycle.js";
 import type { ProfileUninstallResult } from "../fleet/profile-uninstall.js";
-import type { TaskReferenceInput } from "./references.js";
+import { publicTaskReferences, type TaskReferenceInput } from "./references.js";
+import type { AddTaskReferenceResult } from "./addreference.js";
 import {
   TRANSCRIPT_CAPABILITY,
   isTranscriptReadRequest,
@@ -78,11 +79,13 @@ export const TASK_LIST_VERSION = 3;
 export const ARCHIVED_TASK_LIFECYCLE_CAPABILITY = "archived-task-lifecycle-v1";
 export const NODE_CONTROL_CAPABILITY = "node-control-v1";
 export const TASK_REFERENCES_CAPABILITY = "task-references-v1";
+export const TASK_RUNTIME_REFERENCES_CAPABILITY = "task-runtime-references-v1";
 export const TASK_CAPABILITIES = [
   ARCHIVED_TASK_LIFECYCLE_CAPABILITY,
   CODE_VIEW_CAPABILITY,
   NODE_CONTROL_CAPABILITY,
   TASK_REFERENCES_CAPABILITY,
+  TASK_RUNTIME_REFERENCES_CAPABILITY,
   TRANSCRIPT_CAPABILITY,
 ] as const;
 
@@ -136,7 +139,13 @@ export interface NodeTask {
   alive?: boolean;
   hasWorktree?: boolean;
   waiting?: boolean;
+  references: NodeTaskReference[];
 }
+
+export type NodeTaskReference = Pick<
+  TaskReference,
+  "repo_id" | "alias" | "requested_ref" | "resolved_commit" | "mode" | "created_at"
+>;
 
 export interface TaskListPayload {
   schema_version: number;
@@ -155,7 +164,28 @@ export function reposForList(db: DB): NodeRepo[] {
  * on the owner; a controller receives only what it needs to draw the card,
  * address the tmux session and send a node-local command.
  */
-function taskForList(task: Task, live?: Partial<TaskLive>): NodeTask {
+function referencesForList(rows: unknown): NodeTaskReference[] {
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((row): NodeTaskReference[] => {
+    if (!row || typeof row !== "object") return [];
+    const value = row as Record<string, unknown>;
+    const repoId = Number(value.repo_id);
+    const alias = String(value.alias ?? "");
+    const requestedRef = String(value.requested_ref ?? "");
+    const resolvedCommit = String(value.resolved_commit ?? "");
+    if (!Number.isInteger(repoId) || repoId <= 0 || !alias || !requestedRef || !resolvedCommit) return [];
+    return [{
+      repo_id: repoId,
+      alias,
+      requested_ref: requestedRef,
+      resolved_commit: resolvedCommit,
+      mode: String(value.mode || "reference"),
+      created_at: String(value.created_at || ""),
+    }];
+  });
+}
+
+function taskForList(task: Task, live?: Partial<TaskLive>, references?: unknown): NodeTask {
   const hasLive = !!live && ("alive" in live || "hasWorktree" in live || "waiting" in live);
   return {
     id: task.id,
@@ -168,6 +198,7 @@ function taskForList(task: Task, live?: Partial<TaskLive>): NodeTask {
     kind: task.kind,
     cwd: task.cwd,
     agent: task.agent,
+    references: referencesForList(references),
     ...(hasLive ? {
       alive: live?.alive ?? false,
       hasWorktree: live?.hasWorktree ?? false,
@@ -187,7 +218,11 @@ export async function taskListPayload(db: DB, liveness: TaskLiveness): Promise<T
   const live = await liveness(tasks);
   const enriched: NodeTask[] = tasks.map((t) => {
     const l = live.get(t.id);
-    return taskForList(t, l ?? { alive: false, hasWorktree: false, waiting: false });
+    return taskForList(
+      t,
+      l ?? { alive: false, hasWorktree: false, waiting: false },
+      publicTaskReferences(db, t.id),
+    );
   });
   return {
     schema_version: TASK_LIST_VERSION,
@@ -260,7 +295,7 @@ export async function aggregateNodes<T extends NodeRef>(
         // Older list payloads exposed the full task row. Re-project at the
         // controller boundary so those owner-private fields never reach its UI.
         tasks: (Array.isArray(payload.tasks) ? payload.tasks : [])
-          .map((task) => taskForList(task as unknown as Task, task)),
+          .map((task) => taskForList(task as unknown as Task, task, (task as NodeTask).references)),
         // v1/v2 nodes exposed git_url + mirror_path. Strip those again at the
         // controller boundary before the aggregate reaches the browser.
         repos: (Array.isArray(payload.repos) ? payload.repos : [])
@@ -289,6 +324,7 @@ export interface CliDeps {
   liveness: TaskLiveness;
   createLocal: (opts: CreateLocalOpts) => Promise<CreateLocalResult>;
   createRepo: (spec: CreateRepoSpec) => Promise<CreateRepoResult | { ok: false; error: "repoNotFound" | "repoNotReady"; message?: string }>;
+  addReference: (taskId: number, input: TaskReferenceInput) => Promise<AddTaskReferenceResult>;
   repoCreate: (input: OwnedRepoInput) => Promise<OwnedRepoResult>;
   repoFetch: (id: number) => Promise<OwnedRepoResult>;
   repoBranches: (id: number) => Promise<{ ok: true; branches: string[] } | OwnedRepoFailure>;
@@ -722,6 +758,20 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       deps.out(JSON.stringify(r));
       return r.ok ? 0 : 1;
     }
+    case "add-reference": {
+      const taskId = Number(argv[1]);
+      let input: TaskReferenceInput;
+      try {
+        input = JSON.parse(Buffer.from(argv[2] ?? "", "base64").toString("utf8")) as TaskReferenceInput;
+        if (!Number.isInteger(taskId) || !input || !Number.isInteger(Number(input.repo_id))) throw new Error("missing fields");
+      } catch {
+        deps.out(JSON.stringify({ ok: false, error: "invalidReference", message: "Invalid reference request" }));
+        return 1;
+      }
+      const result = await deps.addReference(taskId, input);
+      deps.out(JSON.stringify(result));
+      return result.ok ? 0 : 1;
+    }
     case "repo-create": {
       let input: OwnedRepoInput;
       try {
@@ -931,7 +981,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
       return 0;
     }
     default:
-      deps.err(`Usage: tdsp <serve [status|stop|restart]|network|list|inspect-code|transcript|create-local|create|repo-create|repo-fetch|repo-branches|repo-delete|rename|stop|resume|cleanup|delete-task|paste-image|providers-list|providers-test|providers-create|providers-delete|doctor|install|uninstall|update>\n${cmd ? `unknown command: ${cmd}` : "no command given"}`);
+      deps.err(`Usage: tdsp <serve [status|stop|restart]|network|list|inspect-code|transcript|create-local|create|add-reference|repo-create|repo-fetch|repo-branches|repo-delete|rename|stop|resume|cleanup|delete-task|paste-image|providers-list|providers-test|providers-create|providers-delete|doctor|install|uninstall|update>\n${cmd ? `unknown command: ${cmd}` : "no command given"}`);
       return 1;
   }
 }

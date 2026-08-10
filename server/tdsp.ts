@@ -15,8 +15,9 @@ import { ServeLifecycle, serveOptionsToArgs } from "./core/serve-lifecycle.js";
 import { applyInstall, applyProfileInstall } from "./fleet/bootstrap.js";
 import { uninstallProfile } from "./fleet/profile-uninstall.js";
 import { localRunner } from "./fleet/runner.js";
-import { startSession, startShellSession, hasSession, killSession, listSessions } from "./session/tmux.js";
+import { startSession, startShellSession, hasSession, killSession, listSessions, loadSessionDirectory } from "./session/tmux.js";
 import { createLocalTask, createRepoTask, stopTask } from "./task/createtask.js";
+import { addTaskReference } from "./task/addreference.js";
 import { cleanupTask, deleteTaskRecord, resumeTask } from "./task/lifecycle.js";
 import { asAgentKind } from "./session/agent.js";
 import { removeWorktree } from "./repo/git.js";
@@ -219,6 +220,33 @@ process.exitCode = await runCli(process.argv.slice(2), {
         references: spec.references,
       },
     );
+  },
+  addReference: async (taskId, input) => {
+    const repoEnv = buildRepoTaskEnv({
+      db,
+      ns: NS,
+      runner: localRunner,
+      writeManifest: (id) => writeTaskManifestFromDb(DATA_DIR, db, id),
+    });
+    return addTaskReference({
+      db,
+      dataDir: DATA_DIR,
+      exists: (target) => localRunner.exists(target),
+      setupReference: repoEnv.setupReference,
+      removeReference: repoEnv.removeReference,
+      writeManifest: (id) => writeTaskManifestFromDb(DATA_DIR, db, id),
+      loadReference: async (task, newReferencePath, allReferencePaths) => {
+        const provider = task.provider_id
+          ? (db.prepare("SELECT * FROM providers WHERE id=?").get(task.provider_id) as Provider | undefined)
+          : undefined;
+        return loadSessionDirectory(localRunner, task.session, task.worktree_path, newReferencePath, {
+          env: providerEnv(provider),
+          agent: asAgentKind(task.agent),
+          model: task.agent_model,
+          addDirs: allReferencePaths,
+        });
+      },
+    }, taskId, input);
   },
   repoCreate: (input) => registerOwnedRepo(ownedRepoEnv, input),
   repoFetch: (id) => fetchOwnedRepo(ownedRepoEnv, id),

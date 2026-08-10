@@ -9,7 +9,7 @@ import { $ } from "./core/dom.js";
 import { toast } from "./core/feedback.js";
 import { closeDialog } from "./core/dialog.js";
 import { Selects, csMount } from "./core/select.js";
-import { initTerm, showTermEmpty, applyTermTheme, setViewHooks, setCodeViewOpener } from "./features/terminal.js";
+import { initTerm, showTermEmpty, applyTermTheme, setViewHooks, setCodeViewOpener, setReferenceOpener } from "./features/terminal.js";
 import { initMobile, isOn as isMobile, autoFollowing, enterTerminal, enterList, mobileBack, setMode, reflectKeysWaiting } from "./features/mobile.js";
 import { initReading, reflectWaiting } from "./features/reading.js";
 import { state } from "./core/state.js";
@@ -17,6 +17,13 @@ import { loadRepos, openRepoModal, closeRepoModal, addRepo, delRepo, openRepoDet
 import { loadHosts, selectHost, openHostModal, closeHostModal, addHost, delHost, toggleRepo, toggleArchived, toggleHostMenu, initHostMenuDismiss, loadFleet, bootstrapHost, connectNode, stopNodeTask, removeNodeWt, resumeNodeTask, deleteNodeTask, delNodeRepo, updateHost, updateSelf, openDiscoveryModal, closeDiscoveryModal, openManualHostModal, discoverNodes, connectDiscoveredAt } from "./features/hosts.js";
 import { loadTasks, addTask, archive, removeWt, deleteTask, resume, connect, openTaskModal, closeTaskModal, cancelTaskModal, addLocalTask, renameTask, focusPending, openNodeTaskModal, selectAgent, addNodeShell, allTasks, addTaskReference, repaintTaskReferences } from "./features/tasks.js";
 import { initCodeView, openRepoCode, openTaskCode, closeCodeView, repaintCodeView, isCodeViewOpen } from "./features/codeview.js";
+import {
+  initRuntimeReferences,
+  openRuntimeReference,
+  closeRuntimeReference,
+  repaintRuntimeReference,
+  runtimeReferenceIsOpen,
+} from "./features/runtime-references.js";
 import { initReorder } from "./features/reorder.js";
 import { refreshProviders, repaintProviders, onProviderChange, toggleProviderPanel, onPanelInput, testProvider, addProvider, delProvider } from "./features/providers.js";
 import { canReadTarget } from "./core/reading-target.js";
@@ -94,6 +101,7 @@ I18N.onChange = () => {
   if (pv) { pv.ph = t("provider.default"); }
   repaintProviders();   // re-localize the "Anthropic 默认" option + manage list
   repaintTaskReferences();
+  repaintRuntimeReference();
   repaintCodeView();
   repaintRepoDetails();
   repaintOnboarding();
@@ -112,6 +120,8 @@ renderThemeToggle();
 
 function dismissBoot() { const b = $("boot"); if (b) b.classList.add("done"); }
 setCodeViewOpener(openTaskCode);
+setReferenceOpener(openRuntimeReference);
+initRuntimeReferences({ refreshLocal: loadTasks, refreshFleet: loadFleet });
 try { initTerm(); } catch (e) { console.error("terminal init failed:", e); }
 // mobile master-detail: a pane/placeholder taking the dock flips to the terminal
 // view (unless it's a machine-switch auto-follow); the dock emptying flips back to
@@ -160,6 +170,7 @@ document.addEventListener("keydown", e => {
   if (e.key !== "Escape") return;
   if (document.querySelector(".cs.open")) { Object.values(Selects).forEach(s => s.close()); return; }
   if (isCodeViewOpen()) { closeCodeView(); return; }
+  if (runtimeReferenceIsOpen()) { closeRuntimeReference(); return; }
   if ($("dialog").style.display === "flex") closeDialog(null);
   else { closeRepoDetails(); closeRepoModal(); cancelTaskModal(); closeHostModal(); closeOnboardingModal(); closeDiscoveryModal(); }
 });

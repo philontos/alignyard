@@ -10,6 +10,7 @@ import {
   CODE_VIEW_CAPABILITY,
   NODE_CONTROL_CAPABILITY,
   TASK_REFERENCES_CAPABILITY,
+  TASK_RUNTIME_REFERENCES_CAPABILITY,
   TRANSCRIPT_CAPABILITY,
   isUnknownTdspCommand,
   type CliDeps,
@@ -45,6 +46,7 @@ test("taskListPayload wraps the local tasks in a versioned envelope", async () =
     CODE_VIEW_CAPABILITY,
     NODE_CONTROL_CAPABILITY,
     TASK_REFERENCES_CAPABILITY,
+    TASK_RUNTIME_REFERENCES_CAPABILITY,
     TRANSCRIPT_CAPABILITY,
   ]);
   assert.equal(payload.tasks.length, 1);
@@ -86,6 +88,9 @@ test("taskListPayload defaults missing liveness to not-alive", async () => {
 test("taskListPayload also includes the node's repos", async () => {
   const db = seed();
   db.prepare("INSERT INTO repos (id,host_id,name,git_url,default_branch,mirror_path,status) VALUES (5,1,'ug-fe','git@x:ug','main','/d/mirrors/5-ug.git','ready')").run();
+  db.prepare(
+    "INSERT INTO task_references (task_id,repo_id,alias,requested_ref,resolved_commit,worktree_path) VALUES (1,5,'web','main',?,?)",
+  ).run("a".repeat(40), "/private/node/worktrees/refs/1/web");
   const payload = await taskListPayload(db, noLive);
   assert.ok(Array.isArray(payload.repos));
   assert.equal(payload.repos.length, 2);
@@ -94,6 +99,9 @@ test("taskListPayload also includes the node's repos", async () => {
   assert.equal("mirror_path" in repo, false, "node responses never expose filesystem paths");
   assert.equal("git_url" in repo, false, "node responses expose no unused repository coordinates");
   assert.equal(repo.default_branch, "main");
+  assert.equal(payload.tasks[0].references[0].alias, "web");
+  assert.equal(payload.tasks[0].references[0].repo_id, 5);
+  assert.equal("worktree_path" in payload.tasks[0].references[0], false, "reference paths stay on the owner node");
 });
 
 // Newest-first, matching today's GET /api/tasks (ORDER BY id DESC) so the list
@@ -131,6 +139,7 @@ function fakeDeps(db: Database.Database) {
   };
   const createCalls: { cwd?: string | null; title?: string | null }[] = [];
   const repoCalls: any[] = [];
+  const referenceCalls: any[] = [];
   const stopCalls: number[] = [];
   const renameCalls: Array<[number, unknown]> = [];
   const lifecycleCalls: Array<[string, number]> = [];
@@ -169,6 +178,24 @@ function fakeDeps(db: Database.Database) {
       createRepo: async (spec: any) => {
         repoCalls.push(spec);
         return { ok: true as const, id: 77, session: "tdsp-x-77-sw-t", workBranch: "feat/77-t" };
+      },
+      addReference: async (taskId: number, input: any) => {
+        referenceCalls.push([taskId, input]);
+        return {
+          ok: true as const,
+          reference: {
+            task_id: taskId,
+            repo_id: Number(input.repo_id),
+            repo_name: "frontend",
+            alias: String(input.alias || "api"),
+            requested_ref: String(input.ref || "main"),
+            resolved_commit: "a".repeat(40),
+            mode: "reference",
+            created_at: "now",
+          },
+          load: "in-place" as const,
+          existing: false,
+        };
       },
       repoCreate: async (input: any) => {
         repoCalls.push(["create", input]);
@@ -337,6 +364,7 @@ function fakeDeps(db: Database.Database) {
     deps,
     createCalls,
     repoCalls,
+    referenceCalls,
     stopCalls,
     renameCalls,
     lifecycleCalls,
@@ -379,6 +407,7 @@ test("runCli list --json prints the versioned task envelope and exits 0", async 
   assert.ok(parsed.capabilities.includes(CODE_VIEW_CAPABILITY));
   assert.ok(parsed.capabilities.includes(NODE_CONTROL_CAPABILITY));
   assert.ok(parsed.capabilities.includes(TASK_REFERENCES_CAPABILITY));
+  assert.ok(parsed.capabilities.includes(TASK_RUNTIME_REFERENCES_CAPABILITY));
   assert.ok(parsed.capabilities.includes(TRANSCRIPT_CAPABILITY));
   assert.equal(parsed.tasks[0].title, "old");
 });
@@ -656,6 +685,22 @@ test("runCli create round-trips repository references in the node-local spec", a
   const code = await runCli(["create", b64], f.deps);
   assert.equal(code, 0);
   assert.deepEqual(f.repoCalls[0].references, references);
+});
+
+test("runCli add-reference decodes one runtime reference and invokes its owner-local service", async () => {
+  const f = fakeDeps(seed());
+  const input = { repo_id: 8, ref: "develop", alias: "api" };
+  const code = await runCli(["add-reference", "42", Buffer.from(JSON.stringify(input)).toString("base64")], f.deps);
+  assert.equal(code, 0);
+  assert.deepEqual(f.referenceCalls, [[42, input]]);
+  assert.equal(JSON.parse(f.out).load, "in-place");
+});
+
+test("runCli add-reference rejects malformed requests without invoking the service", async () => {
+  const f = fakeDeps(seed());
+  assert.equal(await runCli(["add-reference", "nope", "not-json"], f.deps), 1);
+  assert.deepEqual(f.referenceCalls, []);
+  assert.equal(JSON.parse(f.out).error, "invalidReference");
 });
 
 test("runCli provider verbs manage this node's provider catalog", async () => {

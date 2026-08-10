@@ -39,6 +39,15 @@ test("resolveReferenceInputs normalizes and de-duplicates aliases", () => {
   assert.deepEqual(result.references.map((reference) => reference.alias), ["api-docs", "api-docs-2"]);
 });
 
+test("resolveReferenceInputs avoids aliases already attached to a running task", () => {
+  const result = resolveReferenceInputs(seed(), [
+    { repo_id: 1, ref: "develop", alias: "API docs" },
+  ], ["api-docs", "api-docs-2"]);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.references[0].alias, "api-docs-3");
+});
+
 test("resolveReferenceInputs rejects remote-owned repositories and unsafe branch refspecs", () => {
   assert.deepEqual(resolveReferenceInputs(seed(), [{ repo_id: 2, ref: "main" }]), {
     ok: false,

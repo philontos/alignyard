@@ -59,9 +59,9 @@ test("agentArgv codex adds writable git dirs via --add-dir", () => {
     "--add-dir", "/mirror/worktrees/1", "--add-dir", "/mirror", "go",
   ]);
 });
-test("agentArgv codex resume keeps the same sandbox policy, ignoring prompt and model", () => {
+test("agentArgv codex resume keeps the same sandbox policy and model while ignoring the old prompt", () => {
   assert.deepEqual(agentArgv("codex", { prompt: "opening", model: "gpt-5.4", resume: true }), [
-    "codex", "-a", "on-request", "-s", "danger-full-access", "resume", "--last",
+    "codex", "-a", "on-request", "-s", "danger-full-access", "-m", "gpt-5.4", "resume", "--last",
   ]);
 });
 
@@ -79,8 +79,8 @@ test("agentArgv kimi adds extra dirs via --add-dir", () => {
     "kimi", "--auto", "--add-dir", "/mirror/worktrees/1", "--add-dir", "/mirror",
   ]);
 });
-test("agentArgv kimi resume uses --continue and ignores prompt/model", () => {
+test("agentArgv kimi resume uses --continue, keeps the model and ignores the old prompt", () => {
   assert.deepEqual(agentArgv("kimi", { prompt: "opening", model: "x", resume: true }), [
-    "kimi", "--auto", "--continue",
+    "kimi", "--auto", "-m", "x", "--continue",
   ]);
 });
