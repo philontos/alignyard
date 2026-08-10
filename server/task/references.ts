@@ -66,12 +66,16 @@ function isBranchName(value: string): boolean {
 
 /** Resolve client-supplied repo ids against this node's own catalog. Paths and
  * mirror coordinates are never accepted from the client. */
-export function resolveReferenceInputs(db: DB, raw: unknown): ResolveReferencesResult {
+export function resolveReferenceInputs(
+  db: DB,
+  raw: unknown,
+  aliasesInUse: Iterable<string> = [],
+): ResolveReferencesResult {
   if (raw == null) return { ok: true, references: [] };
   if (!Array.isArray(raw)) return { ok: false, error: "references must be an array" };
   if (raw.length > 8) return { ok: false, error: "a task can reference at most 8 repositories" };
 
-  const used = new Set<string>();
+  const used = new Set([...aliasesInUse].map((alias) => aliasSlug(String(alias), 0)));
   const references: ResolvedReferenceInput[] = [];
   for (const value of raw) {
     if (!value || typeof value !== "object") return { ok: false, error: "invalid repository reference" };

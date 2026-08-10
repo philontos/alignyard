@@ -7,6 +7,7 @@ const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
 const tasks = readFileSync(new URL("./tasks.js", import.meta.url), "utf8");
 const hosts = readFileSync(new URL("./hosts.js", import.meta.url), "utf8");
 const terminal = readFileSync(new URL("./terminal.js", import.meta.url), "utf8");
+const runtimeReferences = readFileSync(new URL("./runtime-references.js", import.meta.url), "utf8");
 const main = readFileSync(new URL("../main.js", import.meta.url), "utf8");
 
 test("task code action lives at the right edge of the tmux bar, not on cards", () => {
@@ -67,4 +68,19 @@ test("dispatch supports task-scoped repository references on local and capable r
   assert.match(tasks, /\/api\/nodes\/\$\{nodeTask\.hostId\}\/repos\/\$\{reference\.repoId\}\/branches/);
   assert.match(css, /\.tm-ref-row\s*\{[^}]*grid-template-columns:/s);
   assert.match(css, /@media \(max-width: 760px\)[\s\S]*?\.tm-ref-alias\s*\{[^}]*grid-column:\s*1 \/ 3;/s);
+});
+
+test("the terminal bar can attach a repository Ref to the current local or remote agent session", () => {
+  const bar = html.match(/<div class="termbar">([\s\S]*?)<\/div>\s*<!-- mobile-only/)?.[1] || "";
+  assert.match(bar, /id="term-ref"/);
+  assert.match(html, /id="runtime-ref-modal"[\s\S]*?id="rr-repo"[\s\S]*?id="rr-branch"[\s\S]*?id="rr-alias"/);
+  assert.match(terminal, /applyReferenceTarget\(p\.referenceTarget\)/);
+  assert.match(terminal, /openReference\(target\)/);
+  assert.match(tasks, /references: t\.references \|\| \[\]/);
+  assert.match(hosts, /task-runtime-references-v1/);
+  assert.match(hosts, /references: tk\.references \|\| \[\]/);
+  assert.match(runtimeReferences, /\/api\/tasks\/\$\{activeTarget\.id\}\/references/);
+  assert.match(runtimeReferences, /\/api\/nodes\/\$\{activeTarget\.nodeId\}\/tasks\/\$\{activeTarget\.id\}\/references/);
+  assert.match(main, /setReferenceOpener\(openRuntimeReference\)/);
+  assert.match(css, /\.term-code, \.term-ref\s*\{/);
 });

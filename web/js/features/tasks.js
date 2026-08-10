@@ -263,8 +263,16 @@ export function connect(id) {
   if (hid != null) state.lastTaskByHost[hid] = id;
   paintSelection();
   const codeTarget = t.kind !== "local" && t.hasWorktree ? { id: t.id, nodeId: null } : null;
+  const referenceTarget = t.kind !== "local" && t.hasWorktree ? {
+    id: t.id,
+    nodeId: null,
+    repoId: t.repo_id,
+    title: t.title,
+    agent: normalizeAgent(t.agent),
+    references: t.references || [],
+  } : null;
   openPty(`session=${encodeURIComponent(t.session)}`,
-    `#${t.id} ${t.title}`, "tmux attach -t " + t.session, t.id, t.claude_session || "", t.agent, codeTarget);
+    `#${t.id} ${t.title}`, "tmux attach -t " + t.session, t.id, t.claude_session || "", t.agent, codeTarget, referenceTarget);
 }
 
 // The agent picker (Claude Code | Codex | Kimi Code). Persists the last pick so the next
