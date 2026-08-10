@@ -11,7 +11,7 @@ import QRCode from "qrcode";
 import { db, Repo, Task, Host, Provider } from "../core/db.js";
 import { renameTask } from "../task/tasks.js";
 import { removeWorktree } from "../repo/git.js";
-import { startSession, startShellSession, hasSession, killSession, listSessions } from "../session/tmux.js";
+import { startSession, startShellSession, hasSession, killSession, listSessions, loadSessionDirectory } from "../session/tmux.js";
 import { asAgentKind } from "../session/agent.js";
 import {
   isTranscriptReadRequest,
@@ -31,6 +31,7 @@ import {
 import { fleetTargets, type FleetTarget } from "../fleet/fleet.js";
 import { bootstrapMachine, validProfileName } from "../fleet/bootstrap.js";
 import { createLocalTask, createRepoTask, type RepoTaskEnv } from "../task/createtask.js";
+import { addTaskReference, type AddTaskReferenceResult } from "../task/addreference.js";
 import {
   listTaskReferences,
   publicTaskReferences,
@@ -174,6 +175,18 @@ function sendPasteFailure(req: Request, res: Response, result: any) {
   if (result?.error === "notFound") return res.status(404).json({ error: tr(lang, "notFound") });
   if (result?.error === "noTarget") return res.status(409).json({ error: tr(lang, "paste.noTarget") });
   return res.status(500).json({ error: result?.message || result?.error || "image paste failed" });
+}
+
+function sendReferenceFailure(req: Request, res: Response, result: Exclude<AddTaskReferenceResult, { ok: true }>) {
+  const lang = langFromReq(req);
+  if (result.error === "notFound") return res.status(404).json({ error: tr(lang, "notFound") });
+  if (result.error === "notRepoTask" || result.error === "invalidReference") {
+    return res.status(400).json({ error: result.message });
+  }
+  if (result.error === "notReady" || result.error === "limit") {
+    return res.status(409).json({ error: result.message });
+  }
+  return res.status(500).json({ error: result.message });
 }
 
 export function registerRoutes(app: Express) {
@@ -530,6 +543,27 @@ function repoTaskEnvFor(): RepoTaskEnv {
   return buildRepoTaskEnv({ db, ns: NS, runner: localRunner, writeManifest: (tid) => syncTaskManifest(tid) });
 }
 
+async function addReferenceOnThisNode(taskId: number, input: any) {
+  const repoEnv = repoTaskEnvFor();
+  return addTaskReference({
+    db,
+    dataDir: DATA_DIR,
+    exists: (target) => localRunner.exists(target),
+    setupReference: repoEnv.setupReference,
+    removeReference: repoEnv.removeReference,
+    writeManifest: (id) => syncTaskManifest(id),
+    loadReference: async (task, newReferencePath, allReferencePaths) => {
+      const provider = task.provider_id ? (getProvider.get(task.provider_id) as Provider | undefined) : undefined;
+      return loadSessionDirectory(localRunner, task.session, task.worktree_path, newReferencePath, {
+        env: providerEnv(provider),
+        agent: asAgentKind(task.agent),
+        model: task.agent_model,
+        addDirs: allReferencePaths,
+      });
+    },
+  }, taskId, input);
+}
+
 app.post("/api/tasks", async (req, res) => {
   const { repo_id, base_branch, title, prompt, provider_id, agent, agent_model, references } = req.body ?? {};
   const lang = langFromReq(req);
@@ -566,6 +600,17 @@ app.post("/api/tasks", async (req, res) => {
   if (r.ok) return res.json({ id: r.id, session: r.session, work_branch: r.workBranch });
   if (r.error === "invalidReference") return res.status(400).json({ error: r.message });
   return res.status(500).json({ error: r.message });
+});
+
+// Add a pinned repository checkout to an already-running task. The durable
+// reference is created first; the agent adapter then exposes it in the existing
+// conversation (Claude in-place, Codex/Kimi by pane respawn + native resume).
+app.post("/api/tasks/:id/references", async (req, res) => {
+  const taskId = Number(req.params.id);
+  if (!Number.isInteger(taskId)) return res.status(400).json({ error: "invalid task id" });
+  const result = await addReferenceOnThisNode(taskId, req.body ?? {});
+  if (!result.ok) return sendReferenceFailure(req, res, result);
+  res.json(result);
 });
 
 // repo-less shell task: skip the mirror/worktree machinery and just open a
@@ -970,6 +1015,19 @@ app.post("/api/nodes/:hostId/tasks", async (req, res) => {
   if (result.error === "repoNotReady") return res.status(409).json({ error: tr(lang, "repo.status", { status: result.message || "unknown" }) });
   if (result.error === "invalidReference") return res.status(400).json({ error: result.message });
   return res.status(500).json({ error: result.message || result.error });
+});
+
+// Same runtime attachment on a remote owner. The controller sends ids + branch
+// only; the node resolves its own catalog, mirror, worktree, agent and session.
+app.post("/api/nodes/:hostId/tasks/:taskId/references", async (req, res) => {
+  const host = remoteHost(req, res);
+  if (!host) return;
+  const taskId = Number(req.params.taskId);
+  if (!Number.isInteger(taskId)) return res.status(400).json({ error: "invalid task id" });
+  const { out, result } = await runNodeJson(host, ["add-reference", String(taskId), b64Json(req.body ?? {})]);
+  if (!result) return sendMissingNodeCommand(req, res, "add-reference", out);
+  if (!result.ok) return sendReferenceFailure(req, res, result);
+  res.json(result);
 });
 
 app.post("/api/nodes/:hostId/tasks/local", async (req, res) => {

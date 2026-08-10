@@ -40,6 +40,7 @@
       <button id="term-attach" class="attach-btn" type="button" data-i18n="term.attach" data-i18n-title="term.attachCopy"></button>
       <code id="term-claude" class="term-claude" style="display:none"></code>
       <span style="flex:1"></span>
+      <button id="term-ref" class="term-ref" type="button" data-i18n-title="runtimeRef.open" aria-label="Add reference" hidden><span class="term-ref-plus" aria-hidden="true">＋</span><span class="term-ref-label" data-i18n="runtimeRef.short"></span></button>
       <button id="term-code" class="term-code" type="button" data-i18n-title="code.open" aria-label="Browse code" hidden><span class="code-ico" aria-hidden="true"></span></button>
     </div>
     <!-- mobile-only "needs you" bridge: shown while reading a task that's blocked on a
@@ -169,6 +170,27 @@
     <div class="dlg-actions">
       <button class="sec" data-i18n="dialog.cancel" onclick="cancelTaskModal()"></button>
       <button class="primary" data-i18n="task.submit" onclick="addTask()"></button>
+    </div>
+  </div>
+</div>
+
+<!-- Runtime Ref: attach one more repository snapshot to the task whose terminal
+     is currently open. The same form targets local and remote owner nodes. -->
+<div id="runtime-ref-modal" class="modal-bg" style="display:none" role="dialog" aria-modal="true" aria-labelledby="rr-title">
+  <div class="modal runtime-ref-modal">
+    <h2 id="rr-title" data-i18n="runtimeRef.title"></h2>
+    <div id="rr-task" class="runtime-ref-task"></div>
+    <label class="tm-lbl" for="rr-repo" data-i18n="runtimeRef.repo"></label>
+    <select id="rr-repo"></select>
+    <label class="tm-lbl" for="rr-branch" data-i18n="runtimeRef.branch"></label>
+    <select id="rr-branch"></select>
+    <label class="tm-lbl" for="rr-alias" data-i18n="runtimeRef.alias"></label>
+    <input id="rr-alias" autocomplete="off" spellcheck="false" />
+    <div id="rr-agent-hint" class="runtime-ref-hint"></div>
+    <div id="rr-status" class="runtime-ref-status" aria-live="polite"></div>
+    <div class="dlg-actions">
+      <button id="rr-cancel" class="sec" type="button" data-i18n="dialog.cancel"></button>
+      <button id="rr-submit" class="primary" type="button" data-i18n="runtimeRef.submit"></button>
     </div>
   </div>
 </div>

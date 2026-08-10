@@ -49,17 +49,17 @@ const claudeAddDirArgs = (dirs?: string[]) => {
 export function agentArgv(agent: AgentKind, opts: LaunchOpts = {}): string[] {
   if (agent === "codex") {
     const base = ["codex", "-a", "on-request", "-s", "danger-full-access", ...addDirArgs(opts.addDirs)];
+    if (hasText(opts.model)) base.push("-m", opts.model.trim());
     if (opts.resume) return [...base, "resume", "--last"];
     const argv = [...base];
-    if (hasText(opts.model)) argv.push("-m", opts.model.trim());
     if (hasText(opts.prompt)) argv.push(opts.prompt);
     return argv;
   }
   if (agent === "kimi") {
     const base = ["kimi", "--auto", ...addDirArgs(opts.addDirs)];
+    if (hasText(opts.model)) base.push("-m", opts.model.trim());
     if (opts.resume) return [...base, "--continue"];
     const argv = [...base];
-    if (hasText(opts.model)) argv.push("-m", opts.model.trim());
     return argv;
   }
   // Claude's --add-dir is variadic (one flag followed by every directory),

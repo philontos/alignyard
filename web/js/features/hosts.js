@@ -131,7 +131,18 @@ export function connectNode(hostId, taskId) {
   const codeTarget = tk.kind !== "local" && tk.hasWorktree && state.fleet[hostId]?.capabilities?.includes("code-view-v1")
     ? { id: tk.id, nodeId: hostId }
     : null;
-  openPty(`session=${encodeURIComponent(tk.session)}&host=${hostId}`, `#${tk.id} ${tk.title}`, attach, paneId, "", tk.agent, codeTarget);
+  const referenceTarget = tk.kind !== "local" && tk.hasWorktree
+    && state.fleet[hostId]?.capabilities?.includes("task-runtime-references-v1")
+    ? {
+        id: tk.id,
+        nodeId: hostId,
+        repoId: tk.repo_id,
+        title: tk.title,
+        agent: tk.agent,
+        references: tk.references || [],
+      }
+    : null;
+  openPty(`session=${encodeURIComponent(tk.session)}&host=${hostId}`, `#${tk.id} ${tk.title}`, attach, paneId, "", tk.agent, codeTarget, referenceTarget);
   renderList();
 }
 
