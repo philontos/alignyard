@@ -12,10 +12,12 @@ import { toast } from "../core/feedback.js";
 import { createCodexUserMarkerOverlay } from "./codex-terminal-markers.js";
 import { activateCodexUnicode } from "./terminal-unicode.js";
 
-// taskId -> { id, pane, term, fit, ws, query, agent, title, attach, codeTarget, resizeKey }
+// taskId -> { id, pane, term, fit, ws, query, agent, title, attach,
+//             codeTarget, referenceTarget, resizeKey }
 const panes = new Map();
 let activeId = null;   // the task whose pane is currently visible (null = none)
 let openCodeView = null;
+let openReference = null;
 
 // Mobile master-detail hooks (injected by main.js so terminal.js never imports
 // mobile.js — that would be a cycle, since mobile.js imports from here). onShow
@@ -25,6 +27,7 @@ let openCodeView = null;
 let onShow = null, onEmpty = null;
 export function setViewHooks(show, empty) { onShow = show; onEmpty = empty; }
 export function setCodeViewOpener(open) { openCodeView = open; }
+export function setReferenceOpener(open) { openReference = open; }
 
 // Send raw bytes to the currently-visible pane's socket. Drives the mobile
 // quick-input bar (text line + control-key row); no-op if nothing's attached or
@@ -170,6 +173,10 @@ export function initTerm() {
   $("term-code").addEventListener("click", () => {
     const target = activeId != null ? panes.get(activeId)?.codeTarget : null;
     if (target && openCodeView) openCodeView(target.id, target.nodeId);
+  });
+  $("term-ref").addEventListener("click", () => {
+    const target = activeId != null ? panes.get(activeId)?.referenceTarget : null;
+    if (target && openReference) openReference(target);
   });
   // click the Claude session-id chip → copy the full uuid (dataset.sid, never the
   // possibly-truncated visible text) to the clipboard.
@@ -429,6 +436,7 @@ function applyBar(p) {
   $("term-attach").dataset.attach = p.attach || "";
   $("term-attach").disabled = !p.attach;
   applyClaude(p.claude);
+  applyReferenceTarget(p.referenceTarget);
   applyCodeTarget(p.codeTarget);
 }
 
@@ -454,6 +462,13 @@ function applyCodeTarget(target) {
   el.hidden = !target;
   el.disabled = !target;
   el.setAttribute("aria-label", I18N.t("code.open"));
+}
+
+function applyReferenceTarget(target) {
+  const el = $("term-ref");
+  el.hidden = !target;
+  el.disabled = !target;
+  el.setAttribute("aria-label", I18N.t("runtimeRef.open"));
 }
 
 // Update a task's stored Claude session id and, if it's the visible pane, the bar.
@@ -526,6 +541,7 @@ export function detachDock() {
 // pane is attached. showPane() hides it; disposing the last/active pane re-shows it.
 export function showTermEmpty() {
   if (onEmpty) onEmpty();
+  applyReferenceTarget(null);
   applyCodeTarget(null);
   $("term-empty").classList.remove("hidden");
 }
@@ -557,6 +573,7 @@ function pendingBar(title) {
   $("term-attach").dataset.attach = "";
   $("term-attach").disabled = true;
   applyClaude("");
+  applyReferenceTarget(null);
   applyCodeTarget(null);
 }
 
@@ -628,7 +645,16 @@ export function closePending(tmpId) {
 // Attach the dock to a task's session: reuse its live pane if we have one (just
 // show it — instant, no reconnect), else build a new pane. Either way refresh the
 // dock bar (title may have changed, e.g. after a rename) and ensure a socket.
-export function openPty(query, title, attach, taskId = null, claude = "", agent = "claude", codeTarget = null) {
+export function openPty(
+  query,
+  title,
+  attach,
+  taskId = null,
+  claude = "",
+  agent = "claude",
+  codeTarget = null,
+  referenceTarget = null,
+) {
   if (taskId == null) return;
   const normalizedAgent = agent === "codex" || agent === "kimi" ? agent : "claude";
   let p = panes.get(taskId);
@@ -642,6 +668,7 @@ export function openPty(query, title, attach, taskId = null, claude = "", agent 
   }
   p.agent = normalizedAgent; p.title = title; p.attach = attach || ""; p.claude = claude || "";
   p.codeTarget = codeTarget;
+  p.referenceTarget = referenceTarget;
   showPane(p);
   ensureSocket(p);
 }

@@ -1,6 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cancelCopyMode, ensureSessionOptions, pasteText, pasteSubmit, killSession, startSession, startShellSession, hasSession } from "./tmux.ts";
+import {
+  cancelCopyMode,
+  ensureSessionOptions,
+  pasteText,
+  pasteSubmit,
+  killSession,
+  startSession,
+  startShellSession,
+  hasSession,
+  loadSessionDirectory,
+  reloadSession,
+} from "./tmux.ts";
 import type { Runner } from "../fleet/runner.ts";
 
 // Minimal Runner double that records every exec() call. The other interface
@@ -311,4 +322,65 @@ test("startSession(agent='kimi') falls back to ~/.kimi-code/bin/kimi when kimi i
     "new-session", "-d", "-s", "tdsp-1-x", "-c", "/wt",
     "/home/me/.kimi-code/bin/kimi", "--auto", "--add-dir", "/mirror/worktrees/1-49", "--add-dir", "/mirror",
   ] });
+});
+
+test("loadSessionDirectory uses Claude's native /add-dir without restarting its pane", async () => {
+  const { runner, calls } = fakeRunner();
+  const mode = await loadSessionDirectory(
+    runner,
+    "tdsp-1-x",
+    "/wt",
+    "/data with spaces/refs/web",
+    { agent: "claude", addDirs: ["/data with spaces/refs/web"] },
+  );
+  assert.equal(mode, "in-place");
+  assert.deepEqual(calls, [
+    { file: "tmux", args: ["has-session", "-t", "=tdsp-1-x"] },
+    { file: "tmux", args: ["set-buffer", "-b", "tdsp-paste", "--", "/add-dir \"/data with spaces/refs/web\""] },
+    { file: "tmux", args: ["paste-buffer", "-t", "tdsp-1-x", "-b", "tdsp-paste", "-p", "-d"] },
+    { file: "tmux", args: ["send-keys", "-t", "tdsp-1-x", "Enter"] },
+  ]);
+});
+
+test("loadSessionDirectory reloads Codex in the same pane and resumes with every reference root", async () => {
+  const { runner, calls } = fakeRunner();
+  const mode = await loadSessionDirectory(runner, "tdsp-1-x", "/wt", "/refs/web", {
+    agent: "codex",
+    model: "gpt-5.4",
+    addDirs: ["/refs/api", "/refs/web"],
+  });
+  assert.equal(mode, "resumed");
+  assert.deepEqual(calls.find((call) => call.args[0] === "respawn-pane"), { file: "tmux", args: [
+    "respawn-pane", "-k", "-t", "=tdsp-1-x:", "-c", "/wt",
+    "codex", "-a", "on-request", "-s", "danger-full-access",
+    "--add-dir", "/refs/api", "--add-dir", "/refs/web",
+    "--add-dir", "/mirror/worktrees/1-49", "--add-dir", "/mirror",
+    "-m", "gpt-5.4", "resume", "--last",
+  ] });
+  assert.ok(!calls.some((call) => call.args[0] === "kill-session"), "the tmux session and attached clients remain alive");
+});
+
+test("reloadSession restores Kimi's model and provider-neutral reference roots", async () => {
+  const { runner, calls } = fakeRunner();
+  await reloadSession(runner, "tdsp-1-x", "/wt", {
+    agent: "kimi",
+    model: "kimi-code/kimi-for-coding",
+    addDirs: ["/refs/web"],
+  });
+  assert.deepEqual(calls.find((call) => call.args[0] === "respawn-pane"), { file: "tmux", args: [
+    "respawn-pane", "-k", "-t", "=tdsp-1-x:", "-c", "/wt",
+    "kimi", "--auto", "--add-dir", "/refs/web",
+    "--add-dir", "/mirror/worktrees/1-49", "--add-dir", "/mirror",
+    "-m", "kimi-code/kimi-for-coding", "--continue",
+  ] });
+});
+
+test("loadSessionDirectory defers to the normal Resume path when tmux is gone", async () => {
+  const { runner, calls } = fakeRunner(async (file, args) => {
+    calls.push({ file, args });
+    if (file === "tmux" && args[0] === "has-session") throw new Error("missing");
+    return "";
+  });
+  assert.equal(await loadSessionDirectory(runner, "tdsp-1-x", "/wt", "/refs/web", { agent: "codex" }), "deferred");
+  assert.equal(calls.length, 1);
 });
