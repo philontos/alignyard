@@ -86,6 +86,69 @@ CREATE TABLE IF NOT EXISTS onboarding_events (
   detail TEXT,
   occurred_at TEXT DEFAULT (datetime('now'))
 );
+
+-- Alignyard's shared control-plane catalog. These rows only identify a Git
+-- repository; clones, credentials and worktrees stay on each developer's
+-- machine and are managed by the local ay client.
+CREATE TABLE IF NOT EXISTS platform_repositories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  git_url TEXT NOT NULL UNIQUE,
+  default_branch TEXT NOT NULL DEFAULT 'main',
+  created_by TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- A platform Task is the durable collaboration object for one requirement or
+-- change. It is intentionally separate from the legacy runtime tasks table,
+-- whose rows represent local CLI/tmux executions.
+CREATE TABLE IF NOT EXISTS platform_tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_key TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  description TEXT,
+  owner TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Tasks may span several peer repositories. Editable repositories may receive
+-- changes; reference repositories are pinned read-only context.
+CREATE TABLE IF NOT EXISTS platform_task_repositories (
+  task_id INTEGER NOT NULL,
+  repository_id INTEGER NOT NULL,
+  mode TEXT NOT NULL,
+  base_branch TEXT NOT NULL,
+  base_commit TEXT,
+  work_branch TEXT,
+  head_commit TEXT,
+  assignee TEXT,
+  manifest_status TEXT NOT NULL DEFAULT 'waiting',
+  last_reported_at TEXT,
+  PRIMARY KEY (task_id, repository_id)
+);
+
+CREATE INDEX IF NOT EXISTS platform_task_repositories_repository_id
+  ON platform_task_repositories(repository_id);
+
+-- Normalized manifest output reported by a local ay sync. The platform can
+-- link and review these artifacts without ever reading the private checkout.
+CREATE TABLE IF NOT EXISTS platform_artifacts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  repository_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  path TEXT NOT NULL,
+  title TEXT,
+  change_kind TEXT,
+  review_status TEXT NOT NULL DEFAULT 'unreviewed',
+  base_commit TEXT,
+  head_commit TEXT,
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(task_id, repository_id, path)
+);
 `;
 
 /** Add a column if it's missing — backfills schema drift on pre-existing DBs. */
