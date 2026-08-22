@@ -85,6 +85,16 @@ import {
   recordMobileCheckin,
 } from "../onboarding/status.js";
 import { setKeepAwake } from "../onboarding/power.js";
+import {
+  createPlatformRepository,
+  createPlatformTask,
+  getPlatformTask,
+  listPlatformArtifacts,
+  listPlatformRepositories,
+  listPlatformTasks,
+  PlatformValidationError,
+  updatePlatformTaskStatus,
+} from "../platform/catalog.js";
 
 function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
@@ -462,7 +472,57 @@ app.post("/api/network/connect", async (req, res) => {
   }
 });
 
-// ---------- repos ----------
+// ---------- Alignyard shared control plane ----------
+// These APIs deliberately store collaboration metadata only. Git credentials,
+// clones and worktrees belong to the local `ay` client, not this server.
+app.get("/api/platform/repositories", (_req, res) => {
+  res.json(listPlatformRepositories(db));
+});
+
+app.post("/api/platform/repositories", (req, res) => {
+  try {
+    res.status(201).json(createPlatformRepository(db, req.body ?? {}));
+  } catch (error: any) {
+    if (error instanceof PlatformValidationError) return res.status(400).json({ error: error.message });
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+app.get("/api/platform/tasks", (_req, res) => {
+  res.json(listPlatformTasks(db));
+});
+
+app.get("/api/platform/tasks/:key", (req, res) => {
+  const task = getPlatformTask(db, req.params.key);
+  if (!task) return res.status(404).json({ error: "Task 不存在" });
+  res.json(task);
+});
+
+app.post("/api/platform/tasks", (req, res) => {
+  try {
+    res.status(201).json(createPlatformTask(db, req.body ?? {}));
+  } catch (error: any) {
+    if (error instanceof PlatformValidationError) return res.status(400).json({ error: error.message });
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+app.patch("/api/platform/tasks/:key", (req, res) => {
+  try {
+    const task = updatePlatformTaskStatus(db, req.params.key, req.body?.status);
+    if (!task) return res.status(404).json({ error: "Task 不存在" });
+    res.json(task);
+  } catch (error: any) {
+    if (error instanceof PlatformValidationError) return res.status(400).json({ error: error.message });
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+app.get("/api/platform/artifacts", (_req, res) => {
+  res.json(listPlatformArtifacts(db));
+});
+
+// ---------- legacy local runtime repos ----------
 app.get("/api/repos", (_req, res) => {
   res.json(listOwnedRepos(db).map(({ token: _token, mirror_path: _mirror, ...repo }) => repo));
 });
@@ -500,7 +560,7 @@ app.delete("/api/repos/:id", async (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- tasks ----------
+// ---------- legacy local runtime tasks ----------
 app.get("/api/tasks", async (_req, res) => {
   const tasks = listOwnedTasks(db);
   const withLive = await Promise.all(
