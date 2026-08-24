@@ -65,6 +65,15 @@ test("agentArgv codex resume keeps the same sandbox policy and model while ignor
   ]);
 });
 
+test("agentArgv codex automation cannot stop on approvals or repository hook trust", () => {
+  assert.deepEqual(agentArgv("codex", { prompt: "initialize", automated: true }), [
+    "codex", "-a", "never", "-s", "danger-full-access", "--dangerously-bypass-hook-trust", "initialize",
+  ]);
+  assert.deepEqual(agentArgv("codex", { resume: true, automated: true }), [
+    "codex", "-a", "never", "-s", "danger-full-access", "--dangerously-bypass-hook-trust", "resume", "--last",
+  ]);
+});
+
 // ---- agentArgv: kimi (interactive TUI; start prompt is submitted by tmux after launch) ----
 test("agentArgv kimi starts the interactive TUI in auto mode without passing prompt as -p", () => {
   assert.deepEqual(agentArgv("kimi", { prompt: "build it" }), ["kimi", "--auto"]);

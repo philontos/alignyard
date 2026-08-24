@@ -47,6 +47,9 @@ interface PullRequestInfo {
   state: "open" | "merged" | "closed";
 }
 
+type InitializationStartResult = { task: PlatformTask; runtime: Task; created: boolean };
+const initializationStarts = new WeakMap<object, Map<string, Promise<InitializationStartResult>>>();
+
 function initTask(env: PlatformWorkflowEnv, key: string): PlatformTask {
   const task = getPlatformTask(env.db, key);
   if (!task) throw new PlatformWorkflowError(404, "Task 不存在");
@@ -89,12 +92,12 @@ export function repositoryInitializationPrompt(input: {
 边界：不要修改业务源代码，不要 push，不要创建或合并 PR，不要修改 ${repository.base_branch}。Review、push、PR 和 merge 由平台在人工确认后执行。`;
 }
 
-export async function startRepositoryInitialization(
+async function performRepositoryInitializationStart(
   env: PlatformWorkflowEnv,
   key: string,
   platformUrl: string,
   agent: AgentKind = "codex",
-): Promise<{ task: PlatformTask; runtime: Task; created: boolean }> {
+): Promise<InitializationStartResult> {
   let task = initTask(env, key);
   if (task.status !== "draft") throw new PlatformWorkflowError(409, "只有草稿状态的初始化 Task 可以启动 Agent");
   const repository = editableRepository(task);
@@ -120,6 +123,7 @@ export async function startRepositoryInitialization(
         title: `[${task.key}] Initialize ${repository.name}`,
         prompt,
         agent,
+        automated: true,
         env: {
           AY_PLATFORM_URL: platformUrl,
           AY_TASK_KEY: task.key,
@@ -146,6 +150,36 @@ export async function startRepositoryInitialization(
   } catch (error) {
     setPlatformTaskWorkflowError(env.db, key, errorMessage(error));
     throw error;
+  }
+}
+
+/** Collapse concurrent clicks for the same platform Task onto one worktree
+ * creation. The stable init branch makes duplicate dispatch unsafe until the
+ * first runtime row has been linked back to the platform Task. */
+export async function startRepositoryInitialization(
+  env: PlatformWorkflowEnv,
+  key: string,
+  platformUrl: string,
+  agent: AgentKind = "codex",
+): Promise<InitializationStartResult> {
+  let starts = initializationStarts.get(env.db);
+  if (!starts) {
+    starts = new Map();
+    initializationStarts.set(env.db, starts);
+  }
+  const normalizedKey = key.toUpperCase();
+  const active = starts.get(normalizedKey);
+  if (active) {
+    const result = await active;
+    return { ...result, task: getPlatformTask(env.db, normalizedKey) || result.task, created: false };
+  }
+
+  const operation = performRepositoryInitializationStart(env, normalizedKey, platformUrl, agent);
+  starts.set(normalizedKey, operation);
+  try {
+    return await operation;
+  } finally {
+    if (starts.get(normalizedKey) === operation) starts.delete(normalizedKey);
   }
 }
 

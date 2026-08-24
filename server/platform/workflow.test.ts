@@ -47,7 +47,7 @@ function setup() {
     setupWorktree: async () => BASE,
     setupReference: async () => BASE,
     startSession: async (_session, _worktree, opening, options) => {
-      calls.push(`agent:${options?.agent}:${opening?.includes("不要 push")}`);
+      calls.push(`agent:${options?.agent}:${opening?.includes("不要 push")}:${options?.automated}`);
     },
     removeWorktree: async () => {},
     removeReference: async () => {},
@@ -135,7 +135,7 @@ test("Repository Init closes runtime, Review, PR, merge, cleanup, and ready stat
   assert.equal(started.created, true);
   assert.equal(started.task.runtime_task_id, started.runtime.id);
   assert.equal(started.runtime.work_branch, "change/ay-001/phil");
-  assert.ok(calls.includes("agent:codex:true"));
+  assert.ok(calls.includes("agent:codex:true:true"));
 
   seedSyncedOverview(db, task.key, repository.id);
   const review = await submitRepositoryInitializationReview(env, task.key);
@@ -161,6 +161,30 @@ test("Repository Init start is idempotent while its runtime worktree exists", as
   const second = await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
   assert.equal(second.created, false);
   assert.equal(second.runtime.id, first.runtime.id);
+});
+
+test("concurrent Repository Init starts share one runtime and worktree", async () => {
+  const { db, env, task } = setup();
+  const setupWorktree = env.runtimeEnv.setupWorktree;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let worktrees = 0;
+  env.runtimeEnv.setupWorktree = async (args) => {
+    worktrees += 1;
+    await gate;
+    return setupWorktree(args);
+  };
+
+  const firstStart = startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
+  const secondStart = startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
+  release();
+  const [first, second] = await Promise.all([firstStart, secondStart]);
+
+  assert.equal(worktrees, 1);
+  assert.equal(first.created, true);
+  assert.equal(second.created, false);
+  assert.equal(second.runtime.id, first.runtime.id);
+  assert.equal((db.prepare("SELECT COUNT(*) AS count FROM tasks").get() as { count: number }).count, 1);
 });
 
 test("Repository Init can finish protocol refresh after the PR merged even if its worktree is gone", async () => {
