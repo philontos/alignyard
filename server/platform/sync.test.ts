@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { initSchema } from "../core/schema.ts";
-import { createPlatformRepository, createPlatformTask } from "./catalog.ts";
+import {
+  createPlatformRepository,
+  createRepositoryInitializationTask,
+  updatePlatformTaskStatus,
+} from "./catalog.ts";
 import { PlatformSyncError, syncPlatformTaskKnowledge } from "./sync.ts";
 import { createRepositoryDocument, indexRepositoryProtocol, initializeRepositoryProtocol } from "../protocol/repository.ts";
 
@@ -17,11 +21,7 @@ function fixture() {
     git_url: "git@example.com:team/app.git",
     created_by: "Phil",
   });
-  const task = createPlatformTask(db, {
-    title: "Knowledge",
-    owner: "Phil",
-    repositories: [{ repository_id: repository.id, mode: "editable" }],
-  });
+  const task = createRepositoryInitializationTask(db, repository.id, "Phil");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "alignyard-sync-"));
   initializeRepositoryProtocol(root);
   createRepositoryDocument(root, { kind: "doc", slug: "overview", scope: "shared", title: "Overview" });
@@ -44,6 +44,7 @@ test("platform accepts a validated editable Task knowledge snapshot", () => {
     assert.equal(result.task.artifacts[0].kind, "doc");
     assert.equal(result.task.repositories[0].manifest_status, "valid");
     assert.equal(result.task.repositories[0].head_commit, "b".repeat(40));
+    assert.equal(updatePlatformTaskStatus(value.db, value.task.key, "review")?.status, "review");
     const stored = value.db.prepare(
       "SELECT document_id,scope,content,content_hash FROM platform_artifacts",
     ).get() as { document_id: string; scope: string; content: string; content_hash: string };

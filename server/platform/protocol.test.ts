@@ -30,14 +30,21 @@ function setup(manifest: string | null) {
   return { db, repository, runner };
 }
 
-test("protocol refresh exposes one boolean based on the default branch manifest", async () => {
+test("protocol refresh derives ready and uninitialized states from the default branch baseline", async () => {
   const valid = setup("version: 1\npreset: basic\nscopes:\n  - id: shared\n");
   const ready = await refreshRepositoryProtocol(valid.db, valid.runner, valid.repository.id);
   assert.equal(ready.ok && ready.repository.protocol_initialized, true);
+  assert.equal(ready.ok && ready.repository.protocol_state, "ready");
 
   const missing = setup(null);
   const waiting = await refreshRepositoryProtocol(missing.db, missing.runner, missing.repository.id);
   assert.equal(waiting.ok && waiting.repository.protocol_initialized, false);
+  assert.equal(waiting.ok && waiting.repository.protocol_state, "uninitialized");
+
+  const invalid = setup("version: 2\npreset: basic\nscopes:\n  - id: shared\n");
+  const broken = await refreshRepositoryProtocol(invalid.db, invalid.runner, invalid.repository.id);
+  assert.equal(broken.ok && broken.repository.protocol_state, "invalid");
+  assert.match(broken.ok ? broken.repository.protocol_error || "" : "", /version 必须是 1/);
 });
 
 test("protocol refresh asks for a local repository before touching Git", async () => {

@@ -98,8 +98,25 @@ export async function readRemoteBranchFile(
   branch: string,
   filePath: string,
 ): Promise<string | null> {
+  const files = await readRemoteBranchFiles(runner, mirror, branch, [filePath]);
+  return files[filePath] ?? null;
+}
+
+/** Fetch once, then inspect a bounded set of protocol files at the same remote
+ * branch snapshot. Missing paths are null; transport/fetch errors still throw. */
+export async function readRemoteBranchFiles(
+  runner: Runner,
+  mirror: string,
+  branch: string,
+  filePaths: readonly string[],
+): Promise<Record<string, string | null>> {
   await fetchBranch(runner, mirror, branch);
-  return git(runner, mirror, ["show", `refs/remotes/origin/${branch}:${filePath}`]).catch(() => null);
+  const ref = `refs/remotes/origin/${branch}`;
+  const entries = await Promise.all(filePaths.map(async (filePath) => [
+    filePath,
+    await git(runner, mirror, ["show", `${ref}:${filePath}`]).catch(() => null),
+  ] as const));
+  return Object.fromEntries(entries);
 }
 
 /** Manual full refresh of all branches (the repo card's "fetch" button). Keeps

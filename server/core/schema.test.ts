@@ -40,19 +40,44 @@ test("initSchema on a fresh DB has worktree_path and the newer columns", () => {
   ]);
 });
 
-test("initSchema keeps one binary protocol indicator on platform repositories", () => {
+test("initSchema stores compatible protocol state on platform repositories", () => {
   const db = new Database(":memory:");
   initSchema(db, opts(false));
   const columns = (db.prepare("PRAGMA table_info(platform_repositories)").all() as { name: string }[])
     .map((column) => column.name);
   assert.ok(columns.includes("protocol_initialized"));
+  assert.ok(columns.includes("protocol_state"));
+  assert.ok(columns.includes("protocol_error"));
   db.prepare(
     "INSERT INTO platform_repositories (name,git_url,created_by) VALUES ('repo','git@example/repo','Phil')",
   ).run();
+  assert.deepEqual(
+    db.prepare("SELECT protocol_initialized,protocol_state FROM platform_repositories").get(),
+    { protocol_initialized: 0, protocol_state: "uninitialized" },
+  );
+});
+
+test("initSchema migrates binary Repository state and title-based init Tasks", () => {
+  const db = new Database(":memory:");
+  initSchema(db, opts(false));
+  const repositoryId = Number(db.prepare(
+    "INSERT INTO platform_repositories (name,git_url,created_by,protocol_initialized) VALUES ('repo','git@example/repo','Phil',0)",
+  ).run().lastInsertRowid);
+  const taskId = Number(db.prepare(
+    "INSERT INTO platform_tasks (task_key,title,owner) VALUES ('AY-001','Initialize Alignyard · repo','Phil')",
+  ).run().lastInsertRowid);
+  db.prepare(
+    "INSERT INTO platform_task_repositories (task_id,repository_id,mode,base_branch) VALUES (?,?,'editable','main')",
+  ).run(taskId, repositoryId);
+
+  initSchema(db, opts(false));
+  assert.deepEqual(
+    db.prepare("SELECT protocol_state,protocol_initialized FROM platform_repositories WHERE id=?").get(repositoryId),
+    { protocol_state: "initializing", protocol_initialized: 0 },
+  );
   assert.equal(
-    (db.prepare("SELECT protocol_initialized FROM platform_repositories").get() as { protocol_initialized: number })
-      .protocol_initialized,
-    0,
+    (db.prepare("SELECT task_type FROM platform_tasks WHERE id=?").get(taskId) as { task_type: string }).task_type,
+    "repository_init",
   );
 });
 

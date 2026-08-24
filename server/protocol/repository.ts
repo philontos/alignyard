@@ -8,6 +8,15 @@ export const ALIGNYARD_MANIFEST = `${ALIGNYARD_DIR}/repository.yaml`;
 export const ALIGNYARD_PROTOCOL_VERSION = 1 as const;
 
 export const KNOWLEDGE_KINDS = ["doc", "spec", "adr"] as const;
+export const REQUIRED_BOOTSTRAP_FILES = [
+  ".alignyard/repository.yaml",
+  ".alignyard/README.md",
+  ".alignyard/templates/doc.md",
+  ".alignyard/templates/spec.md",
+  ".alignyard/templates/adr.md",
+  ".alignyard/skills/alignyard-knowledge/SKILL.md",
+  ".alignyard/docs/shared/overview.md",
+] as const;
 export type KnowledgeKind = typeof KNOWLEDGE_KINDS[number];
 
 export interface ProtocolScope {
@@ -292,6 +301,12 @@ export function validateRepositoryProtocol(repositoryRoot: string): ProtocolVali
     for (const relation of document.relations) {
       if (!ids.has(relation)) errors.push(`${document.path}: relation「${relation}」不存在`);
     }
+  }
+
+  if (!documents.some((document) =>
+    document.kind === "doc" && document.path === `${ALIGNYARD_DIR}/docs/shared/overview.md`
+  )) {
+    errors.push(`缺少 ${ALIGNYARD_DIR}/docs/shared/overview.md；初始化需要一份 shared overview`);
   }
 
   return { ok: errors.length === 0, initialized: true, manifest: parsed.manifest, documents, errors };
