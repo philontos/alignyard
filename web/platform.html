@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#f5f0e8" />
   <title>Alignyard · Tasks</title>
+  <link rel="stylesheet" href="/vendor/xterm.css" />
   <link rel="stylesheet" href="/css/platform.css" />
 </head>
 <body>
@@ -116,7 +117,30 @@
     </aside>
   </div>
 
+  <section class="agent-workspace" id="agent-workspace" aria-label="Agent 工作区" hidden>
+    <header class="agent-workspace-head">
+      <div class="agent-workspace-context">
+        <span id="agent-workspace-key">AY-000</span>
+        <strong id="agent-workspace-title">Agent 工作区</strong>
+      </div>
+      <span class="agent-workspace-status" id="agent-workspace-status">正在连接…</span>
+      <button class="agent-workspace-close" id="agent-workspace-close" type="button" aria-label="关闭 Agent 工作区">×</button>
+    </header>
+    <div class="agent-terminal" id="agent-terminal"></div>
+    <footer class="agent-workspace-controls">
+      <span>直接操作当前 init Task 的 Agent；关闭工作区不会停止任务。</span>
+      <div>
+        <button type="button" data-agent-key="1">1</button>
+        <button type="button" data-agent-key="2">2</button>
+        <button type="button" data-agent-key="enter">Enter</button>
+        <button type="button" data-agent-key="interrupt">Ctrl+C</button>
+      </div>
+    </footer>
+  </section>
+
   <div class="toast-region" id="toast-region" aria-live="polite"></div>
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/addon-unicode11.js"></script>
   <script type="module" src="/js/platform.js"></script>
 </body>
 </html>

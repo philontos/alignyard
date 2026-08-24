@@ -151,17 +151,7 @@ csMount("h-kind").setOptions([{ value: "ssh", label: "ssh" }, { value: "mosh", l
 $("t-provider").dataset.ph = t("provider.default");   // model-backend picker
 csMount("t-provider", onProviderChange);
 // reveal the UI once the first data render lands — a smooth fade, not an abrupt pop-in
-Promise.allSettled([loadRepos(), loadHosts(), loadTasks(), refreshProviders()]).then(() => {
-  dismissBoot();
-  syncReadWaiting();
-  const url = new URL(location.href);
-  const requestedTask = Number(url.searchParams.get("task"));
-  if (Number.isInteger(requestedTask) && requestedTask > 0) {
-    url.searchParams.delete("task");
-    history.replaceState(history.state, "", `${url.pathname}${url.search}${url.hash}`);
-    connect(requestedTask);
-  }
-});
+Promise.allSettled([loadRepos(), loadHosts(), loadTasks(), refreshProviders()]).then(() => { dismissBoot(); syncReadWaiting(); });
 initOnboarding();             // independent: slow VPN/DNS checks never block the local dashboard
 setTimeout(dismissBoot, 2500);   // failsafe so a slow/hung fetch never traps the spinner
 setInterval(async () => { await loadTasks(); syncReadWaiting(); }, 4000);
