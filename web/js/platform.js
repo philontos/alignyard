@@ -538,7 +538,11 @@ function openTaskDetail(key) {
   $('[data-init-merge]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "merge", event.currentTarget, "PR 已合并，Repository 已就绪"));
 }
 
-function closeTaskDetail() { $("#task-drawer").hidden = true; state.selectedTask = null; }
+function closeTaskDetail() {
+  if (platformAgentWorkspaceIsOpen()) closePlatformAgentWorkspace();
+  $("#task-drawer").hidden = true;
+  state.selectedTask = null;
+}
 
 function replacePlatformTask(updated) {
   const index = state.tasks.findIndex((task) => task.key === updated.key);

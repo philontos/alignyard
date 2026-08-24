@@ -5,6 +5,7 @@ import fs from "node:fs";
 const html = fs.readFileSync(new URL("./platform.html", import.meta.url), "utf8");
 const script = fs.readFileSync(new URL("./js/platform.js", import.meta.url), "utf8");
 const agent = fs.readFileSync(new URL("./js/platform-agent.js", import.meta.url), "utf8");
+const styles = fs.readFileSync(new URL("./css/platform.css", import.meta.url), "utf8");
 
 test("Tasks surface keeps only the three primary filters and one create action", () => {
   const taskView = html.match(/<section class="view active" id="view-tasks"[\s\S]*?<\/section>/)?.[0] || "";
@@ -55,7 +56,12 @@ test("Repository Init drawer closes runtime, Review, PR, and merge behind explic
   assert.doesNotMatch(script, /index\.html\?task=/);
   assert.match(html, /id="agent-workspace"/);
   assert.match(html, /id="agent-terminal"/);
+  assert.match(html, /id="task-drawer"[\s\S]*id="task-detail"[\s\S]*id="agent-workspace"/);
   assert.match(agent, /connectPty\(`session=/);
+  assert.match(agent, /classList\.add\("agent-mode"\)/);
+  assert.match(styles, /\.drawer-backdrop\.agent-mode\s*\{[^}]*inset:\s*64px 0 0 242px/);
+  assert.match(styles, /\.drawer-backdrop\.agent-mode \.task-drawer\s*\{[^}]*flex:/);
+  assert.doesNotMatch(styles, /\.agent-workspace\s*\{[^}]*position:\s*fixed/);
   assert.match(script, /手动模式与诊断命令/);
 });
 
