@@ -8,10 +8,15 @@ import {
   createPlatformTask,
   deletePlatformRepository,
   getPlatformTask,
+  linkPlatformTaskRuntime,
   listPlatformRepositories,
+  markPlatformPullRequestMerged,
   platformRepositoryTaskCount,
   PlatformValidationError,
+  recordPlatformPullRequest,
   setPlatformRepositoryProtocolState,
+  setPlatformTaskWorkflowError,
+  updatePlatformTaskCommits,
   updatePlatformTaskStatus,
 } from "./catalog.ts";
 
@@ -127,6 +132,59 @@ test("Repository initialization is a first-class idempotent Task and gates ordin
   assert.equal(first.repositories.length, 1);
   assert.equal(first.repositories[0].mode, "editable");
   assert.equal(listPlatformRepositories(db)[0].protocol_state, "initializing");
+});
+
+test("requesting changes on Repository Init requires a fresh sync before another Review", () => {
+  const db = memoryDb();
+  const repository = createPlatformRepository(db, {
+    name: "new-service", git_url: "git@example/new-service", created_by: "Phil",
+  });
+  const task = createRepositoryInitializationTask(db, repository.id, "Phil");
+  db.prepare(
+    "UPDATE platform_task_repositories SET manifest_status='valid' WHERE task_id=? AND repository_id=?",
+  ).run(task.id, repository.id);
+  db.prepare(
+    "INSERT INTO platform_artifacts (task_id,repository_id,document_id,kind,scope,path,title) " +
+      "VALUES (?,?,?,'doc','shared','.alignyard/docs/shared/overview.md','Repository Overview')",
+  ).run(task.id, repository.id, "overview");
+
+  assert.equal(updatePlatformTaskStatus(db, task.key, "review")?.status, "review");
+  const draft = updatePlatformTaskStatus(db, task.key, "draft");
+  assert.equal(draft?.repositories[0].manifest_status, "waiting");
+  assert.throws(() => updatePlatformTaskStatus(db, task.key, "review"), /ay validate、ay sync/);
+});
+
+test("platform Task records its runtime, commits, workflow error, and pull request", () => {
+  const db = memoryDb();
+  db.prepare("INSERT INTO hosts (id,name,target,kind,status) VALUES (1,'local','','local','online')").run();
+  db.prepare(
+    "INSERT INTO repos (id,host_id,name,git_url,mirror_path,status) VALUES (7,1,'new-service','git@example/new-service','/mirror','ready')",
+  ).run();
+  db.prepare(
+    "INSERT INTO tasks (id,repo_id,base_branch,base_commit,work_branch,title,worktree_path,session,status,agent) " +
+      "VALUES (9,7,'main',?,'change/ay-001/phil','runtime','/wt','tdsp-9','running','codex')",
+  ).run("a".repeat(40));
+  const repository = createPlatformRepository(db, {
+    name: "new-service", git_url: "git@example/new-service", created_by: "Phil",
+  });
+  const task = createRepositoryInitializationTask(db, repository.id, "Phil");
+
+  const linked = linkPlatformTaskRuntime(db, task.key, {
+    id: 9, work_branch: "change/ay-001/phil", base_commit: "a".repeat(40),
+  });
+  assert.equal(linked?.runtime_task_id, 9);
+  assert.equal(linked?.runtime_status, "running");
+  assert.equal(linked?.runtime_agent, "codex");
+  assert.equal(linked?.repositories[0].base_commit, "a".repeat(40));
+
+  assert.equal(setPlatformTaskWorkflowError(db, task.key, "boom")?.workflow_error, "boom");
+  assert.equal(updatePlatformTaskCommits(db, task.key, { head_commit: "b".repeat(40) })?.repositories[0].head_commit, "b".repeat(40));
+  const withPr = recordPlatformPullRequest(db, task.key, {
+    number: 42, url: "https://github.com/example/repo/pull/42", state: "open",
+  });
+  assert.equal(withPr?.pr_number, 42);
+  assert.equal(withPr?.pr_state, "open");
+  assert.equal(markPlatformPullRequestMerged(db, task.key)?.pr_state, "merged");
 });
 
 test("Repository deletion is blocked by Task references and otherwise removes metadata", () => {

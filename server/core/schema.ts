@@ -114,6 +114,12 @@ CREATE TABLE IF NOT EXISTS platform_tasks (
   owner TEXT NOT NULL,
   task_type TEXT NOT NULL DEFAULT 'change',
   status TEXT NOT NULL DEFAULT 'draft',
+  runtime_task_id INTEGER,
+  workflow_error TEXT,
+  pr_number INTEGER,
+  pr_url TEXT,
+  pr_state TEXT NOT NULL DEFAULT 'none',
+  merged_at TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -231,6 +237,12 @@ function reconcileColumns(db: DB) {
   addColumn(db, "platform_repositories", "protocol_state", "TEXT NOT NULL DEFAULT 'uninitialized'");
   addColumn(db, "platform_repositories", "protocol_error", "TEXT");
   addColumn(db, "platform_tasks", "task_type", "TEXT NOT NULL DEFAULT 'change'");
+  addColumn(db, "platform_tasks", "runtime_task_id", "INTEGER");
+  addColumn(db, "platform_tasks", "workflow_error", "TEXT");
+  addColumn(db, "platform_tasks", "pr_number", "INTEGER");
+  addColumn(db, "platform_tasks", "pr_url", "TEXT");
+  addColumn(db, "platform_tasks", "pr_state", "TEXT NOT NULL DEFAULT 'none'");
+  addColumn(db, "platform_tasks", "merged_at", "TEXT");
   addColumn(db, "platform_artifacts", "document_id", "TEXT");
   addColumn(db, "platform_artifacts", "scope", "TEXT");
   addColumn(db, "platform_artifacts", "owners", "TEXT NOT NULL DEFAULT '[]'");

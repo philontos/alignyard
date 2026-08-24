@@ -156,6 +156,9 @@ export interface RepoTaskEnv {
 export interface CreateRepoOpts {
   baseBranch: string;
   title: string;
+  /** Optional caller-owned branch name. Platform workflows use their stable
+   * Task key; ordinary runtime dispatch keeps the historical feat/<id>-<slug>. */
+  workBranch?: string | null;
   prompt?: string | null;
   // Alternate model backend (optional). providerId is recorded on the task (so
   // resume can re-inject the same backend); env is the resolved ANTHROPIC_* vars
@@ -198,7 +201,17 @@ export async function createRepoTask(env: RepoTaskEnv, repo: RepoRef, opts: Crea
     .run(repo.id, opts.baseBranch, "", opts.title, opts.prompt || null, "", "", "creating", opts.providerId ?? null, agent, opts.model ?? null);
   const id = Number(info.lastInsertRowid);
   const s = slug(opts.title);
-  const workBranch = `feat/${id}-${s}`;
+  const requestedBranch = String(opts.workBranch || "").trim();
+  if (requestedBranch && (
+    requestedBranch.startsWith("-") || requestedBranch.endsWith("/") || requestedBranch.endsWith(".lock") ||
+    requestedBranch.includes("..") || requestedBranch.includes("//") || /[\s~^:?*[\\]/.test(requestedBranch)
+  )) {
+    env.db.prepare("UPDATE tasks SET status='error',error=? WHERE id=?")
+      .run("invalid work branch", id);
+    await env.writeManifest(id);
+    return { ok: false, error: "dispatchFailed", id, message: "invalid work branch" };
+  }
+  const workBranch = requestedBranch || `feat/${id}-${s}`;
   const worktree = path.resolve(path.join(path.dirname(repo.mirror_path), "..", "worktrees", `${repo.id}-${id}`));
   const referenceRoot = path.resolve(path.join(path.dirname(repo.mirror_path), "..", "worktrees", "refs", String(id)));
   const session = `tdsp-${env.ns}-${id}-${slug(repo.name)}-${s}`;

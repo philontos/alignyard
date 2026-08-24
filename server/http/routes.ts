@@ -30,7 +30,8 @@ import {
 } from "../task/cli.js";
 import { fleetTargets, type FleetTarget } from "../fleet/fleet.js";
 import { bootstrapMachine, validProfileName } from "../fleet/bootstrap.js";
-import { createLocalTask, createRepoTask, type RepoTaskEnv } from "../task/createtask.js";
+import { createLocalTask, createRepoTask, stopTask, type RepoTaskEnv } from "../task/createtask.js";
+import { cleanupTask, resumeTask } from "../task/lifecycle.js";
 import { addTaskReference, type AddTaskReferenceResult } from "../task/addreference.js";
 import {
   listTaskReferences,
@@ -98,13 +99,41 @@ import {
   listPlatformTasks,
   platformRepositoryTaskCount,
   PlatformValidationError,
+  type PlatformTask,
   updatePlatformTaskStatus,
 } from "../platform/catalog.js";
 import { refreshRepositoryProtocol } from "../platform/protocol.js";
 import { PlatformSyncError, syncPlatformTaskKnowledge } from "../platform/sync.js";
+import {
+  approveAndCreateRepositoryInitializationPullRequest,
+  mergeRepositoryInitializationPullRequest,
+  PlatformWorkflowError,
+  startRepositoryInitialization,
+  submitRepositoryInitializationReview,
+  type PlatformWorkflowEnv,
+} from "../platform/workflow.js";
 
 function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+function requestBaseUrl(req: Request): string {
+  const forwarded = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const protocol = forwarded || req.protocol || "http";
+  return `${protocol}://${req.get("host") || "localhost"}`;
+}
+
+async function platformTaskPayload(task: PlatformTask) {
+  if (!task.runtime_task_id) {
+    return { ...task, runtime_alive: false, runtime_has_worktree: false };
+  }
+  const runtime = getTask.get(task.runtime_task_id) as Task | undefined;
+  if (!runtime) return { ...task, runtime_alive: false, runtime_has_worktree: false };
+  const runtimeHasWorktree = !!runtime.worktree_path
+    && await localRunner.exists(runtime.worktree_path).catch(() => false);
+  const runtimeAlive = !!runtime.session && runtime.status !== "cleaned"
+    && await hasSession(localRunner, runtime.session).catch(() => false);
+  return { ...task, runtime_alive: runtimeAlive, runtime_has_worktree: runtimeHasWorktree };
 }
 
 function restartArgs(): string[] {
@@ -480,8 +509,8 @@ app.post("/api/network/connect", async (req, res) => {
 });
 
 // ---------- Alignyard shared control plane ----------
-// These APIs deliberately store collaboration metadata only. Git credentials,
-// clones and worktrees belong to the local `ay` client, not this server.
+// Shared rows remain credential-free. Owner-local runtime worktrees and agents
+// are orchestrated through the same node-local services as ordinary tasks.
 app.get("/api/platform/repositories", (_req, res) => {
   res.json(listPlatformRepositories(db));
 });
@@ -519,12 +548,17 @@ app.delete("/api/platform/repositories/:id", async (req, res) => {
   }
 });
 
-app.post("/api/platform/repositories/:id/initialize", (req, res) => {
+app.post("/api/platform/repositories/:id/initialize", async (req, res) => {
   try {
-    const task = createRepositoryInitializationTask(db, Number(req.params.id), req.body?.owner);
+    let task = createRepositoryInitializationTask(db, Number(req.params.id), req.body?.owner);
+    const started = await startRepositoryInitialization(
+      platformWorkflowEnvFor(), task.key, requestBaseUrl(req), asAgentKind(req.body?.agent || "codex"),
+    );
+    task = started.task;
     const repository = getPlatformRepository(db, Number(req.params.id));
-    res.json({ task, repository });
+    res.json({ task: await platformTaskPayload(task), repository, runtime_created: started.created });
   } catch (error: any) {
+    if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
     if (error instanceof PlatformValidationError) return res.status(409).json({ error: error.message });
     res.status(500).json({ error: String(error?.message || error) });
   }
@@ -543,14 +577,14 @@ app.post("/api/platform/repositories/:id/refresh", async (req, res) => {
   }
 });
 
-app.get("/api/platform/tasks", (_req, res) => {
-  res.json(listPlatformTasks(db));
+app.get("/api/platform/tasks", async (_req, res) => {
+  res.json(await Promise.all(listPlatformTasks(db).map(platformTaskPayload)));
 });
 
-app.get("/api/platform/tasks/:key", (req, res) => {
+app.get("/api/platform/tasks/:key", async (req, res) => {
   const task = getPlatformTask(db, req.params.key);
   if (!task) return res.status(404).json({ error: "Task 不存在" });
-  res.json(task);
+  res.json(await platformTaskPayload(task));
 });
 
 app.post("/api/platform/tasks", (req, res) => {
@@ -562,13 +596,69 @@ app.post("/api/platform/tasks", (req, res) => {
   }
 });
 
-app.patch("/api/platform/tasks/:key", (req, res) => {
+app.patch("/api/platform/tasks/:key", async (req, res) => {
   try {
+    const current = getPlatformTask(db, req.params.key);
+    if (current?.task_type === "repository_init" && req.body?.status !== "draft") {
+      return res.status(409).json({ error: "初始化 Task 请使用对应的 Review、PR 和 Merge 操作" });
+    }
     const task = updatePlatformTaskStatus(db, req.params.key, req.body?.status);
     if (!task) return res.status(404).json({ error: "Task 不存在" });
-    res.json(task);
+    res.json(await platformTaskPayload(task));
   } catch (error: any) {
     if (error instanceof PlatformValidationError) return res.status(400).json({ error: error.message });
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+app.post("/api/platform/tasks/:key/run", async (req, res) => {
+  try {
+    const started = await startRepositoryInitialization(
+      platformWorkflowEnvFor(), req.params.key, requestBaseUrl(req), asAgentKind(req.body?.agent || "codex"),
+    );
+    let runtime = started.runtime;
+    const alive = runtime.session ? await hasSession(localRunner, runtime.session).catch(() => false) : false;
+    if (!alive && runtime.worktree_path) {
+      await resumePlatformRuntimeTask(runtime.id);
+      runtime = getTask.get(runtime.id) as Task;
+    }
+    res.json({ task: await platformTaskPayload(getPlatformTask(db, req.params.key) || started.task), runtime_created: started.created });
+  } catch (error: any) {
+    if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
+    if (error instanceof PlatformValidationError) return res.status(409).json({ error: error.message });
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+app.post("/api/platform/tasks/:key/review", async (req, res) => {
+  try {
+    const task = await submitRepositoryInitializationReview(platformWorkflowEnvFor(), req.params.key);
+    res.json(await platformTaskPayload(task));
+  } catch (error: any) {
+    if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
+    if (error instanceof PlatformValidationError) return res.status(409).json({ error: error.message });
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+app.post("/api/platform/tasks/:key/pull-request", async (req, res) => {
+  try {
+    const task = await approveAndCreateRepositoryInitializationPullRequest(platformWorkflowEnvFor(), req.params.key);
+    res.json(await platformTaskPayload(task));
+  } catch (error: any) {
+    if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
+    if (error instanceof PlatformValidationError) return res.status(409).json({ error: error.message });
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+app.post("/api/platform/tasks/:key/merge", async (req, res) => {
+  try {
+    const result = await mergeRepositoryInitializationPullRequest(platformWorkflowEnvFor(), req.params.key);
+    res.json({ ...result, task: await platformTaskPayload(result.task) });
+  } catch (error: any) {
+    if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
+    if (error instanceof PlatformValidationError) return res.status(409).json({ error: error.message });
     res.status(500).json({ error: String(error?.message || error) });
   }
 });
@@ -665,6 +755,65 @@ app.get("/api/tasks", async (_req, res) => {
 // Bind createRepoTask to this owning node's local runner and manifest writer.
 function repoTaskEnvFor(): RepoTaskEnv {
   return buildRepoTaskEnv({ db, ns: NS, runner: localRunner, writeManifest: (tid) => syncTaskManifest(tid) });
+}
+
+async function resumePlatformRuntimeTask(taskId: number) {
+  const result = await resumeTask({
+    db,
+    exists: (target) => localRunner.exists(target),
+    hasSession: (session) => hasSession(localRunner, session),
+    startSession: async (task) => {
+      const provider = task.provider_id ? (getProvider.get(task.provider_id) as Provider | undefined) : undefined;
+      await startSession(localRunner, task.session, task.worktree_path, null, {
+        continue: true,
+        env: providerEnv(provider),
+        agent: asAgentKind(task.agent),
+        model: task.agent_model,
+        addDirs: referenceWorktreePaths(db, task.id),
+      });
+    },
+    writeManifest: (id) => syncTaskManifest(id),
+  }, taskId);
+  if (!result.ok) throw new PlatformWorkflowError(409, result.message || result.error);
+}
+
+function platformWorkflowEnvFor(): PlatformWorkflowEnv {
+  return {
+    db,
+    root: ROOT,
+    runner: localRunner,
+    runtimeEnv: repoTaskEnvFor(),
+    getLocalRepository(gitUrl) {
+      const hostId = localHostId(db);
+      return hostId == null ? undefined : findRepoByGitUrl(db, hostId, gitUrl) as Repo | undefined;
+    },
+    getRuntimeTask(id) {
+      return getTask.get(id) as Task | undefined;
+    },
+    async stopRuntimeTask(id) {
+      const result = await stopTask({
+        db,
+        killSession: (session) => killSession(localRunner, session),
+        writeManifest: (taskId) => syncTaskManifest(taskId),
+      }, id);
+      if (!result.ok) throw new PlatformWorkflowError(409, result.error);
+    },
+    async cleanupRuntimeTask(id) {
+      const result = await cleanupTask({
+        db,
+        killSession: (session) => killSession(localRunner, session),
+        removeWorktree: (mirror, worktree, workBranch) => removeWorktree(localRunner, mirror, worktree, workBranch),
+        removeReferenceRoot: (taskId) => localRunner.rmrf(referenceRootPath(DATA_DIR, taskId)),
+        writeManifest: (taskId) => syncTaskManifest(taskId),
+      }, id);
+      if (!result.ok) throw new PlatformWorkflowError(409, result.message || result.error);
+    },
+    async refreshRepository(id) {
+      const result = await refreshRepositoryProtocol(db, localRunner, id);
+      if (!result.ok) throw new PlatformWorkflowError(result.reason === "not_found" ? 404 : 409, result.message);
+      return result.repository;
+    },
+  };
 }
 
 async function addReferenceOnThisNode(taskId: number, input: any) {
