@@ -49,6 +49,10 @@ test("Repository Init drawer closes runtime, Review, PR, and merge behind explic
   assert.match(script, /\/api\/platform\/tasks\/\$\{encodeURIComponent\(key\)\}\/run/);
   assert.match(script, /"pull-request"/);
   assert.match(script, /"merge"/);
+  assert.match(script, /forge_kind === "github" \? "PR"/);
+  assert.match(script, /forge_kind === "gitlab" \? "MR"/);
+  assert.match(script, /pendingActions/);
+  assert.match(script, /正在创建 \$\{requestLabel\}/);
   assert.match(script, /要求修改/);
   assert.match(script, /重试完成初始化/);
   assert.match(script, /data-open-agent/);

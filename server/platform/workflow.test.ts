@@ -24,16 +24,17 @@ import {
 const BASE = "a".repeat(40);
 const HEAD = "b".repeat(40);
 
-function setup() {
+function setup(options: { gitUrl?: string } = {}) {
+  const gitUrl = options.gitUrl || "git@github.com:example/service.git";
   const db = new Database(":memory:");
   initSchema(db, { didMigrate: false, legacyDir: "/legacy", dataDir: "/data" });
   db.prepare("INSERT INTO hosts (id,name,target,kind,status) VALUES (1,'local','','local','online')").run();
   db.prepare(
     "INSERT INTO repos (id,host_id,name,git_url,default_branch,mirror_path,status) " +
-      "VALUES (7,1,'service','git@example/service','main','/data/mirrors/7-service.git','ready')",
-  ).run();
+      "VALUES (7,1,'service',?,'main','/data/mirrors/7-service.git','ready')",
+  ).run(gitUrl);
   const repository = createPlatformRepository(db, {
-    name: "service", git_url: "git@example/service", default_branch: "main", created_by: "Phil",
+    name: "service", git_url: gitUrl, default_branch: "main", created_by: "Phil",
   });
   const task = createRepositoryInitializationTask(db, repository.id, "Phil");
   let pullRequestCreated = false;
@@ -74,6 +75,30 @@ function setup() {
           number: 42,
           url: "https://github.com/example/service/pull/42",
           state: pullRequestMerged ? "MERGED" : "OPEN",
+        });
+      }
+      if (file === "glab" && args[0] === "mr" && args[1] === "create") {
+        pullRequestCreated = true;
+        return "https://gitlab.com/example/service/-/merge_requests/42\n";
+      }
+      if (file === "glab" && args[0] === "mr" && args[1] === "merge") {
+        pullRequestMerged = true;
+        return "";
+      }
+      if (file === "glab" && args[0] === "mr" && args[1] === "list") {
+        if (!pullRequestCreated) return "[]";
+        return JSON.stringify([{
+          iid: 42,
+          web_url: "https://gitlab.com/example/service/-/merge_requests/42",
+          state: pullRequestMerged ? "merged" : "opened",
+        }]);
+      }
+      if (file === "glab" && args[0] === "mr" && args[1] === "view") {
+        if (!pullRequestCreated) throw new Error("no merge request found");
+        return JSON.stringify({
+          iid: 42,
+          web_url: "https://gitlab.com/example/service/-/merge_requests/42",
+          state: pullRequestMerged ? "merged" : "opened",
         });
       }
       return "";
@@ -155,6 +180,24 @@ test("Repository Init closes runtime, Review, PR, merge, cleanup, and ready stat
   assert.ok(calls.some((call) => call === "gh pr merge 42 --merge"));
 });
 
+test("GitLab Repository Init uses local glab for MR creation and merge", async () => {
+  const { db, env, repository, task, calls } = setup({ gitUrl: "git@gitlab.com:example/service.git" });
+  await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
+  seedSyncedOverview(db, task.key, repository.id);
+  await submitRepositoryInitializationReview(env, task.key);
+
+  const approved = await approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+  assert.equal(approved.status, "approved");
+  assert.equal(approved.pr_number, 42);
+  assert.match(approved.pr_url || "", /merge_requests\/42/);
+
+  const merged = await mergeRepositoryInitializationPullRequest(env, task.key);
+  assert.equal(merged.task.pr_state, "merged");
+  assert.ok(calls.some((call) => call.startsWith("glab mr create --source-branch change/ay-001/phil --target-branch main")));
+  assert.ok(calls.some((call) => call === "glab mr merge 42 --auto-merge=false --yes"));
+  assert.equal(calls.some((call) => call.startsWith("gh pr")), false);
+});
+
 test("Repository Init start is idempotent while its runtime worktree exists", async () => {
   const { env, task } = setup();
   const first = await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
@@ -185,6 +228,85 @@ test("concurrent Repository Init starts share one runtime and worktree", async (
   assert.equal(second.created, false);
   assert.equal(second.runtime.id, first.runtime.id);
   assert.equal((db.prepare("SELECT COUNT(*) AS count FROM tasks").get() as { count: number }).count, 1);
+});
+
+test("concurrent PR confirmations share one local forge operation", async () => {
+  const { db, env, repository, task } = setup();
+  await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
+  seedSyncedOverview(db, task.key, repository.id);
+  await submitRepositoryInitializationReview(env, task.key);
+
+  const originalExec = env.runner.exec.bind(env.runner);
+  let release!: () => void;
+  let started!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const createStarted = new Promise<void>((resolve) => { started = resolve; });
+  let creates = 0;
+  env.runner.exec = async (file, args, options) => {
+    if (file === "gh" && args[0] === "pr" && args[1] === "create") {
+      creates += 1;
+      started();
+      await gate;
+    }
+    return originalExec(file, args, options);
+  };
+
+  const first = approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+  await createStarted;
+  const second = approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+  release();
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+
+  assert.equal(creates, 1);
+  assert.equal(firstResult.pr_number, 42);
+  assert.equal(secondResult.pr_number, 42);
+});
+
+test("PR creation reconciles a remote success reported as already existing", async () => {
+  const { db, env, repository, task } = setup();
+  await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
+  seedSyncedOverview(db, task.key, repository.id);
+  await submitRepositoryInitializationReview(env, task.key);
+
+  const originalExec = env.runner.exec.bind(env.runner);
+  env.runner.exec = async (file, args, options) => {
+    if (file === "gh" && args[0] === "pr" && args[1] === "create") {
+      await originalExec(file, args, options);
+      const error = new Error("create returned after remote side effect") as Error & { stderr: string };
+      error.stderr = "a pull request already exists: https://github.com/example/service/pull/42";
+      throw error;
+    }
+    return originalExec(file, args, options);
+  };
+
+  const approved = await approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+  assert.equal(approved.status, "approved");
+  assert.equal(approved.pr_number, 42);
+  assert.equal(approved.workflow_error, null);
+});
+
+test("merge reconciles a remote success reported as a local CLI error", async () => {
+  const { db, env, repository, task } = setup();
+  await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
+  seedSyncedOverview(db, task.key, repository.id);
+  await submitRepositoryInitializationReview(env, task.key);
+  await approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+
+  const originalExec = env.runner.exec.bind(env.runner);
+  env.runner.exec = async (file, args, options) => {
+    if (file === "gh" && args[0] === "pr" && args[1] === "merge") {
+      await originalExec(file, args, options);
+      const error = new Error("connection closed after merge") as Error & { stderr: string };
+      error.stderr = "remote command status unavailable";
+      throw error;
+    }
+    return originalExec(file, args, options);
+  };
+
+  const merged = await mergeRepositoryInitializationPullRequest(env, task.key);
+  assert.equal(merged.task.pr_state, "merged");
+  assert.equal(merged.repository.protocol_state, "ready");
+  assert.equal(merged.task.workflow_error, null);
 });
 
 test("Repository Init can finish protocol refresh after the PR merged even if its worktree is gone", async () => {
