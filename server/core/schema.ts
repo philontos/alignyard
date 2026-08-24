@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS platform_repositories (
   name TEXT NOT NULL UNIQUE,
   git_url TEXT NOT NULL UNIQUE,
   default_branch TEXT NOT NULL DEFAULT 'main',
+  protocol_initialized INTEGER NOT NULL DEFAULT 0,
   created_by TEXT NOT NULL,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
@@ -139,9 +140,15 @@ CREATE TABLE IF NOT EXISTS platform_artifacts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id INTEGER NOT NULL,
   repository_id INTEGER NOT NULL,
+  document_id TEXT,
   kind TEXT NOT NULL,
+  scope TEXT,
   path TEXT NOT NULL,
   title TEXT,
+  owners TEXT NOT NULL DEFAULT '[]',
+  relations TEXT NOT NULL DEFAULT '[]',
+  content TEXT NOT NULL DEFAULT '',
+  content_hash TEXT,
   change_kind TEXT,
   review_status TEXT NOT NULL DEFAULT 'unreviewed',
   base_commit TEXT,
@@ -215,8 +222,37 @@ function reconcileColumns(db: DB) {
   // | kimi), plus an optional non-Claude -m model. Backfills to 'claude'.
   addColumn(db, "tasks", "agent", "TEXT DEFAULT 'claude'");
   addColumn(db, "tasks", "agent_model", "TEXT");
+  // One deliberately binary repository signal: does the default branch carry
+  // a valid .alignyard/repository.yaml? Detailed protocol diagnostics stay in
+  // the local validator instead of becoming platform workflow states.
+  addColumn(db, "platform_repositories", "protocol_initialized", "INTEGER NOT NULL DEFAULT 0");
+  addColumn(db, "platform_artifacts", "document_id", "TEXT");
+  addColumn(db, "platform_artifacts", "scope", "TEXT");
+  addColumn(db, "platform_artifacts", "owners", "TEXT NOT NULL DEFAULT '[]'");
+  addColumn(db, "platform_artifacts", "relations", "TEXT NOT NULL DEFAULT '[]'");
+  addColumn(db, "platform_artifacts", "content", "TEXT NOT NULL DEFAULT ''");
+  addColumn(db, "platform_artifacts", "content_hash", "TEXT");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS hosts_node_id_unique ON hosts(node_id) WHERE node_id IS NOT NULL");
   db.exec("CREATE INDEX IF NOT EXISTS task_references_repo_id ON task_references(repo_id)");
+}
+
+/**
+ * Collapse the prototype's implementation-oriented Task states into the
+ * product's three collaboration states. This is intentionally idempotent so
+ * old databases are normalized on the first boot after upgrading while fresh
+ * databases and subsequent boots remain no-ops.
+ */
+function normalizePlatformTaskStatuses(db: DB) {
+  db.exec(`
+    UPDATE platform_tasks
+    SET status = CASE
+      WHEN status IN ('draft', 'active', 'pushed') THEN 'draft'
+      WHEN status IN ('review', 'in_review') THEN 'review'
+      WHEN status IN ('approved', 'merged', 'closed') THEN 'approved'
+      ELSE 'draft'
+    END
+    WHERE status NOT IN ('draft', 'review', 'approved')
+  `);
 }
 
 /**
@@ -243,5 +279,6 @@ export function initSchema(db: DB, opts: SchemaOpts) {
   db.exec(CREATE_SQL);
   reconcileColumns(db);
   dropDeprecated(db);
+  normalizePlatformTaskStatuses(db);
   if (opts.didMigrate) runPathMigration(db, opts.legacyDir, opts.dataDir);
 }

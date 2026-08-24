@@ -57,6 +57,7 @@ export async function discoverNode(probe: Probe, override?: string): Promise<Dis
 
 export interface WrapperOpts {
   appDir: string; // where the app (source + node_modules) lives on the target
+  binDir?: string; // installed command directory; exposed to child agent sessions
   override?: string; // optional user-specified node setup, tried before the auto rungs
   // Optional isolated data root. Profile launchers set this before Node starts,
   // so importing db/paths can never open the canonical instance's sqlite.
@@ -88,6 +89,7 @@ export function nodeLadderScript(override?: string): string {
  */
 export function renderWrapper(opts: WrapperOpts): string {
   const app = shq(opts.appDir);
+  const binPath = opts.binDir ? `${shq(opts.binDir)}:` : "";
   const ladder = nodeLadderScript(opts.override);
   const isolatedData = opts.dataDir
     ? `export TASK_DISPATCHER_DATA_DIR=${shq(opts.dataDir)}\n`
@@ -101,10 +103,13 @@ APP=${app}
 export TDSP_SOURCE_DIR="$APP"
 export TDSP_BIN="$0"
 ${isolatedData}${ladder}
-# git/tmux for what the app actually does
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+# git/tmux plus the sibling ay command for what the app and agent sessions do
+export PATH=${binPath}"/opt/homebrew/bin:/usr/local/bin:$PATH"
 command -v node >/dev/null 2>&1 || { echo "tdsp: no usable node found on this machine" >&2; exit 127; }
-exec node "$APP/node_modules/.bin/tsx" "$APP/server/tdsp.ts" "$@"
+case "\${0##*/}" in
+  ay|ay-*) exec node "$APP/node_modules/.bin/tsx" "$APP/server/ay.ts" "$@" ;;
+  *)       exec node "$APP/node_modules/.bin/tsx" "$APP/server/tdsp.ts" "$@" ;;
+esac
 `;
 }
 
@@ -118,7 +123,9 @@ export interface InstallPlan {
   src: string; // canonical code pointer: <home>/.task-dispatcher/src
   binDir: string;
   binPath: string; // the wrapper A invokes over ssh: <home>/.task-dispatcher/bin/tdsp
+  ayBinPath: string; // sibling multicall link: <home>/.task-dispatcher/bin/ay
   localBin: string; // a convenience symlink onto PATH for interactive use
+  ayLocalBin?: string; // canonical install only: ~/.local/bin/ay
   wrapper: string; // wrapper content (execs $src/server/tdsp.ts)
   profile?: string;
   dataDir?: string;
@@ -134,8 +141,10 @@ export function installPlan(home: string): InstallPlan {
     src,
     binDir,
     binPath: path.join(binDir, "tdsp"),
+    ayBinPath: path.join(binDir, "ay"),
     localBin: path.join(home, ".local", "bin", "tdsp"),
-    wrapper: renderWrapper({ appDir: src }), // always points at the src pointer
+    ayLocalBin: path.join(home, ".local", "bin", "ay"),
+    wrapper: renderWrapper({ appDir: src, binDir }), // always points at the src pointer
   };
 }
 
@@ -158,7 +167,9 @@ export function applyInstall(home: string, cloneDir: string): InstallPlan {
   // src → cloneDir (skip if the clone already lives at src — a fresh `git clone <src>`)
   if (path.resolve(cloneDir) !== path.resolve(p.src)) relink(path.resolve(cloneDir), p.src);
   fs.writeFileSync(p.binPath, p.wrapper, { mode: 0o755 });
+  relink(p.binPath, p.ayBinPath);
   try { relink(p.binPath, p.localBin); } catch { /* ~/.local/bin not writable — fixed path still works */ }
+  try { relink(p.ayBinPath, p.ayLocalBin!); } catch { /* ~/.local/bin not writable — fixed path still works */ }
   return p;
 }
 
@@ -184,8 +195,9 @@ export function profileInstallPlan(home: string, profile: string): InstallPlan {
     src,
     binDir,
     binPath: path.join(binDir, "tdsp"),
+    ayBinPath: path.join(binDir, "ay"),
     localBin: path.join(home, ".local", "bin", `tdsp-${profile}`),
-    wrapper: renderWrapper({ appDir: src, dataDir }),
+    wrapper: renderWrapper({ appDir: src, dataDir, binDir }),
     profile,
     dataDir,
   };
@@ -199,6 +211,7 @@ export function applyProfileInstall(home: string, cloneDir: string, profile: str
   fs.mkdirSync(p.dataDir!, { recursive: true });
   relink(path.resolve(cloneDir), p.src);
   fs.writeFileSync(p.binPath, p.wrapper, { mode: 0o755 });
+  relink(p.binPath, p.ayBinPath);
   try { relink(p.binPath, p.localBin); } catch { /* ~/.local/bin not writable — fixed path still works */ }
   return p;
 }
@@ -218,6 +231,7 @@ export interface BootstrapResult {
   ok: boolean;
   srcDir?: string;
   binPath?: string;
+  ayBinPath?: string;
   strategy?: string;
   nodeVersion?: string;
   cloned?: boolean; // true: cloned fresh; false: reused the target's existing src
@@ -242,6 +256,7 @@ export async function bootstrapMachine(deps: BootstrapDeps): Promise<BootstrapRe
   const root = `${deps.home}/.task-dispatcher`;
   const src = `${root}/src`;
   const binPath = `${root}/bin/tdsp`;
+  const ayBinPath = `${root}/bin/ay`;
   const ladder = nodeLadderScript(deps.override);
 
   const found = await discoverNode(deps.run, deps.override);
@@ -260,15 +275,15 @@ export async function bootstrapMachine(deps: BootstrapDeps): Promise<BootstrapRe
   const inst = await deps.run(`${ladder}\ncd ${shq(src)} && [ -d node_modules ] || npm install --no-audit --no-fund`);
   if (!inst.ok) return { ok: false, error: "npm install failed on the target" };
 
-  const wrapper = renderWrapper({ appDir: src, override: deps.override });
+  const wrapper = renderWrapper({ appDir: src, binDir: `${root}/bin`, override: deps.override });
   const b64 = Buffer.from(wrapper).toString("base64");
-  const write = await deps.run(`mkdir -p ${shq(`${root}/bin`)} && printf %s ${shq(b64)} | base64 --decode > ${shq(binPath)} && chmod +x ${shq(binPath)} && echo OK`);
+  const write = await deps.run(`mkdir -p ${shq(`${root}/bin`)} && printf %s ${shq(b64)} | base64 --decode > ${shq(binPath)} && chmod +x ${shq(binPath)} && ln -sfn tdsp ${shq(ayBinPath)} && echo OK`);
   if (!write.ok) return { ok: false, error: "could not install the wrapper" };
 
-  const verify = await deps.run(`${shq(binPath)} list >/dev/null 2>&1 && echo OK`);
+  const verify = await deps.run(`${shq(binPath)} list >/dev/null 2>&1 && ${shq(ayBinPath)} --help >/dev/null 2>&1 && echo OK`);
   if (!verify.ok) return { ok: false, error: "the installed wrapper failed to run" };
 
   await deps.run(`rm -rf ${shq(`${root}/app`)}`); // drop the legacy separate copy
 
-  return { ok: true, srcDir: src, binPath, strategy: found.strategy, nodeVersion: found.version, cloned };
+  return { ok: true, srcDir: src, binPath, ayBinPath, strategy: found.strategy, nodeVersion: found.version, cloned };
 }

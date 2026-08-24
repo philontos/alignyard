@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# switchyard 一键装机：环境预检（修 ~/.zshenv）→ npm install → 安装全局 tdsp。
-# clone 之后跑这一个脚本，之后一切用 `tdsp`（serve / update / …）。
+# switchyard 一键装机：环境预检（修 ~/.zshenv）→ npm install → 安装全局 tdsp / ay。
+# clone 之后跑这一个脚本，运行面用 `tdsp`，知识协议用 `ay`。
 #
 # 预检在防什么：dispatcher 用 `zsh -c 'claude …'`（远程走 `ssh host '<cmd>'`）
 # 起每个任务，那是只读 ~/.zshenv 的「非交互、非登录」shell —— PATH 里没有
@@ -165,11 +165,12 @@ install_all() {
   echo "${B}npm install（依赖装进 ${ROOT}，零构建）…${N}"
   (cd "$ROOT" && npm install --no-fund --no-audit)
   echo
-  echo "${B}安装全局 tdsp 命令…${N}"
+  echo "${B}安装全局 tdsp / ay 命令…${N}"
   (cd "$ROOT" && npm run -s tdsp -- install)
   echo
   echo "${G}全部装好。下一步:${N}"
   echo "  ${B}tdsp serve${N}"
+  echo "  ${B}ay --help${N}"
   echo "  打开 ${B}http://127.0.0.1:4500${N}，点击「连接设备」；网页会继续检查"
   echo "  Tailscale、手机二维码、常在线状态，以及可选的第二台电脑 / SSH。"
   echo "${G}日后更新代码:${N}${B} tdsp update${N}"

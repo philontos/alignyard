@@ -47,6 +47,7 @@ export async function registerOwnedRepo(env: OwnedRepoEnv, input: OwnedRepoInput
   if (runnerFailure) return runnerFailure;
   const name = String(input.name || "").trim();
   const gitUrl = String(input.git_url || "").trim();
+  const requestedDefaultBranch = String(input.default_branch || "").trim();
   if (!name || !gitUrl) return { ok: false, error: "fieldsRequired" };
   const hostId = localHostId(env.db);
   if (hostId == null) return { ok: false, error: "operationFailed", message: "local node is not initialized" };
@@ -62,11 +63,11 @@ export async function registerOwnedRepo(env: OwnedRepoEnv, input: OwnedRepoInput
     dest = existing.mirror_path || mirrorPath(env.runner.dataDir, id, name);
     env.db.prepare(
       "UPDATE repos SET name=?,git_url=?,token=?,default_branch=?,mirror_path=?,status='cloning',error=NULL WHERE id=?",
-    ).run(name, gitUrl, input.token || null, input.default_branch || "main", dest, id);
+    ).run(name, gitUrl, input.token || null, requestedDefaultBranch || "main", dest, id);
   } else {
     const info = env.db.prepare(
       "INSERT INTO repos (host_id,name,git_url,token,default_branch,status) VALUES (?,?,?,?,?,?)",
-    ).run(hostId, name, gitUrl, input.token || null, input.default_branch || "main", "cloning");
+    ).run(hostId, name, gitUrl, input.token || null, requestedDefaultBranch || "main", "cloning");
     id = Number(info.lastInsertRowid);
     dest = mirrorPath(env.runner.dataDir, id, name);
     env.db.prepare("UPDATE repos SET mirror_path=? WHERE id=?").run(dest, id);
@@ -74,8 +75,9 @@ export async function registerOwnedRepo(env: OwnedRepoEnv, input: OwnedRepoInput
   env.syncRepos();
 
   try {
-    await initMirror(env.runner, gitUrl, input.token || null, dest);
-    env.db.prepare("UPDATE repos SET status='ready',error=NULL WHERE id=?").run(id);
+    const detectedDefaultBranch = await initMirror(env.runner, gitUrl, input.token || null, dest);
+    env.db.prepare("UPDATE repos SET default_branch=?,status='ready',error=NULL WHERE id=?")
+      .run(requestedDefaultBranch || detectedDefaultBranch || "main", id);
     env.syncRepos();
     return { ok: true, id, existing: !!existing, retrying: !!existing, status: "ready" };
   } catch (error) {

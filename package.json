@@ -8,6 +8,7 @@
     "dev": "tsx watch server/index.ts",
     "start": "tsx server/index.ts",
     "tdsp": "tsx server/tdsp.ts",
+    "ay": "tsx server/ay.ts",
     "test": "node --import tsx --test \"server/**/*.test.ts\" \"web/**/*.test.mjs\"",
     "screenshots:readme": "node scripts/readme-demo/capture.mjs",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper 2>/dev/null || true"
@@ -18,7 +19,8 @@
     "express": "^4.21.2",
     "node-pty": "^1.0.0",
     "qrcode": "^1.5.4",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",

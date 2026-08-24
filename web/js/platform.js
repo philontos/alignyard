@@ -2,7 +2,6 @@ const state = {
   view: "tasks",
   tasks: [],
   repositories: [],
-  artifacts: [],
   taskFilter: "all",
   selectedTask: null,
   loading: false,
@@ -10,7 +9,6 @@ const state = {
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -28,13 +26,9 @@ async function api(path, options = {}) {
 }
 
 const statusLabels = {
-  draft: "待启动",
-  active: "进行中",
-  pushed: "已推送",
-  in_review: "等待 Review",
-  approved: "已批准",
-  merged: "已合并",
-  closed: "已关闭",
+  draft: "草稿",
+  review: "待审核",
+  approved: "已通过",
 };
 
 function formatDate(value, compact = false) {
@@ -84,20 +78,12 @@ function repositoryChips(repositories) {
   return visible + more;
 }
 
-function isDone(task) {
-  return task.status === "merged" || task.status === "closed";
-}
-
 function filteredTasks() {
-  const query = $("#task-search")?.value.trim().toLowerCase() || "";
-  const priorities = { in_review: 0, active: 1, pushed: 2, draft: 3, approved: 4, merged: 5, closed: 6 };
+  const priorities = { review: 0, draft: 1, approved: 2 };
   return state.tasks.filter((task) => {
     if (state.taskFilter === "mine" && task.owner !== "Phil") return false;
-    if (state.taskFilter === "review" && task.status !== "in_review") return false;
-    if (state.taskFilter === "done" && !isDone(task)) return false;
-    if (!query) return true;
-    const haystack = [task.key, task.title, task.description, task.owner, ...task.repositories.map((repo) => repo.name)].join(" ").toLowerCase();
-    return haystack.includes(query);
+    if (state.taskFilter === "review" && task.status !== "review") return false;
+    return true;
   }).sort((left, right) => (priorities[left.status] ?? 9) - (priorities[right.status] ?? 9));
 }
 
@@ -106,29 +92,21 @@ function renderTaskList() {
   const tasks = filteredTasks();
   target.classList.remove("loading-block");
   if (!tasks.length) {
-    const completelyEmpty = state.tasks.length === 0;
-    target.innerHTML = `<div class="empty-state"><div><span class="empty-symbol">${completelyEmpty ? "＋" : "⌕"}</span><h3>${completelyEmpty ? "从第一个共享 Task 开始" : "没有匹配的 Task"}</h3><p>${completelyEmpty ? "登记需求、相关 Repository 和负责人；随后团队成员即可在各自本机接手执行。" : "调整筛选条件或搜索内容后再试。"}</p>${completelyEmpty ? '<button class="button primary" type="button" data-create-task>创建第一个 Task</button>' : ""}</div></div>`;
-    wireDynamicButtons(target);
+    target.classList.add("is-empty");
+    target.innerHTML = `<div class="task-empty" aria-label="暂无 Task"></div>`;
     return;
   }
+  target.classList.remove("is-empty");
   target.innerHTML = tasks.map((task) => `<button class="task-row" type="button" data-task-key="${escapeHtml(task.key)}">
-    <span class="task-main"><span class="task-key-line"><span class="task-key">${escapeHtml(task.key)}</span>${statusPill(task.status)}</span><strong class="task-title">${escapeHtml(task.title)}</strong><small class="task-description">${escapeHtml(task.description || "尚未填写需求说明")}</small></span>
+    <span class="task-main"><span class="task-key-line"><span class="task-key">${escapeHtml(task.key)}</span>${statusPill(task.status)}</span><strong class="task-title">${escapeHtml(task.title)}</strong></span>
     <span class="repo-chips">${repositoryChips(task.repositories)}</span>
     <span class="task-owner"><span class="mini-avatar">${escapeHtml(initial(task.owner))}</span>${escapeHtml(task.owner)}</span>
-    <span class="task-time">更新于<br>${escapeHtml(formatDate(task.updated_at, true))}</span>
   </button>`).join("");
   $$('[data-task-key]', target).forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.taskKey)));
 }
 
 function renderTaskSummary() {
-  const active = state.tasks.filter((task) => ["draft", "active", "pushed"].includes(task.status)).length;
-  const review = state.tasks.filter((task) => task.status === "in_review").length;
-  const done = state.tasks.filter(isDone).length;
-  $("#summary-active").textContent = active;
-  $("#summary-review").textContent = review;
-  $("#summary-done").textContent = done;
   $("#nav-task-count").textContent = state.tasks.length;
-  $("#nav-review-count").textContent = review;
 }
 
 function renderTasks() {
@@ -136,86 +114,49 @@ function renderTasks() {
   renderTaskList();
 }
 
-function filteredRepositories() {
-  const query = $("#repo-search")?.value.trim().toLowerCase() || "";
-  return state.repositories.filter((repo) => !query || `${repo.name} ${repo.git_url}`.toLowerCase().includes(query));
-}
-
 function renderRepositories() {
   const target = $("#repository-grid");
-  const repositories = filteredRepositories();
   $("#nav-repo-count").textContent = state.repositories.length;
-  $("#repo-total-label").textContent = `${state.repositories.length} 个 Repository`;
+  $("#repo-total-label").textContent = `${state.repositories.length} Repositories`;
   target.classList.remove("loading-block");
-  if (!repositories.length) {
-    target.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div><span class="empty-symbol">◇</span><h3>${state.repositories.length ? "没有匹配的 Repository" : "Repository Catalog 还是空的"}</h3><p>${state.repositories.length ? "换一个名称或 Git 地址试试。" : "登记一个团队成员都能发现的 Git 地址；每个人仍使用自己的权限拉取。"}</p>${state.repositories.length ? "" : '<button class="button primary" type="button" data-add-repository>登记第一个 Repository</button>'}</div></div>`;
-    wireDynamicButtons(target);
+  if (!state.repositories.length) {
+    target.classList.add("is-empty");
+    target.innerHTML = `<div class="repo-empty" aria-label="暂无 Repository"></div>`;
     return;
   }
-  target.innerHTML = repositories.map((repo) => {
+  target.classList.remove("is-empty");
+  target.innerHTML = state.repositories.map((repo) => {
     const taskCount = state.tasks.filter((task) => task.repositories.some((item) => item.id === repo.id)).length;
-    return `<article class="repository-card">
-      <div class="repo-card-head"><span class="repo-glyph">${escapeHtml(initial(repo.name))}</span><div><h3>${escapeHtml(repo.name)}</h3><small>由 ${escapeHtml(repo.created_by)} 登记</small></div></div>
-      <p class="repo-url" title="${escapeHtml(repo.git_url)}">${escapeHtml(repo.git_url)}</p>
-      <div class="repo-meta"><span class="meta-chip">⑂ ${escapeHtml(repo.default_branch)}</span><span class="meta-chip">${taskCount} Tasks</span></div>
-      <div class="manifest-waiting"><span>●</span> Manifest 等待本地 ay sync</div>
-      <div class="repo-actions"><button class="button primary small" type="button" data-open-local="${escapeHtml(repo.name)}">本地打开</button><button class="button secondary small" type="button" data-task-from-repo="${repo.id}">创建 Task</button></div>
+    const initTask = state.tasks.find((task) =>
+      task.repositories.some((item) => item.id === repo.id) && task.title === `Initialize Alignyard · ${repo.name}`
+    );
+    const label = repo.protocol_initialized ? "已完成 ay init；点击刷新" : "尚未 ay init；点击刷新";
+    return `<article class="repository-row">
+      <button class="protocol-indicator ${repo.protocol_initialized ? "initialized" : ""}" type="button" data-refresh-protocol="${repo.id}" aria-label="${label}" title="${label}"><i></i></button>
+      <span class="repository-main"><strong>${escapeHtml(repo.name)}</strong><small title="${escapeHtml(repo.git_url)}">${escapeHtml(repo.git_url)}</small></span>
+      <span class="repository-branch">${escapeHtml(repo.default_branch)}</span>
+      <span class="repository-task-count">${taskCount} Tasks</span>
+      <span class="repository-actions">${repo.protocol_initialized
+        ? `<button class="button secondary small" type="button" data-task-from-repo="${repo.id}">＋ Task</button>`
+        : initTask
+          ? `<button class="button secondary small" type="button" data-task-key="${escapeHtml(initTask.key)}">${escapeHtml(initTask.key)}</button>`
+          : `<button class="button secondary small" type="button" data-init-repository="${repo.id}">Init</button>`}
+      </span>
     </article>`;
   }).join("");
-  $$('[data-open-local]', target).forEach((button) => button.addEventListener("click", () => copyCommand(`ay repo open ${button.dataset.openLocal}`)));
   $$('[data-task-from-repo]', target).forEach((button) => button.addEventListener("click", () => openTaskDialog(Number(button.dataset.taskFromRepo))));
-}
-
-function renderReviews() {
-  const target = $("#review-list");
-  const reviewTasks = state.tasks.filter((task) => task.status === "in_review");
-  $("#review-total-label").textContent = `${reviewTasks.length} 项`;
-  target.classList.remove("loading-block");
-  if (!reviewTasks.length) {
-    target.innerHTML = `<div class="empty-state"><div><span class="empty-symbol">✓</span><h3>当前没有等待 Review 的 Task</h3><p>Task 推送分支并通过 <code>ay sync</code> 固定 commit 后，会进入这里。</p></div></div>`;
-    return;
-  }
-  target.innerHTML = reviewTasks.map((task) => `<button class="review-row" type="button" data-task-key="${escapeHtml(task.key)}" style="width:100%;border-left:0;border-right:0;border-top:0;background:transparent;text-align:left">
-    <span><span class="review-meta"><b class="task-key">${escapeHtml(task.key)}</b><span>·</span><span>${escapeHtml(task.owner)}</span><span>·</span><span>${task.repositories.length} Repositories</span></span><h3>${escapeHtml(task.title)}</h3><p>${task.artifacts.length ? `${task.artifacts.length} 份工程知识等待确认` : "等待本地同步 specs、ADR、docs 快照"}</p></span>
-    ${statusPill(task.status)}
-  </button>`).join("");
   $$('[data-task-key]', target).forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.taskKey)));
-}
-
-function artifactKind(kind) {
-  const normalized = String(kind || "docs").toLowerCase();
-  if (normalized === "adr") return "adr";
-  if (normalized === "spec" || normalized === "specs") return "specs";
-  return "docs";
-}
-
-function renderKnowledge() {
-  const counts = { docs: 0, specs: 0, adr: 0 };
-  state.artifacts.forEach((artifact) => { counts[artifactKind(artifact.kind)] += 1; });
-  $("#knowledge-docs").textContent = counts.docs;
-  $("#knowledge-specs").textContent = counts.specs;
-  $("#knowledge-adr").textContent = counts.adr;
-  $("#knowledge-pending").textContent = state.artifacts.filter((artifact) => artifact.review_status !== "approved").length;
-  const target = $("#artifact-list");
-  if (!state.artifacts.length) {
-    target.innerHTML = `<div class="empty-state"><div><span class="empty-symbol">⌘</span><h3>等待第一次 manifest 同步</h3><p>在本机打开一个 Task 后执行 <code>ay sync</code>，这里将出现由 commit 固定的 docs、specs 和 ADR 变更。</p></div></div>`;
-    return;
-  }
-  target.innerHTML = state.artifacts.map((artifact) => {
-    const kind = artifactKind(artifact.kind);
-    return `<article class="artifact-row"><span class="artifact-kind ${kind}">${escapeHtml(kind.slice(0, 4))}</span><div><strong>${escapeHtml(artifact.title || artifact.path)}</strong><small>${escapeHtml(artifact.repository_name)} · ${escapeHtml(artifact.path)}</small></div><span>${escapeHtml(artifact.task_key)}</span></article>`;
-  }).join("");
+  $$('[data-init-repository]', target).forEach((button) => button.addEventListener("click", () => openInitTask(Number(button.dataset.initRepository))));
+  $$('[data-refresh-protocol]', target).forEach((button) => button.addEventListener("click", () => refreshProtocol(Number(button.dataset.refreshProtocol), button)));
 }
 
 function renderAll() {
   renderTasks();
   renderRepositories();
-  renderReviews();
-  renderKnowledge();
 }
 
 function setView(view, { updateHash = true } = {}) {
-  const allowed = ["tasks", "repositories", "reviews", "knowledge"];
+  const allowed = ["tasks", "repositories"];
   const next = allowed.includes(view) ? view : "tasks";
   state.view = next;
   $$(".view").forEach((element) => element.classList.toggle("active", element.id === `view-${next}`));
@@ -256,22 +197,31 @@ function taskRepositoryOptions(preselectId) {
   $$('.repo-option input[type="checkbox"]', target).forEach((checkbox) => checkbox.addEventListener("change", () => checkbox.closest(".repo-option").classList.toggle("selected", checkbox.checked)));
 }
 
-function openTaskDialog(preselectId) {
+function openTaskDialog(preselectId, defaults = {}) {
   const form = $("#create-task-form");
   form.reset();
   form.elements.owner.value = "Phil";
+  form.elements.title.value = defaults.title || "";
+  form.elements.description.value = defaults.description || "";
   $("#task-form-error").textContent = "";
   taskRepositoryOptions(preselectId);
   $("#create-task-dialog").hidden = false;
   setTimeout(() => form.elements.title.focus(), 0);
 }
 
+function openInitTask(repositoryId) {
+  const repository = state.repositories.find((item) => item.id === repositoryId);
+  if (!repository) return;
+  openTaskDialog(repository.id, {
+    title: `Initialize Alignyard · ${repository.name}`,
+    description: `为 ${repository.name} 初始化最小 .alignyard 协议；运行 ay init 与 ay validate，提交后发起 Review。`,
+  });
+}
+
 function closeTaskDialog() { $("#create-task-dialog").hidden = true; }
 function openRepositoryDialog() {
   const form = $("#add-repository-form");
   form.reset();
-  form.elements.default_branch.value = "main";
-  form.elements.created_by.value = "Phil";
   $("#repo-form-error").textContent = "";
   $("#add-repository-dialog").hidden = false;
   setTimeout(() => form.elements.name.focus(), 0);
@@ -315,24 +265,71 @@ async function submitTask(event) {
 async function submitRepository(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  const payload = Object.fromEntries(new FormData(form).entries());
+  const values = Object.fromEntries(new FormData(form).entries());
+  const localPayload = {
+    name: String(values.name || "").trim(),
+    git_url: String(values.git_url || "").trim(),
+    default_branch: String(values.default_branch || "").trim(),
+    token: String(values.token || "").trim() || null,
+  };
   const submit = $("#add-repository-submit");
   submit.disabled = true;
-  submit.textContent = "登记中…";
+  submit.textContent = "添加中…";
   $("#repo-form-error").textContent = "";
   try {
-    const repository = await api("/api/platform/repositories", { method: "POST", body: JSON.stringify(payload) });
-    state.repositories.unshift(repository);
+    const localResult = await api("/api/repos", { method: "POST", body: JSON.stringify(localPayload) });
+    const localRepositories = await api("/api/repos");
+    const localRepository = localRepositories.find((item) => item.id === localResult.id);
+    if (!localRepository) throw new Error("本地 Repository 添加后未找到");
+    localPayload.default_branch = localRepository.default_branch;
+    let repository;
+    try {
+      repository = await api("/api/platform/repositories", {
+        method: "POST",
+        body: JSON.stringify({ ...localPayload, token: undefined, created_by: "Phil" }),
+      });
+    } catch (error) {
+      const repositories = await api("/api/platform/repositories");
+      const normalize = (value) => String(value || "").trim().replace(/\/+$/, "").replace(/\.git$/i, "");
+      repository = repositories.find((item) => normalize(item.git_url) === normalize(localPayload.git_url));
+      if (!repository) throw error;
+    }
+    try {
+      repository = await api(`/api/platform/repositories/${repository.id}/refresh`, { method: "POST" });
+    } catch { /* The dot remains off until the default branch can be checked. */ }
+    state.repositories = await api("/api/platform/repositories");
     closeRepositoryDialog();
     renderAll();
     if (!$("#create-task-dialog").hidden) taskRepositoryOptions(repository.id);
-    toast(`${repository.name} 已进入 Repository Catalog`);
+    toast(`${repository.name} 已添加`);
   } catch (error) {
     $("#repo-form-error").textContent = error.message;
   } finally {
     submit.disabled = false;
-    submit.textContent = "登记 Repository";
+    submit.textContent = "添加 Repository";
   }
+}
+
+async function refreshProtocol(repositoryId, button) {
+  button.disabled = true;
+  try {
+    const repository = await api(`/api/platform/repositories/${repositoryId}/refresh`, { method: "POST" });
+    const index = state.repositories.findIndex((item) => item.id === repositoryId);
+    if (index >= 0) state.repositories[index] = repository;
+    renderRepositories();
+    toast(repository.protocol_initialized ? ".alignyard 已初始化" : ".alignyard 尚未初始化");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    if (button.isConnected) button.disabled = false;
+  }
+}
+
+function artifactKind(kind) {
+  const normalized = String(kind || "docs").toLowerCase();
+  if (normalized === "adr") return "adr";
+  if (normalized === "spec" || normalized === "specs") return "specs";
+  return "docs";
 }
 
 function detailRepository(repo) {
@@ -340,9 +337,8 @@ function detailRepository(repo) {
 }
 
 function taskNextAction(task) {
-  if (["draft", "active", "pushed"].includes(task.status)) return `<button class="button secondary" type="button" data-set-status="in_review">标记为待 Review</button>`;
-  if (task.status === "in_review") return `<button class="button primary" type="button" data-set-status="approved">批准 Task</button>`;
-  if (task.status === "approved") return `<button class="button primary" type="button" data-set-status="merged">标记为已合并</button>`;
+  if (task.status === "draft") return `<button class="button secondary" type="button" data-set-status="review">提交审核</button>`;
+  if (task.status === "review") return `<button class="button secondary" type="button" data-set-status="draft">要求修改</button><button class="button primary" type="button" data-set-status="approved">审核通过</button>`;
   return "";
 }
 
@@ -384,14 +380,12 @@ async function loadData() {
   if (state.loading) return;
   state.loading = true;
   try {
-    const [repositories, tasks, artifacts] = await Promise.all([
+    const [repositories, tasks] = await Promise.all([
       api("/api/platform/repositories"),
       api("/api/platform/tasks"),
-      api("/api/platform/artifacts"),
     ]);
     state.repositories = repositories;
     state.tasks = tasks;
-    state.artifacts = artifacts;
     renderAll();
   } catch (error) {
     toast(`无法加载预览数据：${error.message}`, "error");
@@ -409,8 +403,6 @@ function bindEvents() {
     $$('[data-task-filter]').forEach((item) => item.classList.toggle("active", item === button));
     renderTaskList();
   }));
-  $("#task-search").addEventListener("input", renderTaskList);
-  $("#repo-search").addEventListener("input", renderRepositories);
   $("#create-task-form").addEventListener("submit", submitTask);
   $("#add-repository-form").addEventListener("submit", submitRepository);
   $$('[data-close-dialog]').forEach((button) => button.addEventListener("click", closeTaskDialog));

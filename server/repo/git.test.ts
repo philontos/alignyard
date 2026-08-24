@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fetchBranch, fetchMirror, addDetachedWorktreeFromBranch, addWorktreeFromBranch } from "./git.ts";
+import { fetchBranch, fetchMirror, readRemoteBranchFile, addDetachedWorktreeFromBranch, addWorktreeFromBranch } from "./git.ts";
 import { localRunner } from "../fleet/runner.ts";
 import type { Runner } from "../fleet/runner.ts";
 
@@ -53,6 +53,22 @@ test("fetchMirror refreshes into the remote-tracking namespace (prune), not loca
     !fetch!.args.includes("+refs/heads/*:refs/heads/*"),
     "fetchMirror must NOT write local heads",
   );
+});
+
+test("readRemoteBranchFile fetches then reads a file without creating a worktree", async () => {
+  const calls: { file: string; args: string[] }[] = [];
+  const runner = {
+    kind: "local", dataDir: "/tmp",
+    exec: async (file: string, args: string[]) => {
+      calls.push({ file, args });
+      return args[0] === "show" ? "version: 1\n" : "";
+    },
+    async mkdirp() {}, async exists() { return false; }, async readText() { return null; }, async rmrf() {},
+    async putDir() {}, async putFile() {},
+  } as unknown as Runner;
+  assert.equal(await readRemoteBranchFile(runner, "/m.git", "main", ".alignyard/repository.yaml"), "version: 1\n");
+  assert.deepEqual(calls.map((call) => call.args[0]), ["fetch", "show"]);
+  assert.equal(calls[1].args[1], "refs/remotes/origin/main:.alignyard/repository.yaml");
 });
 
 // --- integration (real git): the reported bug + its fallback -------------------

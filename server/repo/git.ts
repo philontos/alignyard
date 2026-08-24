@@ -43,12 +43,19 @@ export function mirrorPath(dataDir: string, repoId: number, name: string): strin
  * bare repo, point it at origin, and validate connectivity via ls-remote.
  * Objects for a branch are only fetched later, at dispatch time.
  */
-export async function initMirror(runner: Runner, gitUrl: string, token: string | null, dest: string) {
+export async function initMirror(
+  runner: Runner,
+  gitUrl: string,
+  token: string | null,
+  dest: string,
+): Promise<string | null> {
   await runner.mkdirp(path.dirname(dest));
   if (await runner.exists(dest)) await runner.rmrf(dest);
   await git(runner, null, ["init", "--bare", dest]);
   await git(runner, dest, ["remote", "add", "origin", authUrl(gitUrl, token)]);
   await git(runner, dest, ["ls-remote", "--heads", "origin"]); // throws on bad url/auth/host
+  const symref = await git(runner, dest, ["ls-remote", "--symref", "origin", "HEAD"]).catch(() => "");
+  return symref.match(/^ref:\s+refs\/heads\/(.+)\s+HEAD$/m)?.[1]?.trim() || null;
 }
 
 /** Live list of remote branches — always current, no local staleness. */
@@ -80,6 +87,19 @@ export async function listBranches(runner: Runner, mirror: string): Promise<stri
  */
 export async function fetchBranch(runner: Runner, mirror: string, branch: string) {
   await git(runner, mirror, ["fetch", "--filter=blob:none", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
+}
+
+/** Read one versioned text file from the current remote branch without making
+ * a worktree. Missing files are represented as null; network/fetch failures are
+ * still surfaced so the caller does not confuse "offline" with "not init". */
+export async function readRemoteBranchFile(
+  runner: Runner,
+  mirror: string,
+  branch: string,
+  filePath: string,
+): Promise<string | null> {
+  await fetchBranch(runner, mirror, branch);
+  return git(runner, mirror, ["show", `refs/remotes/origin/${branch}:${filePath}`]).catch(() => null);
 }
 
 /** Manual full refresh of all branches (the repo card's "fetch" button). Keeps

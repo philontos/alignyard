@@ -272,12 +272,20 @@ function fakeDeps(db: Database.Database) {
           ? {
               src: `/h/.task-dispatcher/profiles/${profile}/src`,
               binPath: `/h/.task-dispatcher/profiles/${profile}/bin/tdsp`,
+              ayBinPath: `/h/.task-dispatcher/profiles/${profile}/bin/ay`,
               localBin: `/h/.local/bin/tdsp-${profile}`,
               dataDir: `/h/.task-dispatcher/profiles/${profile}/data`,
               profile,
               clone: "/h/clone",
             }
-          : { src: "/h/.task-dispatcher/src", binPath: "/h/.task-dispatcher/bin/tdsp", localBin: "/h/.local/bin/tdsp", clone: "/h/clone" };
+          : {
+              src: "/h/.task-dispatcher/src",
+              binPath: "/h/.task-dispatcher/bin/tdsp",
+              ayBinPath: "/h/.task-dispatcher/bin/ay",
+              localBin: "/h/.local/bin/tdsp",
+              ayLocalBin: "/h/.local/bin/ay",
+              clone: "/h/clone",
+            };
       },
       uninstall: async (profile: string, purge: boolean) => {
         uninstallCalls.push([profile, purge]);
@@ -803,6 +811,7 @@ test("runCli install sets up the machine and reports the paths", async () => {
   assert.equal(code, 0);
   assert.match(f.out, /\.task-dispatcher\/src/);
   assert.match(f.out, /\.task-dispatcher\/bin\/tdsp/);
+  assert.match(f.out, /\.local\/bin\/ay/);
   assert.match(f.out, /no server was started/);
   assert.match(f.out, /tdsp serve status/);
 });
