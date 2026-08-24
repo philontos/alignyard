@@ -44,6 +44,7 @@ function send(data) {
 
 export function closePlatformAgentWorkspace() {
   element("agent-workspace").hidden = true;
+  element("task-drawer").classList.remove("agent-mode");
   document.body.classList.remove("agent-workspace-open");
   if (!active) return;
   const closing = active;
@@ -69,6 +70,7 @@ export function openPlatformAgentWorkspace(task) {
   element("agent-workspace-key").textContent = task.key;
   element("agent-workspace-title").textContent = task.title;
   workspace.hidden = false;
+  element("task-drawer").classList.add("agent-mode");
   document.body.classList.add("agent-workspace-open");
   setConnectionState("正在连接…", "connecting");
 
