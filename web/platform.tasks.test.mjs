@@ -35,7 +35,22 @@ test("Repositories surface shows protocol workflow state and creates a dedicated
   assert.match(script, /data-init-repository/);
   assert.match(script, /\/api\/platform\/repositories\/\$\{repositoryId\}\/initialize/);
   assert.match(script, /task\.task_type === "repository_init"/);
+  assert.match(script, /初始化 Agent 已启动/);
   assert.doesNotMatch(html, /notice-card|repo-search|repository-card/);
+});
+
+test("Repository Init drawer closes runtime, Review, PR, and merge behind explicit actions", () => {
+  assert.match(script, /data-run-init/);
+  assert.match(script, /data-init-review/);
+  assert.match(script, /data-init-pr/);
+  assert.match(script, /data-init-merge/);
+  assert.match(script, /\/api\/platform\/tasks\/\$\{encodeURIComponent\(key\)\}\/run/);
+  assert.match(script, /"pull-request"/);
+  assert.match(script, /"merge"/);
+  assert.match(script, /要求修改/);
+  assert.match(script, /重试完成初始化/);
+  assert.match(script, /href="\/\?task=\$\{task\.runtime_task_id\}"/);
+  assert.match(script, /手动模式与诊断命令/);
 });
 
 test("Repositories surface exposes guarded deletion through the platform API", () => {

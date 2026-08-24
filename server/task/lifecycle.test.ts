@@ -22,6 +22,7 @@ function seed() {
 
 test("resumeTask relaunches a dead archived task and marks it running", async () => {
   const db = seed();
+  db.prepare("UPDATE tasks SET status='error',error='previous failure' WHERE id=7").run();
   const started: number[] = [];
   const manifested: number[] = [];
   const result = await resumeTask(
@@ -38,7 +39,10 @@ test("resumeTask relaunches a dead archived task and marks it running", async ()
   assert.deepEqual(result, { ok: true, alreadyAlive: false });
   assert.deepEqual(started, [7]);
   assert.deepEqual(manifested, [7]);
-  assert.equal((db.prepare("SELECT status FROM tasks WHERE id=7").get() as any).status, "running");
+  assert.deepEqual(
+    db.prepare("SELECT status,error FROM tasks WHERE id=7").get(),
+    { status: "running", error: null },
+  );
 });
 
 test("resumeTask refuses a task whose retained worktree is gone", async () => {

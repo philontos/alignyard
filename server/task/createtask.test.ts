@@ -242,6 +242,26 @@ test("createRepoTask inserts a running task, prepares the worktree, starts the s
   }
 });
 
+test("createRepoTask accepts a platform-owned stable work branch", async () => {
+  const { env, dir, db, getSetup } = makeRepoEnv();
+  try {
+    const r = await createRepoTask(env, REPO, {
+      baseBranch: "master",
+      title: "Initialize Alignyard",
+      workBranch: "change/ay-001/phil",
+      prompt: "initialize",
+      agent: "codex",
+    });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.workBranch, "change/ay-001/phil");
+    assert.equal(getSetup().workBranch, "change/ay-001/phil");
+    assert.equal((db.prepare("SELECT work_branch FROM tasks WHERE id=?").get(r.id) as any).work_branch, "change/ay-001/phil");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("createRepoTask materializes pinned repository references and gives them to the agent", async () => {
   const { env, dir, db, calls, getStart } = makeRepoEnv();
   try {

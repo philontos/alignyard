@@ -73,7 +73,7 @@ export async function resumeTask(env: ResumeTaskEnv, id: number): Promise<Lifecy
   try {
     const alreadyAlive = await env.hasSession(task.session).catch(() => false);
     if (!alreadyAlive) await env.startSession(task);
-    env.db.prepare("UPDATE tasks SET status='running' WHERE id=?").run(id);
+    env.db.prepare("UPDATE tasks SET status='running',error=NULL WHERE id=?").run(id);
     await env.writeManifest(id);
     return { ok: true, alreadyAlive };
   } catch (error) {

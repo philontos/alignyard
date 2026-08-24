@@ -57,6 +57,18 @@ test("initSchema stores compatible protocol state on platform repositories", () 
   );
 });
 
+test("initSchema stores platform runtime and pull-request workflow state", () => {
+  const db = new Database(":memory:");
+  initSchema(db, opts(false));
+  const columns = (db.prepare("PRAGMA table_info(platform_tasks)").all() as { name: string }[])
+    .map((column) => column.name);
+  for (const field of ["runtime_task_id", "workflow_error", "pr_number", "pr_url", "pr_state", "merged_at"]) {
+    assert.ok(columns.includes(field), `missing ${field}`);
+  }
+  db.prepare("INSERT INTO platform_tasks (task_key,title,owner) VALUES ('AY-1','Init','Phil')").run();
+  assert.equal((db.prepare("SELECT pr_state FROM platform_tasks").get() as { pr_state: string }).pr_state, "none");
+});
+
 test("initSchema migrates binary Repository state and title-based init Tasks", () => {
   const db = new Database(":memory:");
   initSchema(db, opts(false));

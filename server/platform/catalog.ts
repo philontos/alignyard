@@ -76,6 +76,17 @@ export interface PlatformTask {
   owner: string;
   task_type: PlatformTaskType;
   status: PlatformTaskStatus;
+  runtime_task_id: number | null;
+  runtime_status: string | null;
+  runtime_error: string | null;
+  runtime_worktree: string | null;
+  runtime_session: string | null;
+  runtime_agent: string | null;
+  workflow_error: string | null;
+  pr_number: number | null;
+  pr_url: string | null;
+  pr_state: "none" | "open" | "merged" | "closed";
+  merged_at: string | null;
   created_at: string;
   updated_at: string;
   repositories: PlatformTaskRepository[];
@@ -193,6 +204,17 @@ function shapeTask(db: DB, row: TaskRow): PlatformTask {
     owner: row.owner,
     task_type: row.task_type,
     status: row.status,
+    runtime_task_id: row.runtime_task_id,
+    runtime_status: row.runtime_status,
+    runtime_error: row.runtime_error,
+    runtime_worktree: row.runtime_worktree,
+    runtime_session: row.runtime_session,
+    runtime_agent: row.runtime_agent,
+    workflow_error: row.workflow_error,
+    pr_number: row.pr_number,
+    pr_url: row.pr_url,
+    pr_state: row.pr_state,
+    merged_at: row.merged_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
     repositories: repositoriesForTask(db, row.id),
@@ -202,18 +224,86 @@ function shapeTask(db: DB, row: TaskRow): PlatformTask {
 
 export function listPlatformTasks(db: DB): PlatformTask[] {
   const rows = db.prepare(
-    "SELECT id,task_key,title,description,owner,task_type,status,created_at,updated_at " +
-      "FROM platform_tasks ORDER BY updated_at DESC,id DESC",
+    "SELECT pt.id,pt.task_key,pt.title,pt.description,pt.owner,pt.task_type,pt.status," +
+      "pt.runtime_task_id,rt.status AS runtime_status,rt.error AS runtime_error," +
+      "rt.worktree_path AS runtime_worktree,rt.session AS runtime_session,rt.agent AS runtime_agent," +
+      "pt.workflow_error,pt.pr_number,pt.pr_url,pt.pr_state,pt.merged_at,pt.created_at,pt.updated_at " +
+      "FROM platform_tasks pt LEFT JOIN tasks rt ON rt.id=pt.runtime_task_id " +
+      "ORDER BY pt.updated_at DESC,pt.id DESC",
   ).all() as TaskRow[];
   return rows.map((row) => shapeTask(db, row));
 }
 
 export function getPlatformTask(db: DB, key: string): PlatformTask | undefined {
   const row = db.prepare(
-    "SELECT id,task_key,title,description,owner,task_type,status,created_at,updated_at " +
-      "FROM platform_tasks WHERE task_key=?",
+    "SELECT pt.id,pt.task_key,pt.title,pt.description,pt.owner,pt.task_type,pt.status," +
+      "pt.runtime_task_id,rt.status AS runtime_status,rt.error AS runtime_error," +
+      "rt.worktree_path AS runtime_worktree,rt.session AS runtime_session,rt.agent AS runtime_agent," +
+      "pt.workflow_error,pt.pr_number,pt.pr_url,pt.pr_state,pt.merged_at,pt.created_at,pt.updated_at " +
+      "FROM platform_tasks pt LEFT JOIN tasks rt ON rt.id=pt.runtime_task_id WHERE pt.task_key=?",
   ).get(key.toUpperCase()) as TaskRow | undefined;
   return row ? shapeTask(db, row) : undefined;
+}
+
+export function linkPlatformTaskRuntime(
+  db: DB,
+  key: string,
+  runtime: { id: number; work_branch: string; base_commit: string | null },
+): PlatformTask | undefined {
+  const task = getPlatformTask(db, key);
+  if (!task) return undefined;
+  db.transaction(() => {
+    db.prepare(
+      "UPDATE platform_tasks SET runtime_task_id=?,workflow_error=NULL,updated_at=datetime('now') WHERE id=?",
+    ).run(runtime.id, task.id);
+    db.prepare(
+      "UPDATE platform_task_repositories SET work_branch=?,base_commit=COALESCE(?,base_commit) " +
+        "WHERE task_id=? AND mode='editable'",
+    ).run(runtime.work_branch, runtime.base_commit, task.id);
+  })();
+  return getPlatformTask(db, key);
+}
+
+export function setPlatformTaskWorkflowError(db: DB, key: string, error: string | null): PlatformTask | undefined {
+  const changed = db.prepare(
+    "UPDATE platform_tasks SET workflow_error=?,updated_at=datetime('now') WHERE task_key=?",
+  ).run(error, key.toUpperCase()).changes;
+  return changed ? getPlatformTask(db, key) : undefined;
+}
+
+export function updatePlatformTaskCommits(
+  db: DB,
+  key: string,
+  commits: { base_commit?: string | null; head_commit?: string | null },
+): PlatformTask | undefined {
+  const task = getPlatformTask(db, key);
+  if (!task) return undefined;
+  db.prepare(
+    "UPDATE platform_task_repositories SET base_commit=COALESCE(?,base_commit)," +
+      "head_commit=COALESCE(?,head_commit),last_reported_at=datetime('now') " +
+      "WHERE task_id=? AND mode='editable'",
+  ).run(commits.base_commit ?? null, commits.head_commit ?? null, task.id);
+  return getPlatformTask(db, key);
+}
+
+export function recordPlatformPullRequest(
+  db: DB,
+  key: string,
+  pullRequest: { number: number; url: string; state: "open" | "merged" | "closed" },
+): PlatformTask | undefined {
+  const changed = db.prepare(
+    "UPDATE platform_tasks SET pr_number=?,pr_url=?,pr_state=?,workflow_error=NULL," +
+      "updated_at=datetime('now') WHERE task_key=?",
+  ).run(pullRequest.number, pullRequest.url, pullRequest.state, key.toUpperCase()).changes;
+  return changed ? getPlatformTask(db, key) : undefined;
+}
+
+export function markPlatformPullRequestMerged(db: DB, key: string): PlatformTask | undefined {
+  const changed = db.prepare(
+    "UPDATE platform_tasks SET pr_state='merged',merged_at=datetime('now'),workflow_error=NULL," +
+      "updated_at=datetime('now') WHERE task_key=?",
+  ).run(key.toUpperCase()).changes;
+  return changed ? getPlatformTask(db, key) : undefined;
 }
 
 export function createPlatformTask(db: DB, input: Record<string, unknown>): PlatformTask {
@@ -383,6 +473,11 @@ export function updatePlatformTaskStatus(db: DB, key: string, status: unknown): 
   const changed = db.prepare(
     "UPDATE platform_tasks SET status=?,updated_at=datetime('now') WHERE task_key=?",
   ).run(status, key.toUpperCase()).changes;
+  if (changed && task.task_type === "repository_init" && task.status === "review" && status === "draft") {
+    db.prepare(
+      "UPDATE platform_task_repositories SET manifest_status='waiting' WHERE task_id=? AND mode='editable'",
+    ).run(task.id);
+  }
   return changed ? getPlatformTask(db, key) : undefined;
 }
 

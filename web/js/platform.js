@@ -271,9 +271,10 @@ async function initializeRepository(repositoryId, button) {
     renderAll();
     setView("tasks");
     openTaskDetail(result.task.key);
-    toast(`${result.task.key} 初始化 Task 已就绪`);
+    toast(`${result.task.key} 初始化 Agent 已启动`);
   } catch (error) {
     toast(error.message, "error");
+    await loadData({ silent: true });
   } finally {
     if (button.isConnected) button.disabled = false;
   }
@@ -422,9 +423,77 @@ function detailRepository(repo) {
 }
 
 function taskNextAction(task) {
+  if (task.task_type === "repository_init") return initTaskActions(task);
   if (task.status === "draft") return `<button class="button secondary" type="button" data-set-status="review">提交审核</button>`;
   if (task.status === "review") return `<button class="button secondary" type="button" data-set-status="draft">要求修改</button><button class="button primary" type="button" data-set-status="approved">审核通过</button>`;
   return "";
+}
+
+function initWorkflowStage(task) {
+  const repository = task.repositories.find((item) => item.mode === "editable");
+  if (task.pr_state === "merged" && repository?.protocol_state === "ready") {
+    const note = task.workflow_error
+      ? `Repository 已完成初始化；本地清理提示：${task.workflow_error}`
+      : "PR 已合并，Repository 已完成初始化。";
+    return { key: "merged", label: "已合并", note };
+  }
+  if (task.workflow_error || task.runtime_error) return { key: "error", label: "需要处理", note: task.workflow_error || task.runtime_error };
+  if (task.pr_state === "merged") return { key: "error", label: "等待完成初始化", note: "PR 已合并，正在确认默认分支上的 Alignyard 文件。" };
+  if (task.status === "approved" && task.pr_state === "open") return { key: "pr", label: "PR 待合并", note: "Review 已批准，PR 已创建，等待人工确认合并。" };
+  if (task.status === "review") return { key: "review", label: "等待 Review", note: "Agent worktree 已冻结；确认工程知识后创建 PR。" };
+  if (repository?.manifest_status === "valid") return { key: "ready", label: "可提交 Review", note: `Agent 已提交并同步 ${task.artifacts?.length || 0} 个工程知识产物。` };
+  if (task.runtime_task_id && task.runtime_alive) return { key: "running", label: "Agent 执行中", note: "Agent 正在初始化 worktree；产物 sync 后这里会自动更新。" };
+  if (task.runtime_task_id) return { key: "paused", label: "Agent 已暂停", note: "worktree 已保留，可以进入工作区检查或继续 Agent。" };
+  return { key: "waiting", label: "等待启动", note: "启动后平台会自动创建 worktree、工作分支和 Agent session。" };
+}
+
+function initWorkflowPanel(task) {
+  const stage = initWorkflowStage(task);
+  const stepState = (name) => {
+    const order = ["waiting", "running", "paused", "error", "ready", "review", "pr", "merged"];
+    const positions = { agent: 1, review: 5, pr: 6, merge: 7 };
+    const current = order.indexOf(stage.key);
+    const target = positions[name];
+    if (name === "agent" && current >= 1 && current <= 3) return "active";
+    return current > target ? "done" : current === target ? "active" : "pending";
+  };
+  return `<section class="init-workflow state-${escapeHtml(stage.key)}">
+    <div class="init-workflow-head"><div><span>REPOSITORY INIT</span><strong>${escapeHtml(stage.label)}</strong></div><i></i></div>
+    <p>${escapeHtml(stage.note || "")}</p>
+    <ol class="workflow-steps">
+      <li class="${stepState("agent")}"><i>1</i><span>Agent 初始化</span></li>
+      <li class="${stepState("review")}"><i>2</i><span>人工 Review</span></li>
+      <li class="${stepState("pr")}"><i>3</i><span>创建 PR</span></li>
+      <li class="${stepState("merge")}"><i>4</i><span>确认合并</span></li>
+    </ol>
+  </section>`;
+}
+
+function initTaskActions(task) {
+  const repository = task.repositories.find((item) => item.mode === "editable");
+  const actions = [];
+  if (task.runtime_task_id && task.runtime_has_worktree) {
+    actions.push(`<a class="button secondary link" href="/?task=${task.runtime_task_id}">进入 Agent 工作区</a>`);
+  }
+  if (task.status === "draft" && !task.runtime_task_id) {
+    actions.push(`<button class="button primary" type="button" data-run-init>开始初始化</button>`);
+  } else if (task.status === "draft" && repository?.manifest_status === "valid") {
+    actions.push(`<button class="button primary" type="button" data-init-review>提交 Review</button>`);
+  } else if (task.status === "draft" && !task.runtime_alive) {
+    actions.push(`<button class="button primary" type="button" data-run-init>继续 Agent</button>`);
+  } else if (task.status === "review") {
+    actions.push(`<button class="button secondary" type="button" data-set-status="draft">要求修改</button>`);
+    actions.push(`<button class="button primary" type="button" data-init-pr>审核通过并创建 PR</button>`);
+  } else if (task.status === "approved" && task.pr_state === "open") {
+    actions.push(`<a class="button secondary link" href="${escapeHtml(task.pr_url)}" target="_blank" rel="noreferrer">查看 PR #${task.pr_number}</a>`);
+    actions.push(`<button class="button primary" type="button" data-init-merge>合并 PR</button>`);
+  } else if (task.status === "approved" && task.pr_state === "merged" && repository?.protocol_state !== "ready") {
+    actions.push(`<a class="button secondary link" href="${escapeHtml(task.pr_url)}" target="_blank" rel="noreferrer">查看 PR #${task.pr_number}</a>`);
+    actions.push(`<button class="button primary" type="button" data-init-merge>重试完成初始化</button>`);
+  } else if (task.pr_url) {
+    actions.push(`<a class="button secondary link" href="${escapeHtml(task.pr_url)}" target="_blank" rel="noreferrer">查看 PR #${task.pr_number}</a>`);
+  }
+  return actions.join("");
 }
 
 function taskLocalCommands(task) {
@@ -443,21 +512,74 @@ function openTaskDetail(key) {
   const commands = taskLocalCommands(task);
   const commandList = commands.map((command, index) => `<div class="detail-command"><span>${escapeHtml(command)}</span><button type="button" data-copy-command="${index}">复制</button></div>`).join("");
   const workflowNote = task.task_type === "repository_init"
-    ? `<div class="detail-workflow"><strong>Repository 初始化流程</strong><p>在该 Repository 的 Task worktree 中执行脚手架，按 alignyard-knowledge Skill 补齐 scopes 和基础 Docs，再 validate、sync 并提交 Review。</p></div>`
+    ? `${initWorkflowPanel(task)}<details class="manual-workflow"><summary>手动模式与诊断命令</summary><p>自动 Agent 无法完成时，才需要在保留的 worktree 中执行这些命令。</p>${commandList}</details>`
     : "";
   const artifacts = task.artifacts?.length ? task.artifacts.map((artifact) => `<article class="artifact-row"><span class="artifact-kind ${artifactKind(artifact.kind)}">${escapeHtml(artifactKind(artifact.kind).slice(0, 4))}</span><div><strong>${escapeHtml(artifact.title || artifact.path)}</strong><small>${escapeHtml(artifact.path)}</small></div><span>${escapeHtml(artifact.review_status)}</span></article>`).join("") : `<div class="detail-empty">尚未收到 manifest 结果。成员在本地执行 <code>ay sync</code> 后，这里会显示 docs、specs 和 ADR 的差异。</div>`;
   $("#task-detail").innerHTML = `<div class="detail-top"><span class="task-key">${escapeHtml(task.key)}</span><h1>${escapeHtml(task.title)}</h1><p>${escapeHtml(task.description || "尚未填写需求说明")}</p></div>
     <div class="detail-meta">${statusPill(task.status)}<span>负责人：${escapeHtml(task.owner)}</span><span>创建于 ${escapeHtml(formatDate(task.created_at))}</span></div>
-    ${workflowNote}${commandList}
+    ${workflowNote}${task.task_type === "repository_init" ? "" : commandList}
     <section class="detail-section"><div class="detail-section-head"><h2>Repositories · ${task.repositories.length}</h2><span class="protocol-badge">peer worktrees</span></div><div class="detail-repos">${task.repositories.map(detailRepository).join("")}</div></section>
     <section class="detail-section"><div class="detail-section-head"><h2>工程知识 · ${task.artifacts?.length || 0}</h2><span class="protocol-badge">manifest snapshot</span></div><div class="artifact-list">${artifacts}</div></section>
     <div class="detail-actions">${taskNextAction(task)}</div>`;
   $("#task-drawer").hidden = false;
   $$('[data-copy-command]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => copyCommand(commands[Number(button.dataset.copyCommand)])));
   $$('[data-set-status]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => setTaskStatus(task.key, button.dataset.setStatus)));
+  $('[data-run-init]', $("#task-detail"))?.addEventListener("click", (event) => runInitTask(task.key, event.currentTarget));
+  $('[data-init-review]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "review", event.currentTarget, "已提交 Review"));
+  $('[data-init-pr]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "pull-request", event.currentTarget, "Review 已批准，PR 已创建"));
+  $('[data-init-merge]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "merge", event.currentTarget, "PR 已合并，Repository 已就绪"));
 }
 
 function closeTaskDetail() { $("#task-drawer").hidden = true; state.selectedTask = null; }
+
+function replacePlatformTask(updated) {
+  const index = state.tasks.findIndex((task) => task.key === updated.key);
+  if (index >= 0) state.tasks[index] = updated;
+  else state.tasks.unshift(updated);
+}
+
+async function runInitTask(key, button) {
+  button.disabled = true;
+  try {
+    const result = await api(`/api/platform/tasks/${encodeURIComponent(key)}/run`, {
+      method: "POST",
+      body: JSON.stringify({ agent: "codex" }),
+    });
+    replacePlatformTask(result.task);
+    renderAll();
+    openTaskDetail(key);
+    toast(result.runtime_created ? "初始化 Agent 已启动" : "初始化 Agent 已继续");
+  } catch (error) {
+    toast(error.message, "error");
+    await loadData({ silent: true });
+  } finally {
+    if (button.isConnected) button.disabled = false;
+  }
+}
+
+async function initWorkflowAction(key, action, button, successMessage) {
+  button.disabled = true;
+  try {
+    const result = await api(`/api/platform/tasks/${encodeURIComponent(key)}/${action}`, {
+      method: "POST",
+      body: "{}",
+    });
+    const updated = result.task || result;
+    replacePlatformTask(updated);
+    if (result.repository) {
+      const repositoryIndex = state.repositories.findIndex((item) => item.id === result.repository.id);
+      if (repositoryIndex >= 0) state.repositories[repositoryIndex] = result.repository;
+    }
+    renderAll();
+    openTaskDetail(key);
+    toast(successMessage);
+  } catch (error) {
+    toast(error.message, "error");
+    await loadData({ silent: true });
+  } finally {
+    if (button.isConnected) button.disabled = false;
+  }
+}
 
 async function setTaskStatus(key, status) {
   try {
@@ -475,7 +597,7 @@ function wireDynamicButtons(root = document) {
   $$('[data-add-repository]', root).forEach((button) => button.addEventListener("click", openRepositoryDialog));
 }
 
-async function loadData() {
+async function loadData({ silent = false } = {}) {
   if (state.loading) return;
   state.loading = true;
   try {
@@ -486,9 +608,15 @@ async function loadData() {
     state.repositories = repositories;
     state.tasks = tasks;
     renderAll();
+    const selectedKey = state.selectedTask?.key;
+    if (selectedKey && !$("#task-drawer").hidden && state.tasks.some((task) => task.key === selectedKey)) {
+      openTaskDetail(selectedKey);
+    }
   } catch (error) {
-    toast(`无法加载预览数据：${error.message}`, "error");
-    $$(".loading-block").forEach((target) => { target.innerHTML = `<div class="empty-state"><div><h3>数据加载失败</h3><p>${escapeHtml(error.message)}</p></div></div>`; });
+    if (!silent) {
+      toast(`无法加载预览数据：${error.message}`, "error");
+      $$(".loading-block").forEach((target) => { target.innerHTML = `<div class="empty-state"><div><h3>数据加载失败</h3><p>${escapeHtml(error.message)}</p></div></div>`; });
+    }
   } finally { state.loading = false; }
 }
 
@@ -526,3 +654,8 @@ function bindEvents() {
 bindEvents();
 setView(location.hash.slice(1) || "tasks", { updateHash: false });
 loadData();
+setInterval(() => {
+  if (state.tasks.some((task) => task.task_type === "repository_init" && task.pr_state !== "merged")) {
+    loadData({ silent: true });
+  }
+}, 4000);
