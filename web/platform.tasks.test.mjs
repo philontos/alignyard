@@ -49,7 +49,7 @@ test("Repository Init drawer closes runtime, Review, PR, and merge behind explic
   assert.match(script, /"merge"/);
   assert.match(script, /要求修改/);
   assert.match(script, /重试完成初始化/);
-  assert.match(script, /href="\/\?task=\$\{task\.runtime_task_id\}"/);
+  assert.match(script, /href="\/index\.html\?task=\$\{task\.runtime_task_id\}"/);
   assert.match(script, /手动模式与诊断命令/);
 });
 
