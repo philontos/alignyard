@@ -114,6 +114,7 @@ export async function startSession(
     agent?: AgentKind;
     model?: string | null;
     addDirs?: string[];
+    automated?: boolean;
   },
 ) {
   requireOwnerNode(runner);
@@ -124,7 +125,9 @@ export async function startSession(
   const agent = opts?.agent ?? "claude";
   const pre = envPrefix(opts?.env);
   const addDirs = await sessionAddDirs(runner, cwd, agent, opts?.addDirs);
-  const launch = agentArgv(agent, { prompt, model: opts?.model, resume: opts?.continue, addDirs });
+  const launch = agentArgv(agent, {
+    prompt, model: opts?.model, resume: opts?.continue, addDirs, automated: opts?.automated,
+  });
   if (agent === "kimi") launch[0] = await kimiBinary(runner);
   const cmd = ["new-session", "-d", "-s", session, "-c", cwd, ...pre, ...launch];
   await tmux(runner, cmd);

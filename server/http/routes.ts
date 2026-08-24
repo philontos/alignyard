@@ -770,6 +770,7 @@ async function resumePlatformRuntimeTask(taskId: number) {
         agent: asAgentKind(task.agent),
         model: task.agent_model,
         addDirs: referenceWorktreePaths(db, task.id),
+        automated: true,
       });
     },
     writeManifest: (id) => syncTaskManifest(id),

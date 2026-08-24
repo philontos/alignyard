@@ -19,6 +19,9 @@ export interface LaunchOpts {
   model?: string | null;
   /** resume the prior conversation in this cwd instead of starting fresh */
   resume?: boolean;
+  /** Trusted first-party automation: no approval or repository hook-trust
+   * prompts may stop the unattended run. Ordinary interactive tasks omit it. */
+  automated?: boolean;
   /** Additional workspace roots translated to each agent CLI's `--add-dir`.
    *  For codex/kimi this also carries linked-worktree Git metadata directories. */
   addDirs?: string[];
@@ -48,7 +51,13 @@ const claudeAddDirArgs = (dirs?: string[]) => {
  */
 export function agentArgv(agent: AgentKind, opts: LaunchOpts = {}): string[] {
   if (agent === "codex") {
-    const base = ["codex", "-a", "on-request", "-s", "danger-full-access", ...addDirArgs(opts.addDirs)];
+    const base = [
+      "codex",
+      "-a", opts.automated ? "never" : "on-request",
+      "-s", "danger-full-access",
+      ...(opts.automated ? ["--dangerously-bypass-hook-trust"] : []),
+      ...addDirArgs(opts.addDirs),
+    ];
     if (hasText(opts.model)) base.push("-m", opts.model.trim());
     if (opts.resume) return [...base, "resume", "--last"];
     const argv = [...base];

@@ -145,7 +145,13 @@ export interface RepoTaskEnv {
     session: string,
     worktree: string,
     opening: string | null,
-    opts?: { env?: Record<string, string>; agent?: AgentKind; model?: string | null; addDirs?: string[] },
+    opts?: {
+      env?: Record<string, string>;
+      agent?: AgentKind;
+      model?: string | null;
+      addDirs?: string[];
+      automated?: boolean;
+    },
   ): Promise<void>;
   // Tear down a partially-built worktree after a failed dispatch.
   removeWorktree(mirror: string, worktree: string, workBranch: string): Promise<void>;
@@ -170,6 +176,8 @@ export interface CreateRepoOpts {
   // optional non-Claude -m model. Recorded so resume rebuilds the same launch.
   agent?: AgentKind;
   model?: string | null;
+  /** Run the initial agent prompt without interactive approval/trust gates. */
+  automated?: boolean;
   references?: TaskReferenceInput[];
 }
 
@@ -281,6 +289,7 @@ export async function createRepoTask(env: RepoTaskEnv, repo: RepoRef, opts: Crea
       agent,
       model: opts.model,
       addDirs: materialized.map((reference) => reference.worktree_path),
+      automated: opts.automated,
     });
     env.db.prepare("UPDATE tasks SET base_commit=?, work_branch=?, worktree_path=?, session=?, status='running' WHERE id=?")
       .run(baseCommit, workBranch, worktree, session, id);
