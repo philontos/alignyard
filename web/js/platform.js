@@ -473,7 +473,7 @@ function initTaskActions(task) {
   const repository = task.repositories.find((item) => item.mode === "editable");
   const actions = [];
   if (task.runtime_task_id && task.runtime_has_worktree) {
-    actions.push(`<a class="button secondary link" href="/?task=${task.runtime_task_id}">进入 Agent 工作区</a>`);
+    actions.push(`<a class="button secondary link" href="/index.html?task=${task.runtime_task_id}">进入 Agent 工作区</a>`);
   }
   if (task.status === "draft" && !task.runtime_task_id) {
     actions.push(`<button class="button primary" type="button" data-run-init>开始初始化</button>`);
