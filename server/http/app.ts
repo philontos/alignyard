@@ -9,8 +9,9 @@ import { registerRoutes } from "./routes.js";
 export function createApp() {
   const app = express();
   app.use(express.json({ limit: "10mb" }));
-  // Alignyard's shared Task workspace is the only product entry point. Local
-  // agent execution belongs to the `ay` CLI and is not exposed as a web runtime.
+  // Alignyard's shared Task workspace is the product entry point. Its embedded
+  // Agent workspace uses the reusable owner-local PTY/runtime services directly;
+  // it must not depend on the legacy Switchyard product surface.
   app.get("/", (_req, res) => res.sendFile(path.join(WEB_DIR, "platform.html")));
   // Highlight.js is pinned as an installed dependency and exposed locally only
   // under this narrow path. The browser loads the common bundle lazily, then a

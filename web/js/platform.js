@@ -1,3 +1,10 @@
+import {
+  closePlatformAgentWorkspace,
+  initPlatformAgentWorkspace,
+  openPlatformAgentWorkspace,
+  platformAgentWorkspaceIsOpen,
+} from "./platform-agent.js";
+
 const state = {
   view: "tasks",
   tasks: [],
@@ -473,7 +480,7 @@ function initTaskActions(task) {
   const repository = task.repositories.find((item) => item.mode === "editable");
   const actions = [];
   if (task.runtime_task_id && task.runtime_has_worktree) {
-    actions.push(`<a class="button secondary link" href="/index.html?task=${task.runtime_task_id}">进入 Agent 工作区</a>`);
+    actions.push(`<button class="button secondary" type="button" data-open-agent>进入 Agent 工作区</button>`);
   }
   if (task.status === "draft" && !task.runtime_task_id) {
     actions.push(`<button class="button primary" type="button" data-run-init>开始初始化</button>`);
@@ -525,6 +532,7 @@ function openTaskDetail(key) {
   $$('[data-copy-command]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => copyCommand(commands[Number(button.dataset.copyCommand)])));
   $$('[data-set-status]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => setTaskStatus(task.key, button.dataset.setStatus)));
   $('[data-run-init]', $("#task-detail"))?.addEventListener("click", (event) => runInitTask(task.key, event.currentTarget));
+  $('[data-open-agent]', $("#task-detail"))?.addEventListener("click", () => openPlatformAgentWorkspace(task));
   $('[data-init-review]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "review", event.currentTarget, "已提交 Review"));
   $('[data-init-pr]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "pull-request", event.currentTarget, "Review 已批准，PR 已创建"));
   $('[data-init-merge]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "merge", event.currentTarget, "PR 已合并，Repository 已就绪"));
@@ -643,12 +651,14 @@ function bindEvents() {
   $("#drawer-close").addEventListener("click", closeTaskDetail);
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    if (!$("#confirm-dialog").hidden) closeConfirmDialog(false);
+    if (platformAgentWorkspaceIsOpen()) closePlatformAgentWorkspace();
+    else if (!$("#confirm-dialog").hidden) closeConfirmDialog(false);
     else if (!$("#add-repository-dialog").hidden) closeRepositoryDialog();
     else if (!$("#create-task-dialog").hidden) closeTaskDialog();
     else if (!$("#task-drawer").hidden) closeTaskDetail();
   });
   wireDynamicButtons();
+  initPlatformAgentWorkspace({ onError: (message) => toast(message, "error") });
 }
 
 bindEvents();

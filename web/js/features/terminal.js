@@ -11,6 +11,7 @@ import { $ } from "../core/dom.js";
 import { toast } from "../core/feedback.js";
 import { createCodexUserMarkerOverlay } from "./codex-terminal-markers.js";
 import { activateCodexUnicode } from "./terminal-unicode.js";
+import { connectPty } from "../core/pty-socket.js";
 
 // taskId -> { id, pane, term, fit, ws, query, agent, title, attach,
 //             codeTarget, referenceTarget, resizeKey }
@@ -387,23 +388,24 @@ function createPane(id, query, agent) {
 // attach repaints over it, so a reconnect never flashes to black.
 function ensureSocket(p) {
   if (p.ws && (p.ws.readyState === 0 || p.ws.readyState === 1)) return;   // CONNECTING/OPEN
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = p.ws = new WebSocket(`${proto}://${location.host}/pty?${p.query}&lang=${I18N.lang}`);
+  let ws;
+  ws = p.ws = connectPty(p.query, {
+    lang: I18N.lang,
+    onOpen: () => { if (activeId === p.id) { try { fitPane(p); } catch {} } sendResize(p); },
+    onData: (data) => {
+      if (p.agent === "codex") {
+        p.term.write(data, () => { if (p.agent === "codex") p.codexMarkers?.scan(); });
+      } else {
+        p.term.write(data);
+      }
+    },
+    onClose: () => {
+      if (p.ws === ws) {
+        p.term.write(`\r\n\x1b[90m${I18N.t("term.disconnected")}\x1b[0m\r\n`);
+      }
+    },
+  });
   p.resizeKey = "";       // a new pty needs one initial size even if dimensions match the old socket
-  ws.onopen = () => { if (activeId === p.id) { try { fitPane(p); } catch {} } sendResize(p); };
-  ws.onmessage = (e) => {
-    if (typeof e.data !== "string") return;
-    if (p.agent === "codex") {
-      p.term.write(e.data, () => { if (p.agent === "codex") p.codexMarkers?.scan(); });
-    } else {
-      p.term.write(e.data);
-    }
-  };
-  ws.onclose = () => {
-    if (p.ws === ws) {
-      p.term.write(`\r\n\x1b[90m${I18N.t("term.disconnected")}\x1b[0m\r\n`);
-    }
-  };
 }
 
 // Make a pane the visible one: hide every other pane, show this one, refit (it

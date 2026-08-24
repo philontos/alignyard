@@ -4,6 +4,7 @@ import fs from "node:fs";
 
 const html = fs.readFileSync(new URL("./platform.html", import.meta.url), "utf8");
 const script = fs.readFileSync(new URL("./js/platform.js", import.meta.url), "utf8");
+const agent = fs.readFileSync(new URL("./js/platform-agent.js", import.meta.url), "utf8");
 
 test("Tasks surface keeps only the three primary filters and one create action", () => {
   const taskView = html.match(/<section class="view active" id="view-tasks"[\s\S]*?<\/section>/)?.[0] || "";
@@ -49,7 +50,12 @@ test("Repository Init drawer closes runtime, Review, PR, and merge behind explic
   assert.match(script, /"merge"/);
   assert.match(script, /要求修改/);
   assert.match(script, /重试完成初始化/);
-  assert.match(script, /href="\/index\.html\?task=\$\{task\.runtime_task_id\}"/);
+  assert.match(script, /data-open-agent/);
+  assert.match(script, /openPlatformAgentWorkspace\(task\)/);
+  assert.doesNotMatch(script, /index\.html\?task=/);
+  assert.match(html, /id="agent-workspace"/);
+  assert.match(html, /id="agent-terminal"/);
+  assert.match(agent, /connectPty\(`session=/);
   assert.match(script, /手动模式与诊断命令/);
 });
 
