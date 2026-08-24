@@ -21,11 +21,14 @@ test("ay init, new, and validate form a runnable protocol loop", async () => {
   try {
     assert.equal(await runAy(["init", root], result.io), 0);
     assert.equal(await runAy([
+      "new", "doc", "overview", "--scope", "shared", "--title", "Repository Overview", "--repository", root,
+    ], result.io), 0);
+    assert.equal(await runAy([
       "new", "spec", "login-flow", "--scope", "shared", "--title", "Login Flow", "--repository", root,
     ], result.io), 0);
     assert.equal(await runAy(["validate", root], result.io), 0);
     assert.equal(result.err.length, 0);
-    assert.match(result.out[2], /"documents":1/);
+    assert.match(result.out[3], /"documents":2/);
     assert.match(
       fs.readFileSync(path.join(root, ".alignyard/specs/shared/login-flow.md"), "utf8"),
       /id: spec\.shared\.login-flow[\s\S]*title: "Login Flow"/,

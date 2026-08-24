@@ -96,6 +96,8 @@ CREATE TABLE IF NOT EXISTS platform_repositories (
   git_url TEXT NOT NULL UNIQUE,
   default_branch TEXT NOT NULL DEFAULT 'main',
   protocol_initialized INTEGER NOT NULL DEFAULT 0,
+  protocol_state TEXT NOT NULL DEFAULT 'uninitialized',
+  protocol_error TEXT,
   created_by TEXT NOT NULL,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
@@ -110,6 +112,7 @@ CREATE TABLE IF NOT EXISTS platform_tasks (
   title TEXT NOT NULL,
   description TEXT,
   owner TEXT NOT NULL,
+  task_type TEXT NOT NULL DEFAULT 'change',
   status TEXT NOT NULL DEFAULT 'draft',
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
@@ -222,10 +225,12 @@ function reconcileColumns(db: DB) {
   // | kimi), plus an optional non-Claude -m model. Backfills to 'claude'.
   addColumn(db, "tasks", "agent", "TEXT DEFAULT 'claude'");
   addColumn(db, "tasks", "agent_model", "TEXT");
-  // One deliberately binary repository signal: does the default branch carry
-  // a valid .alignyard/repository.yaml? Detailed protocol diagnostics stay in
-  // the local validator instead of becoming platform workflow states.
+  // Retain the original boolean for backwards-compatible API consumers while
+  // the state column distinguishes setup progress and actionable failures.
   addColumn(db, "platform_repositories", "protocol_initialized", "INTEGER NOT NULL DEFAULT 0");
+  addColumn(db, "platform_repositories", "protocol_state", "TEXT NOT NULL DEFAULT 'uninitialized'");
+  addColumn(db, "platform_repositories", "protocol_error", "TEXT");
+  addColumn(db, "platform_tasks", "task_type", "TEXT NOT NULL DEFAULT 'change'");
   addColumn(db, "platform_artifacts", "document_id", "TEXT");
   addColumn(db, "platform_artifacts", "scope", "TEXT");
   addColumn(db, "platform_artifacts", "owners", "TEXT NOT NULL DEFAULT '[]'");
@@ -234,6 +239,37 @@ function reconcileColumns(db: DB) {
   addColumn(db, "platform_artifacts", "content_hash", "TEXT");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS hosts_node_id_unique ON hosts(node_id) WHERE node_id IS NOT NULL");
   db.exec("CREATE INDEX IF NOT EXISTS task_references_repo_id ON task_references(repo_id)");
+}
+
+/** Migrate the prototype's title-based init convention and binary Repository
+ * flag into explicit, queryable workflow state without discarding any rows. */
+function normalizePlatformProtocolWorkflow(db: DB) {
+  db.exec(`
+    UPDATE platform_tasks
+    SET task_type='repository_init'
+    WHERE task_type='change' AND title LIKE 'Initialize Alignyard · %';
+
+    UPDATE platform_repositories
+    SET protocol_state = CASE
+      WHEN protocol_initialized=1 THEN 'ready'
+      WHEN protocol_state NOT IN ('uninitialized','initializing','ready','invalid') THEN 'uninitialized'
+      ELSE protocol_state
+    END;
+
+    UPDATE platform_repositories
+    SET protocol_state='initializing'
+    WHERE protocol_state='uninitialized' AND EXISTS (
+      SELECT 1
+      FROM platform_task_repositories tr
+      JOIN platform_tasks t ON t.id=tr.task_id
+      WHERE tr.repository_id=platform_repositories.id
+        AND t.task_type='repository_init'
+        AND t.status IN ('draft','review')
+    );
+
+    UPDATE platform_repositories
+    SET protocol_initialized=CASE WHEN protocol_state='ready' THEN 1 ELSE 0 END;
+  `);
 }
 
 /**
@@ -280,5 +316,6 @@ export function initSchema(db: DB, opts: SchemaOpts) {
   reconcileColumns(db);
   dropDeprecated(db);
   normalizePlatformTaskStatuses(db);
+  normalizePlatformProtocolWorkflow(db);
   if (opts.didMigrate) runPathMigration(db, opts.legacyDir, opts.dataDir);
 }

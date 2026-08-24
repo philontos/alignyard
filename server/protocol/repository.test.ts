@@ -21,13 +21,17 @@ test("repository manifest accepts the minimal v1 protocol", () => {
   assert.equal(parsed.manifest?.scopes[0].id, "shared");
 });
 
-test("ay init scaffold is idempotent and validates", () => {
+test("ay init scaffold is idempotent and requires a shared overview baseline", () => {
   const root = temporaryRepository();
   try {
     const first = initializeRepositoryProtocol(root);
     const second = initializeRepositoryProtocol(root);
     assert.ok(first.created.includes(".alignyard/repository.yaml"));
     assert.equal(second.created.length, 0);
+    assert.equal(validateRepositoryProtocol(root).ok, false);
+    createRepositoryDocument(root, {
+      kind: "doc", slug: "overview", scope: "shared", title: "Repository Overview",
+    });
     assert.equal(validateRepositoryProtocol(root).ok, true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -38,6 +42,9 @@ test("ay new renders repository templates into stable scoped documents", () => {
   const root = temporaryRepository();
   try {
     initializeRepositoryProtocol(root);
+    createRepositoryDocument(root, {
+      kind: "doc", slug: "overview", scope: "shared", title: "Repository Overview",
+    });
     const document = createRepositoryDocument(root, {
       kind: "adr",
       slug: "0001-storage-boundary",
@@ -48,8 +55,9 @@ test("ay new renders repository templates into stable scoped documents", () => {
     assert.equal(document.path, ".alignyard/adrs/shared/0001-storage-boundary.md");
     assert.equal(validateRepositoryProtocol(root).ok, true);
     const indexed = indexRepositoryProtocol(root);
-    assert.equal(indexed.documents[0].title, "Keep Storage Local");
-    assert.equal(indexed.documents[0].content_hash.length, 64);
+    const indexedAdr = indexed.documents.find((item) => item.id === document.id);
+    assert.equal(indexedAdr?.title, "Keep Storage Local");
+    assert.equal(indexedAdr?.content_hash.length, 64);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

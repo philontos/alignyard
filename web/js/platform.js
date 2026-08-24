@@ -31,6 +31,17 @@ const statusLabels = {
   approved: "已通过",
 };
 
+const protocolStateLabels = {
+  uninitialized: "未初始化",
+  initializing: "初始化中",
+  ready: "已就绪",
+  invalid: "初始化无效",
+};
+
+function repositoryProtocolState(repository) {
+  return repository.protocol_state || (repository.protocol_initialized ? "ready" : "uninitialized");
+}
+
 function formatDate(value, compact = false) {
   if (!value) return "—";
   const raw = String(value);
@@ -51,6 +62,35 @@ function toast(message, kind = "success") {
   element.textContent = message;
   $("#toast-region").append(element);
   setTimeout(() => element.remove(), 2800);
+}
+
+let confirmDialogResolve = null;
+let confirmDialogPreviousFocus = null;
+
+function closeConfirmDialog(confirmed = false) {
+  const dialog = $("#confirm-dialog");
+  if (dialog.hidden) return;
+  dialog.hidden = true;
+  const resolve = confirmDialogResolve;
+  const previousFocus = confirmDialogPreviousFocus;
+  confirmDialogResolve = null;
+  confirmDialogPreviousFocus = null;
+  if (previousFocus?.isConnected) previousFocus.focus();
+  if (resolve) resolve(confirmed);
+}
+
+function confirmDialog({ title, message, detail = "", confirmText = "确认" }) {
+  if (confirmDialogResolve) closeConfirmDialog(false);
+  confirmDialogPreviousFocus = document.activeElement;
+  $("#confirm-dialog-title").textContent = title;
+  $("#confirm-dialog-message").textContent = message;
+  $("#confirm-dialog-detail").textContent = detail;
+  $("#confirm-dialog-submit").textContent = confirmText;
+  $("#confirm-dialog").hidden = false;
+  return new Promise((resolve) => {
+    confirmDialogResolve = resolve;
+    setTimeout(() => $("#confirm-dialog-cancel").focus(), 0);
+  });
 }
 
 async function copyCommand(command) {
@@ -128,25 +168,28 @@ function renderRepositories() {
   target.innerHTML = state.repositories.map((repo) => {
     const taskCount = state.tasks.filter((task) => task.repositories.some((item) => item.id === repo.id)).length;
     const initTask = state.tasks.find((task) =>
-      task.repositories.some((item) => item.id === repo.id) && task.title === `Initialize Alignyard · ${repo.name}`
+      task.task_type === "repository_init" && task.status !== "approved" &&
+      task.repositories.some((item) => item.id === repo.id)
     );
-    const label = repo.protocol_initialized ? "已完成 ay init；点击刷新" : "尚未 ay init；点击刷新";
+    const protocolState = repositoryProtocolState(repo);
+    const label = `${protocolStateLabels[protocolState] || protocolState}；点击刷新`;
+    const primaryAction = protocolState === "ready"
+      ? `<button class="button secondary small" type="button" data-task-from-repo="${repo.id}">＋ Task</button>`
+      : initTask
+        ? `<button class="button secondary small" type="button" data-task-key="${escapeHtml(initTask.key)}">${escapeHtml(initTask.key)}</button>`
+        : `<button class="button secondary small" type="button" data-init-repository="${repo.id}">Initialize</button>`;
     return `<article class="repository-row">
-      <button class="protocol-indicator ${repo.protocol_initialized ? "initialized" : ""}" type="button" data-refresh-protocol="${repo.id}" aria-label="${label}" title="${label}"><i></i></button>
-      <span class="repository-main"><strong>${escapeHtml(repo.name)}</strong><small title="${escapeHtml(repo.git_url)}">${escapeHtml(repo.git_url)}</small></span>
+      <button class="protocol-indicator state-${escapeHtml(protocolState)}" type="button" data-refresh-protocol="${repo.id}" aria-label="${escapeHtml(label)}" title="${escapeHtml(repo.protocol_error || label)}"><i></i></button>
+      <span class="repository-main"><strong>${escapeHtml(repo.name)}</strong><small title="${escapeHtml(repo.git_url)}">${escapeHtml(repo.git_url)}</small><em>${escapeHtml(protocolStateLabels[protocolState] || protocolState)}</em></span>
       <span class="repository-branch">${escapeHtml(repo.default_branch)}</span>
       <span class="repository-task-count">${taskCount} Tasks</span>
-      <span class="repository-actions">${repo.protocol_initialized
-        ? `<button class="button secondary small" type="button" data-task-from-repo="${repo.id}">＋ Task</button>`
-        : initTask
-          ? `<button class="button secondary small" type="button" data-task-key="${escapeHtml(initTask.key)}">${escapeHtml(initTask.key)}</button>`
-          : `<button class="button secondary small" type="button" data-init-repository="${repo.id}">Init</button>`}
-      </span>
+      <span class="repository-actions">${primaryAction}<button class="button danger small" type="button" data-delete-repository="${repo.id}">删除</button></span>
     </article>`;
   }).join("");
   $$('[data-task-from-repo]', target).forEach((button) => button.addEventListener("click", () => openTaskDialog(Number(button.dataset.taskFromRepo))));
   $$('[data-task-key]', target).forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.taskKey)));
-  $$('[data-init-repository]', target).forEach((button) => button.addEventListener("click", () => openInitTask(Number(button.dataset.initRepository))));
+  $$('[data-init-repository]', target).forEach((button) => button.addEventListener("click", () => initializeRepository(Number(button.dataset.initRepository), button)));
+  $$('[data-delete-repository]', target).forEach((button) => button.addEventListener("click", () => deleteRepository(Number(button.dataset.deleteRepository), button)));
   $$('[data-refresh-protocol]', target).forEach((button) => button.addEventListener("click", () => refreshProtocol(Number(button.dataset.refreshProtocol), button)));
 }
 
@@ -186,11 +229,13 @@ function taskRepositoryOptions(preselectId) {
     return;
   }
   target.innerHTML = state.repositories.map((repo) => {
-    const selected = repo.id === preselectId;
+    const protocolState = repositoryProtocolState(repo);
+    const ready = protocolState === "ready";
+    const selected = ready && repo.id === preselectId;
     return `<label class="repo-option ${selected ? "selected" : ""}">
       <input type="checkbox" value="${repo.id}" ${selected ? "checked" : ""} />
-      <span><strong>${escapeHtml(repo.name)}</strong><small>${escapeHtml(repo.git_url)}</small></span>
-      <select aria-label="${escapeHtml(repo.name)} 关联方式"><option value="editable">editable</option><option value="reference">reference</option></select>
+      <span><strong>${escapeHtml(repo.name)}</strong><small>${escapeHtml(repo.git_url)} · ${escapeHtml(protocolStateLabels[protocolState] || protocolState)}</small></span>
+      <select aria-label="${escapeHtml(repo.name)} 关联方式"><option value="editable" ${ready ? "" : "disabled"}>editable</option><option value="reference" ${ready ? "" : "selected"}>reference</option></select>
       <input type="text" value="${escapeHtml(repo.default_branch)}" aria-label="${escapeHtml(repo.name)} 基准分支" />
     </label>`;
   }).join("");
@@ -209,13 +254,52 @@ function openTaskDialog(preselectId, defaults = {}) {
   setTimeout(() => form.elements.title.focus(), 0);
 }
 
-function openInitTask(repositoryId) {
+async function initializeRepository(repositoryId, button) {
   const repository = state.repositories.find((item) => item.id === repositoryId);
   if (!repository) return;
-  openTaskDialog(repository.id, {
-    title: `Initialize Alignyard · ${repository.name}`,
-    description: `为 ${repository.name} 初始化最小 .alignyard 协议；运行 ay init 与 ay validate，提交后发起 Review。`,
+  button.disabled = true;
+  try {
+    const result = await api(`/api/platform/repositories/${repositoryId}/initialize`, {
+      method: "POST",
+      body: JSON.stringify({ owner: "Phil" }),
+    });
+    const taskIndex = state.tasks.findIndex((task) => task.key === result.task.key);
+    if (taskIndex >= 0) state.tasks[taskIndex] = result.task;
+    else state.tasks.unshift(result.task);
+    const repositoryIndex = state.repositories.findIndex((item) => item.id === repositoryId);
+    if (repositoryIndex >= 0 && result.repository) state.repositories[repositoryIndex] = result.repository;
+    renderAll();
+    setView("tasks");
+    openTaskDetail(result.task.key);
+    toast(`${result.task.key} 初始化 Task 已就绪`);
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    if (button.isConnected) button.disabled = false;
+  }
+}
+
+async function deleteRepository(repositoryId, button) {
+  const repository = state.repositories.find((item) => item.id === repositoryId);
+  if (!repository) return;
+  const confirmed = await confirmDialog({
+    title: "删除 Repository？",
+    message: `确定要删除「${repository.name}」吗？`,
+    detail: "平台元数据和本机 clone 都会移除。已被 Task 引用的 Repository 不会被删除。",
+    confirmText: "删除 Repository",
   });
+  if (!confirmed) return;
+  button.disabled = true;
+  try {
+    await api(`/api/platform/repositories/${repositoryId}`, { method: "DELETE" });
+    state.repositories = state.repositories.filter((item) => item.id !== repositoryId);
+    renderAll();
+    toast(`${repository.name} 已删除`);
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    if (button.isConnected) button.disabled = false;
+  }
 }
 
 function closeTaskDialog() { $("#create-task-dialog").hidden = true; }
@@ -317,7 +401,8 @@ async function refreshProtocol(repositoryId, button) {
     const index = state.repositories.findIndex((item) => item.id === repositoryId);
     if (index >= 0) state.repositories[index] = repository;
     renderRepositories();
-    toast(repository.protocol_initialized ? ".alignyard 已初始化" : ".alignyard 尚未初始化");
+    const protocolState = repositoryProtocolState(repository);
+    toast(`.alignyard：${protocolStateLabels[protocolState] || protocolState}`, protocolState === "invalid" ? "error" : "success");
   } catch (error) {
     toast(error.message, "error");
   } finally {
@@ -342,19 +427,33 @@ function taskNextAction(task) {
   return "";
 }
 
+function taskLocalCommands(task) {
+  const repository = task.repositories.find((item) => item.mode === "editable");
+  if (!repository) return [];
+  const sync = `ay sync . --platform ${location.origin} --task ${task.key} --repository-id ${repository.id}`;
+  return task.task_type === "repository_init"
+    ? ["ay init .", "ay new doc overview --scope shared --title \"Repository Overview\"", "ay validate .", sync]
+    : ["ay validate .", sync];
+}
+
 function openTaskDetail(key) {
   const task = state.tasks.find((item) => item.key === key);
   if (!task) return;
   state.selectedTask = task;
+  const commands = taskLocalCommands(task);
+  const commandList = commands.map((command, index) => `<div class="detail-command"><span>${escapeHtml(command)}</span><button type="button" data-copy-command="${index}">复制</button></div>`).join("");
+  const workflowNote = task.task_type === "repository_init"
+    ? `<div class="detail-workflow"><strong>Repository 初始化流程</strong><p>在该 Repository 的 Task worktree 中执行脚手架，按 alignyard-knowledge Skill 补齐 scopes 和基础 Docs，再 validate、sync 并提交 Review。</p></div>`
+    : "";
   const artifacts = task.artifacts?.length ? task.artifacts.map((artifact) => `<article class="artifact-row"><span class="artifact-kind ${artifactKind(artifact.kind)}">${escapeHtml(artifactKind(artifact.kind).slice(0, 4))}</span><div><strong>${escapeHtml(artifact.title || artifact.path)}</strong><small>${escapeHtml(artifact.path)}</small></div><span>${escapeHtml(artifact.review_status)}</span></article>`).join("") : `<div class="detail-empty">尚未收到 manifest 结果。成员在本地执行 <code>ay sync</code> 后，这里会显示 docs、specs 和 ADR 的差异。</div>`;
   $("#task-detail").innerHTML = `<div class="detail-top"><span class="task-key">${escapeHtml(task.key)}</span><h1>${escapeHtml(task.title)}</h1><p>${escapeHtml(task.description || "尚未填写需求说明")}</p></div>
     <div class="detail-meta">${statusPill(task.status)}<span>负责人：${escapeHtml(task.owner)}</span><span>创建于 ${escapeHtml(formatDate(task.created_at))}</span></div>
-    <div class="detail-command"><span>ay task open ${escapeHtml(task.key)}</span><button type="button" data-copy-task-command>复制命令</button></div>
+    ${workflowNote}${commandList}
     <section class="detail-section"><div class="detail-section-head"><h2>Repositories · ${task.repositories.length}</h2><span class="protocol-badge">peer worktrees</span></div><div class="detail-repos">${task.repositories.map(detailRepository).join("")}</div></section>
     <section class="detail-section"><div class="detail-section-head"><h2>工程知识 · ${task.artifacts?.length || 0}</h2><span class="protocol-badge">manifest snapshot</span></div><div class="artifact-list">${artifacts}</div></section>
-    <div class="detail-actions"><button class="button primary" type="button" data-copy-task-command>在本地打开</button>${taskNextAction(task)}</div>`;
+    <div class="detail-actions">${taskNextAction(task)}</div>`;
   $("#task-drawer").hidden = false;
-  $$('[data-copy-task-command]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => copyCommand(`ay task open ${task.key}`)));
+  $$('[data-copy-command]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => copyCommand(commands[Number(button.dataset.copyCommand)])));
   $$('[data-set-status]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => setTaskStatus(task.key, button.dataset.setStatus)));
 }
 
@@ -409,11 +508,15 @@ function bindEvents() {
   $$('[data-close-repo-dialog]').forEach((button) => button.addEventListener("click", closeRepositoryDialog));
   $("#create-task-dialog").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeTaskDialog(); });
   $("#add-repository-dialog").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeRepositoryDialog(); });
+  $("#confirm-dialog-cancel").addEventListener("click", () => closeConfirmDialog(false));
+  $("#confirm-dialog-submit").addEventListener("click", () => closeConfirmDialog(true));
+  $("#confirm-dialog").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeConfirmDialog(false); });
   $("#task-drawer").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeTaskDetail(); });
   $("#drawer-close").addEventListener("click", closeTaskDetail);
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    if (!$("#add-repository-dialog").hidden) closeRepositoryDialog();
+    if (!$("#confirm-dialog").hidden) closeConfirmDialog(false);
+    else if (!$("#add-repository-dialog").hidden) closeRepositoryDialog();
     else if (!$("#create-task-dialog").hidden) closeTaskDialog();
     else if (!$("#task-drawer").hidden) closeTaskDetail();
   });

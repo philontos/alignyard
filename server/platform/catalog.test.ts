@@ -4,10 +4,14 @@ import Database from "better-sqlite3";
 import { initSchema } from "../core/schema.ts";
 import {
   createPlatformRepository,
+  createRepositoryInitializationTask,
   createPlatformTask,
+  deletePlatformRepository,
   getPlatformTask,
   listPlatformRepositories,
+  platformRepositoryTaskCount,
   PlatformValidationError,
+  setPlatformRepositoryProtocolState,
   updatePlatformTaskStatus,
 } from "./catalog.ts";
 
@@ -28,6 +32,7 @@ test("platform repository catalog stores locators without credentials or checkou
 
   assert.equal(repo.name, "alignyard");
   assert.equal(repo.protocol_initialized, false);
+  assert.equal(repo.protocol_state, "uninitialized");
   assert.deepEqual(listPlatformRepositories(db), [repo]);
   const columns = (db.prepare("PRAGMA table_info(platform_repositories)").all() as { name: string }[])
     .map((column) => column.name);
@@ -48,6 +53,7 @@ test("platform Task supports several editable and reference repositories", () =>
     git_url: "git@example.com:team/api.git",
     created_by: "张三",
   });
+  setPlatformRepositoryProtocolState(db, app.id, "ready");
 
   const task = createPlatformTask(db, {
     title: "统一登录态",
@@ -78,6 +84,7 @@ test("platform Task requires at least one editable repository and validates stat
     git_url: "git@example.com:team/docs.git",
     created_by: "李四",
   });
+  setPlatformRepositoryProtocolState(db, repo.id, "ready");
 
   assert.throws(() => createPlatformTask(db, {
     title: "只读任务",
@@ -97,4 +104,43 @@ test("platform Task requires at least one editable repository and validates stat
   assert.throws(() => updatePlatformTaskStatus(db, task.key, "draft"), PlatformValidationError);
   assert.throws(() => updatePlatformTaskStatus(db, task.key, "in_review"), PlatformValidationError);
   assert.throws(() => updatePlatformTaskStatus(db, task.key, "unknown"), PlatformValidationError);
+});
+
+test("Repository initialization is a first-class idempotent Task and gates ordinary editable work", () => {
+  const db = memoryDb();
+  const repo = createPlatformRepository(db, {
+    name: "new-service",
+    git_url: "git@example.com:team/new-service.git",
+    created_by: "Phil",
+  });
+
+  assert.throws(() => createPlatformTask(db, {
+    title: "Feature before bootstrap",
+    owner: "Phil",
+    repositories: [{ repository_id: repo.id, mode: "editable" }],
+  }), /尚未完成 Alignyard 初始化/);
+
+  const first = createRepositoryInitializationTask(db, repo.id, "Phil");
+  const second = createRepositoryInitializationTask(db, repo.id, "Phil");
+  assert.equal(first.key, second.key);
+  assert.equal(first.task_type, "repository_init");
+  assert.equal(first.repositories.length, 1);
+  assert.equal(first.repositories[0].mode, "editable");
+  assert.equal(listPlatformRepositories(db)[0].protocol_state, "initializing");
+});
+
+test("Repository deletion is blocked by Task references and otherwise removes metadata", () => {
+  const db = memoryDb();
+  const unused = createPlatformRepository(db, {
+    name: "unused", git_url: "git@example.com:team/unused.git", created_by: "Phil",
+  });
+  assert.equal(deletePlatformRepository(db, unused.id)?.id, unused.id);
+  assert.equal(listPlatformRepositories(db).length, 0);
+
+  const used = createPlatformRepository(db, {
+    name: "used", git_url: "git@example.com:team/used.git", created_by: "Phil",
+  });
+  createRepositoryInitializationTask(db, used.id, "Phil");
+  assert.equal(platformRepositoryTaskCount(db, used.id), 1);
+  assert.throws(() => deletePlatformRepository(db, used.id), /已被 1 个 Task 引用/);
 });

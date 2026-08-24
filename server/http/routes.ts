@@ -54,6 +54,7 @@ import {
   localHostId,
 } from "../core/ownership.js";
 import { branchesForOwnedRepo, deleteOwnedRepo, fetchOwnedRepo, registerOwnedRepo, type OwnedRepoEnv } from "../repo/owned.js";
+import { findRepoByGitUrl } from "../repo/catalog.js";
 import { pasteImageIntoOwnedTask } from "../task/paste-service.js";
 import { parseNodeJson, runNodeCommand } from "../fleet/nodeclient.js";
 import { insertCheckedProvider, providerSummaries, providersForList } from "../provider/providers.js";
@@ -87,11 +88,15 @@ import {
 import { setKeepAwake } from "../onboarding/power.js";
 import {
   createPlatformRepository,
+  createRepositoryInitializationTask,
   createPlatformTask,
+  deletePlatformRepository,
+  getPlatformRepository,
   getPlatformTask,
   listPlatformArtifacts,
   listPlatformRepositories,
   listPlatformTasks,
+  platformRepositoryTaskCount,
   PlatformValidationError,
   updatePlatformTaskStatus,
 } from "../platform/catalog.js";
@@ -486,6 +491,41 @@ app.post("/api/platform/repositories", (req, res) => {
     res.status(201).json(createPlatformRepository(db, req.body ?? {}));
   } catch (error: any) {
     if (error instanceof PlatformValidationError) return res.status(400).json({ error: error.message });
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+app.delete("/api/platform/repositories/:id", async (req, res) => {
+  try {
+    const repositoryId = Number(req.params.id);
+    const repository = getPlatformRepository(db, repositoryId);
+    if (!repository) return res.status(404).json({ error: "Repository 不存在" });
+    const taskCount = platformRepositoryTaskCount(db, repositoryId);
+    if (taskCount) {
+      return res.status(409).json({ error: `Repository 已被 ${taskCount} 个 Task 引用，不能删除`, taskCount });
+    }
+
+    const hostId = localHostId(db);
+    const local = hostId == null ? undefined : findRepoByGitUrl(db, hostId, repository.git_url);
+    if (local) {
+      const result = await deleteOwnedRepo(ownedRepoEnv, local.id);
+      if (!result.ok) return sendRepoFailure(req, res, result);
+    }
+    deletePlatformRepository(db, repositoryId);
+    res.json({ ok: true, local_removed: !!local });
+  } catch (error: any) {
+    if (error instanceof PlatformValidationError) return res.status(409).json({ error: error.message });
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+app.post("/api/platform/repositories/:id/initialize", (req, res) => {
+  try {
+    const task = createRepositoryInitializationTask(db, Number(req.params.id), req.body?.owner);
+    const repository = getPlatformRepository(db, Number(req.params.id));
+    res.json({ task, repository });
+  } catch (error: any) {
+    if (error instanceof PlatformValidationError) return res.status(409).json({ error: error.message });
     res.status(500).json({ error: String(error?.message || error) });
   }
 });

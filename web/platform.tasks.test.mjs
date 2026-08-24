@@ -29,12 +29,31 @@ test("platform navigation contains only Tasks and Repositories", () => {
   assert.match(script, /const allowed = \["tasks", "repositories"\]/);
 });
 
-test("Repositories surface uses one binary protocol dot and routes Init through a draft Task", () => {
-  assert.match(script, /class="protocol-indicator \$\{repo\.protocol_initialized \? "initialized" : ""\}"/);
+test("Repositories surface shows protocol workflow state and creates a dedicated init Task", () => {
+  assert.match(script, /repositoryProtocolState/);
+  assert.match(script, /state-\$\{escapeHtml\(protocolState\)\}/);
   assert.match(script, /data-init-repository/);
-  assert.match(script, /title: `Initialize Alignyard/);
-  assert.match(script, /运行 ay init 与 ay validate/);
+  assert.match(script, /\/api\/platform\/repositories\/\$\{repositoryId\}\/initialize/);
+  assert.match(script, /task\.task_type === "repository_init"/);
   assert.doesNotMatch(html, /notice-card|repo-search|repository-card/);
+});
+
+test("Repositories surface exposes guarded deletion through the platform API", () => {
+  assert.match(script, /data-delete-repository/);
+  assert.match(script, /method: "DELETE"/);
+  assert.match(script, /已被 Task 引用的 Repository 不会被删除/);
+  assert.doesNotMatch(script, /window\.confirm/);
+  assert.match(html, /id="confirm-dialog"[\s\S]*?<section[^>]+role="dialog"[^>]+aria-modal="true"/);
+  assert.match(script, /await confirmDialog\(\{/);
+  assert.match(script, /closeConfirmDialog\(false\)/);
+});
+
+test("Task detail exposes only implemented ay workflow commands", () => {
+  assert.doesNotMatch(script, /ay task open/);
+  assert.match(script, /"ay init \."/);
+  assert.match(script, /ay new doc overview --scope shared/);
+  assert.match(script, /ay validate \./);
+  assert.match(script, /ay sync \. --platform/);
 });
 
 test("adding a Repository registers locally before sharing credential-free metadata", () => {

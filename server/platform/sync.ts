@@ -124,6 +124,11 @@ export function syncPlatformTaskKnowledge(
   if (input.documents.length > MAX_DOCUMENTS) throw new PlatformSyncError(413, `documents 不能超过 ${MAX_DOCUMENTS} 个`);
   const scopes = new Set(parsedManifest.manifest.scopes.map((scope) => scope.id));
   const documents = input.documents.map((document) => normalizeDocument(document, scopes));
+  if (task.task_type === "repository_init" && !documents.some((document) =>
+    document.kind === "doc" && document.path === ".alignyard/docs/shared/overview.md"
+  )) {
+    throw new PlatformSyncError(400, "初始化 Task 必须包含 .alignyard/docs/shared/overview.md");
+  }
   const totalBytes = documents.reduce((sum, document) => sum + Buffer.byteLength(document.content), 0);
   if (totalBytes > MAX_TOTAL_BYTES) throw new PlatformSyncError(413, "文档总大小超过 8 MiB");
 
