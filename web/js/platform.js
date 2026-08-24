@@ -11,6 +11,7 @@ const state = {
   repositories: [],
   taskFilter: "all",
   selectedTask: null,
+  pendingActions: new Set(),
   loading: false,
 };
 
@@ -429,6 +430,15 @@ function detailRepository(repo) {
   return `<article class="detail-repo"><div><strong>${escapeHtml(repo.name)}</strong><small>${escapeHtml(repo.git_url)}</small></div><span class="mode-badge ${repo.mode === "reference" ? "reference" : ""}">${escapeHtml(repo.mode)}</span><div><strong>${escapeHtml(repo.base_branch)}</strong><small>${escapeHtml(repo.work_branch || "固定为只读上下文")}</small></div></article>`;
 }
 
+function taskChangeRequestLabel(task) {
+  const repository = task.repositories.find((item) => item.mode === "editable");
+  return repository?.forge_kind === "github" ? "PR" : repository?.forge_kind === "gitlab" ? "MR" : "合并请求";
+}
+
+function pendingAction(task, action) {
+  return state.pendingActions.has(`${task.key}:${action}`);
+}
+
 function taskNextAction(task) {
   if (task.task_type === "repository_init") return initTaskActions(task);
   if (task.status === "draft") return `<button class="button secondary" type="button" data-set-status="review">提交审核</button>`;
@@ -438,16 +448,17 @@ function taskNextAction(task) {
 
 function initWorkflowStage(task) {
   const repository = task.repositories.find((item) => item.mode === "editable");
+  const requestLabel = taskChangeRequestLabel(task);
   if (task.pr_state === "merged" && repository?.protocol_state === "ready") {
     const note = task.workflow_error
       ? `Repository 已完成初始化；本地清理提示：${task.workflow_error}`
-      : "PR 已合并，Repository 已完成初始化。";
+      : `${requestLabel} 已合并，Repository 已完成初始化。`;
     return { key: "merged", label: "已合并", note };
   }
   if (task.workflow_error || task.runtime_error) return { key: "error", label: "需要处理", note: task.workflow_error || task.runtime_error };
-  if (task.pr_state === "merged") return { key: "error", label: "等待完成初始化", note: "PR 已合并，正在确认默认分支上的 Alignyard 文件。" };
-  if (task.status === "approved" && task.pr_state === "open") return { key: "pr", label: "PR 待合并", note: "Review 已批准，PR 已创建，等待人工确认合并。" };
-  if (task.status === "review") return { key: "review", label: "等待 Review", note: "Agent worktree 已冻结；确认工程知识后创建 PR。" };
+  if (task.pr_state === "merged") return { key: "error", label: "等待完成初始化", note: `${requestLabel} 已合并，正在确认默认分支上的 Alignyard 文件。` };
+  if (task.status === "approved" && task.pr_state === "open") return { key: "pr", label: `${requestLabel} 待合并`, note: `Review 已批准，${requestLabel} 已创建，等待人工确认合并。` };
+  if (task.status === "review") return { key: "review", label: "等待 Review", note: `Agent worktree 已冻结；确认工程知识后创建 ${requestLabel}。` };
   if (repository?.manifest_status === "valid") return { key: "ready", label: "可提交 Review", note: `Agent 已提交并同步 ${task.artifacts?.length || 0} 个工程知识产物。` };
   if (task.runtime_task_id && task.runtime_alive) return { key: "running", label: "Agent 执行中", note: "Agent 正在初始化 worktree；产物 sync 后这里会自动更新。" };
   if (task.runtime_task_id) return { key: "paused", label: "Agent 已暂停", note: "worktree 已保留，可以进入工作区检查或继续 Agent。" };
@@ -456,6 +467,7 @@ function initWorkflowStage(task) {
 
 function initWorkflowPanel(task) {
   const stage = initWorkflowStage(task);
+  const requestLabel = taskChangeRequestLabel(task);
   const stepState = (name) => {
     const order = ["waiting", "running", "paused", "error", "ready", "review", "pr", "merged"];
     const positions = { agent: 1, review: 5, pr: 6, merge: 7 };
@@ -470,7 +482,7 @@ function initWorkflowPanel(task) {
     <ol class="workflow-steps">
       <li class="${stepState("agent")}"><i>1</i><span>Agent 初始化</span></li>
       <li class="${stepState("review")}"><i>2</i><span>人工 Review</span></li>
-      <li class="${stepState("pr")}"><i>3</i><span>创建 PR</span></li>
+      <li class="${stepState("pr")}"><i>3</i><span>创建 ${requestLabel}</span></li>
       <li class="${stepState("merge")}"><i>4</i><span>确认合并</span></li>
     </ol>
   </section>`;
@@ -478,6 +490,7 @@ function initWorkflowPanel(task) {
 
 function initTaskActions(task) {
   const repository = task.repositories.find((item) => item.mode === "editable");
+  const requestLabel = taskChangeRequestLabel(task);
   const actions = [];
   if (task.runtime_task_id && task.runtime_has_worktree) {
     actions.push(`<button class="button secondary" type="button" data-open-agent>进入 Agent 工作区</button>`);
@@ -490,15 +503,15 @@ function initTaskActions(task) {
     actions.push(`<button class="button primary" type="button" data-run-init>继续 Agent</button>`);
   } else if (task.status === "review") {
     actions.push(`<button class="button secondary" type="button" data-set-status="draft">要求修改</button>`);
-    actions.push(`<button class="button primary" type="button" data-init-pr>审核通过并创建 PR</button>`);
+    actions.push(`<button class="button primary" type="button" data-init-pr ${pendingAction(task, "pull-request") ? "disabled" : ""}>${pendingAction(task, "pull-request") ? `正在创建 ${requestLabel}…` : `审核通过并创建 ${requestLabel}`}</button>`);
   } else if (task.status === "approved" && task.pr_state === "open") {
-    actions.push(`<a class="button secondary link" href="${escapeHtml(task.pr_url)}" target="_blank" rel="noreferrer">查看 PR #${task.pr_number}</a>`);
-    actions.push(`<button class="button primary" type="button" data-init-merge>合并 PR</button>`);
+    actions.push(`<a class="button secondary link" href="${escapeHtml(task.pr_url)}" target="_blank" rel="noreferrer">查看 ${requestLabel} #${task.pr_number}</a>`);
+    actions.push(`<button class="button primary" type="button" data-init-merge ${pendingAction(task, "merge") ? "disabled" : ""}>${pendingAction(task, "merge") ? `正在合并 ${requestLabel}…` : `合并 ${requestLabel}`}</button>`);
   } else if (task.status === "approved" && task.pr_state === "merged" && repository?.protocol_state !== "ready") {
-    actions.push(`<a class="button secondary link" href="${escapeHtml(task.pr_url)}" target="_blank" rel="noreferrer">查看 PR #${task.pr_number}</a>`);
+    actions.push(`<a class="button secondary link" href="${escapeHtml(task.pr_url)}" target="_blank" rel="noreferrer">查看 ${requestLabel} #${task.pr_number}</a>`);
     actions.push(`<button class="button primary" type="button" data-init-merge>重试完成初始化</button>`);
   } else if (task.pr_url) {
-    actions.push(`<a class="button secondary link" href="${escapeHtml(task.pr_url)}" target="_blank" rel="noreferrer">查看 PR #${task.pr_number}</a>`);
+    actions.push(`<a class="button secondary link" href="${escapeHtml(task.pr_url)}" target="_blank" rel="noreferrer">查看 ${requestLabel} #${task.pr_number}</a>`);
   }
   return actions.join("");
 }
@@ -534,8 +547,9 @@ function openTaskDetail(key) {
   $('[data-run-init]', $("#task-detail"))?.addEventListener("click", (event) => runInitTask(task.key, event.currentTarget));
   $('[data-open-agent]', $("#task-detail"))?.addEventListener("click", () => openPlatformAgentWorkspace(task));
   $('[data-init-review]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "review", event.currentTarget, "已提交 Review"));
-  $('[data-init-pr]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "pull-request", event.currentTarget, "Review 已批准，PR 已创建"));
-  $('[data-init-merge]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "merge", event.currentTarget, "PR 已合并，Repository 已就绪"));
+  const requestLabel = taskChangeRequestLabel(task);
+  $('[data-init-pr]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "pull-request", event.currentTarget, `Review 已批准，${requestLabel} 已创建`));
+  $('[data-init-merge]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "merge", event.currentTarget, `${requestLabel} 已合并，Repository 已就绪`));
 }
 
 function closeTaskDetail() {
@@ -570,6 +584,9 @@ async function runInitTask(key, button) {
 }
 
 async function initWorkflowAction(key, action, button, successMessage) {
+  const operationKey = `${key}:${action}`;
+  if (state.pendingActions.has(operationKey)) return;
+  state.pendingActions.add(operationKey);
   button.disabled = true;
   try {
     const result = await api(`/api/platform/tasks/${encodeURIComponent(key)}/${action}`, {
@@ -589,7 +606,9 @@ async function initWorkflowAction(key, action, button, successMessage) {
     toast(error.message, "error");
     await loadData({ silent: true });
   } finally {
+    state.pendingActions.delete(operationKey);
     if (button.isConnected) button.disabled = false;
+    if (state.selectedTask?.key === key && !$("#task-drawer").hidden) openTaskDetail(key);
   }
 }
 

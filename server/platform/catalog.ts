@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { repositoryForgeKind, type RepositoryForgeKind } from "./forge.js";
 
 type DB = Database.Database;
 
@@ -19,6 +20,7 @@ export interface PlatformRepository {
   id: number;
   name: string;
   git_url: string;
+  forge_kind: RepositoryForgeKind;
   default_branch: string;
   protocol_initialized: boolean;
   protocol_state: RepositoryProtocolState;
@@ -28,10 +30,14 @@ export interface PlatformRepository {
   updated_at: string;
 }
 
-type PlatformRepositoryRow = Omit<PlatformRepository, "protocol_initialized"> & { protocol_initialized: number };
+type PlatformRepositoryRow = Omit<PlatformRepository, "protocol_initialized" | "forge_kind"> & { protocol_initialized: number };
 
 function shapeRepository(row: PlatformRepositoryRow): PlatformRepository {
-  return { ...row, protocol_initialized: row.protocol_initialized === 1 };
+  return {
+    ...row,
+    forge_kind: repositoryForgeKind(row.git_url),
+    protocol_initialized: row.protocol_initialized === 1,
+  };
 }
 
 export interface TaskRepositoryInput {
@@ -191,8 +197,12 @@ function repositoriesForTask(db: DB, taskId: number): PlatformTaskRepository[] {
       "FROM platform_task_repositories tr " +
       "JOIN platform_repositories r ON r.id=tr.repository_id " +
       "WHERE tr.task_id=? ORDER BY CASE tr.mode WHEN 'editable' THEN 0 ELSE 1 END,r.name",
-  ).all(taskId) as (Omit<PlatformTaskRepository, "protocol_initialized"> & { protocol_initialized: number })[];
-  return rows.map((row) => ({ ...row, protocol_initialized: row.protocol_initialized === 1 }));
+  ).all(taskId) as (Omit<PlatformTaskRepository, "protocol_initialized" | "forge_kind"> & { protocol_initialized: number })[];
+  return rows.map((row) => ({
+    ...row,
+    forge_kind: repositoryForgeKind(row.git_url),
+    protocol_initialized: row.protocol_initialized === 1,
+  }));
 }
 
 function shapeTask(db: DB, row: TaskRow): PlatformTask {
