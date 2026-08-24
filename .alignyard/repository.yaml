@@ -1,0 +1,12 @@
+version: 1
+preset: basic
+
+scopes:
+  - id: shared
+    title: "Repository-wide"
+  - id: server
+    title: "Server and CLI"
+    source: server
+  - id: web
+    title: "Web UI"
+    source: web
