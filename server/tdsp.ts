@@ -347,7 +347,9 @@ process.exitCode = await runCli(process.argv.slice(2), {
     return {
       src: p.src,
       binPath: p.binPath,
+      ayBinPath: p.ayBinPath,
       localBin: p.localBin,
+      ayLocalBin: p.ayLocalBin,
       clone: ROOT,
       profile: p.profile,
       dataDir: p.dataDir,

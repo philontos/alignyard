@@ -8,7 +8,7 @@ import { registerRoutes } from "./routes.js";
 
 export function createApp() {
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: "10mb" }));
   // Alignyard's shared Task workspace is the only product entry point. Local
   // agent execution belongs to the `ay` CLI and is not exposed as a web runtime.
   app.get("/", (_req, res) => res.sendFile(path.join(WEB_DIR, "platform.html")));

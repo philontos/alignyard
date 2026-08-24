@@ -27,6 +27,7 @@ test("platform repository catalog stores locators without credentials or checkou
   });
 
   assert.equal(repo.name, "alignyard");
+  assert.equal(repo.protocol_initialized, false);
   assert.deepEqual(listPlatformRepositories(db), [repo]);
   const columns = (db.prepare("PRAGMA table_info(platform_repositories)").all() as { name: string }[])
     .map((column) => column.name);
@@ -59,6 +60,7 @@ test("platform Task supports several editable and reference repositories", () =>
   });
 
   assert.equal(task.key, "AY-001");
+  assert.equal(task.status, "draft");
   assert.equal(task.repositories.length, 2);
   assert.equal(task.repositories[0].mode, "editable");
   assert.equal(task.repositories[0].base_branch, "develop");
@@ -88,6 +90,11 @@ test("platform Task requires at least one editable repository and validates stat
     owner: "李四",
     repositories: [{ repository_id: repo.id, mode: "editable" }],
   });
-  assert.equal(updatePlatformTaskStatus(db, task.key, "in_review")?.status, "in_review");
+  assert.equal(updatePlatformTaskStatus(db, task.key, "review")?.status, "review");
+  assert.equal(updatePlatformTaskStatus(db, task.key, "draft")?.status, "draft");
+  assert.equal(updatePlatformTaskStatus(db, task.key, "review")?.status, "review");
+  assert.equal(updatePlatformTaskStatus(db, task.key, "approved")?.status, "approved");
+  assert.throws(() => updatePlatformTaskStatus(db, task.key, "draft"), PlatformValidationError);
+  assert.throws(() => updatePlatformTaskStatus(db, task.key, "in_review"), PlatformValidationError);
   assert.throws(() => updatePlatformTaskStatus(db, task.key, "unknown"), PlatformValidationError);
 });

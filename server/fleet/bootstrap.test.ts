@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import {
   discoverNode,
   renderWrapper,
@@ -81,6 +82,8 @@ test("renderWrapper embeds the app dir, the node ladder, an honest failure, and 
   assert.match(w, /fnm env/, "self-discovering: retries the fnm rung at runtime");
   assert.match(w, /nvm\.sh/, "retries the nvm rung at runtime");
   assert.match(w, /exec node .*server\/tdsp\.ts/, "execs the app, passing args through");
+  assert.match(w, /exec node .*server\/ay\.ts/, "the sibling ay command uses the same install");
+  assert.match(w, /ay\|ay-\*/, "dispatches by the installed command name");
   assert.match(w, /no usable node/i, "fails honestly instead of a cryptic command-not-found");
 });
 
@@ -109,7 +112,9 @@ test("installPlan puts code at ~/.task-dispatcher/src and the wrapper execs it",
   const p = installPlan("/home/me");
   assert.equal(p.src, "/home/me/.task-dispatcher/src");
   assert.equal(p.binPath, "/home/me/.task-dispatcher/bin/tdsp");
+  assert.equal(p.ayBinPath, "/home/me/.task-dispatcher/bin/ay");
   assert.equal(p.localBin, "/home/me/.local/bin/tdsp");
+  assert.equal(p.ayLocalBin, "/home/me/.local/bin/ay");
   // the wrapper points at the canonical src pointer, NOT at the clone path directly,
   // so updating where src points needs no wrapper change
   assert.match(p.wrapper, /\/home\/me\/\.task-dispatcher\/src/);
@@ -131,9 +136,23 @@ test("applyInstall symlinks src→clone and writes an executable wrapper (real f
     const w = fs.readFileSync(p.binPath, "utf8");
     assert.match(w, /\.task-dispatcher\/src/, "APP points at the src pointer");
     assert.match(w, /exec node .*server\/tdsp\.ts/, "execs the app");
+    assert.equal(fs.realpathSync(p.ayBinPath), fs.realpathSync(p.binPath), "ay shares the verified launcher");
+    assert.equal(fs.realpathSync(p.ayLocalBin!), fs.realpathSync(p.binPath), "ay is linked onto PATH");
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(clone, { recursive: true, force: true });
+  }
+});
+
+test("the installed ay multicall command launches the protocol CLI", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "ay-home-"));
+  try {
+    const p = applyInstall(home, process.cwd());
+    const help = execFileSync(p.ayBinPath, ["--help"], { encoding: "utf8" });
+    assert.match(help, /ay init/);
+    assert.match(help, /ay sync/);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
   }
 });
 
@@ -141,6 +160,7 @@ test("profileInstallPlan is isolated from every canonical install path", () => {
   const p = profileInstallPlan("/home/me", "tailscale-test");
   assert.equal(p.src, "/home/me/.task-dispatcher/profiles/tailscale-test/src");
   assert.equal(p.binPath, "/home/me/.task-dispatcher/profiles/tailscale-test/bin/tdsp");
+  assert.equal(p.ayBinPath, "/home/me/.task-dispatcher/profiles/tailscale-test/bin/ay");
   assert.equal(p.localBin, "/home/me/.local/bin/tdsp-tailscale-test");
   assert.equal(p.dataDir, "/home/me/.task-dispatcher/profiles/tailscale-test/data");
   assert.match(p.wrapper, /TASK_DISPATCHER_DATA_DIR/);
@@ -168,6 +188,7 @@ test("applyProfileInstall does not replace the canonical src or tdsp launcher", 
     assert.equal(fs.readFileSync(canonicalBin, "utf8"), "keep-bin");
     assert.equal(fs.readlinkSync(p.src), path.resolve(clone));
     assert.equal(fs.statSync(p.binPath).mode & 0o100, 0o100);
+    assert.equal(fs.realpathSync(p.ayBinPath), fs.realpathSync(p.binPath));
     assert.match(fs.readFileSync(p.binPath, "utf8"), /TASK_DISPATCHER_DATA_DIR/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
@@ -197,6 +218,7 @@ test("bootstrapMachine returns the canonical src + verified wrapper path", async
   const r = await bootstrapMachine(env);
   assert.equal(r.ok, true);
   assert.equal(r.binPath, "/home/me/.task-dispatcher/bin/tdsp");
+  assert.equal(r.ayBinPath, "/home/me/.task-dispatcher/bin/ay");
   assert.equal(r.srcDir, "/home/me/.task-dispatcher/src");
   assert.equal(r.cloned, false, "reused the existing src");
 });

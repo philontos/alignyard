@@ -4,12 +4,8 @@ type DB = Database.Database;
 
 export const PLATFORM_TASK_STATUSES = [
   "draft",
-  "active",
-  "pushed",
-  "in_review",
+  "review",
   "approved",
-  "merged",
-  "closed",
 ] as const;
 
 export type PlatformTaskStatus = typeof PLATFORM_TASK_STATUSES[number];
@@ -20,9 +16,16 @@ export interface PlatformRepository {
   name: string;
   git_url: string;
   default_branch: string;
+  protocol_initialized: boolean;
   created_by: string;
   created_at: string;
   updated_at: string;
+}
+
+type PlatformRepositoryRow = Omit<PlatformRepository, "protocol_initialized"> & { protocol_initialized: number };
+
+function shapeRepository(row: PlatformRepositoryRow): PlatformRepository {
+  return { ...row, protocol_initialized: row.protocol_initialized === 1 };
 }
 
 export interface TaskRepositoryInput {
@@ -93,10 +96,30 @@ function branchSlug(value: string): string {
 }
 
 export function listPlatformRepositories(db: DB): PlatformRepository[] {
-  return db.prepare(
-    "SELECT id,name,git_url,default_branch,created_by,created_at,updated_at " +
+  const rows = db.prepare(
+    "SELECT id,name,git_url,default_branch,protocol_initialized,created_by,created_at,updated_at " +
       "FROM platform_repositories ORDER BY updated_at DESC,id DESC",
-  ).all() as PlatformRepository[];
+  ).all() as PlatformRepositoryRow[];
+  return rows.map(shapeRepository);
+}
+
+export function getPlatformRepository(db: DB, id: number): PlatformRepository | undefined {
+  const row = db.prepare(
+    "SELECT id,name,git_url,default_branch,protocol_initialized,created_by,created_at,updated_at " +
+      "FROM platform_repositories WHERE id=?",
+  ).get(id) as PlatformRepositoryRow | undefined;
+  return row ? shapeRepository(row) : undefined;
+}
+
+export function setPlatformRepositoryProtocolInitialized(
+  db: DB,
+  id: number,
+  initialized: boolean,
+): PlatformRepository | undefined {
+  const changed = db.prepare(
+    "UPDATE platform_repositories SET protocol_initialized=?,updated_at=datetime('now') WHERE id=?",
+  ).run(initialized ? 1 : 0, id).changes;
+  return changed ? getPlatformRepository(db, id) : undefined;
 }
 
 export function createPlatformRepository(db: DB, input: Record<string, unknown>): PlatformRepository {
@@ -113,8 +136,9 @@ export function createPlatformRepository(db: DB, input: Record<string, unknown>)
     const result = db.prepare(
       "INSERT INTO platform_repositories (name,git_url,default_branch,created_by) VALUES (?,?,?,?)",
     ).run(name, gitUrl, defaultBranch, createdBy);
-    return db.prepare("SELECT * FROM platform_repositories WHERE id=?")
-      .get(Number(result.lastInsertRowid)) as PlatformRepository;
+    const repository = getPlatformRepository(db, Number(result.lastInsertRowid));
+    if (!repository) throw new Error("Repository 创建后未找到");
+    return repository;
   } catch (error: any) {
     if (String(error?.message || error).includes("UNIQUE constraint failed")) {
       throw new PlatformValidationError("名称或 Git 地址已登记");
@@ -137,14 +161,15 @@ function artifactsForTask(db: DB, taskId: number): PlatformArtifact[] {
 }
 
 function repositoriesForTask(db: DB, taskId: number): PlatformTaskRepository[] {
-  return db.prepare(
-    "SELECT r.id,r.name,r.git_url,r.default_branch,r.created_by,r.created_at,r.updated_at," +
+  const rows = db.prepare(
+    "SELECT r.id,r.name,r.git_url,r.default_branch,r.protocol_initialized,r.created_by,r.created_at,r.updated_at," +
       "tr.mode,tr.base_branch,tr.base_commit,tr.work_branch,tr.head_commit,tr.assignee," +
       "tr.manifest_status,tr.last_reported_at " +
       "FROM platform_task_repositories tr " +
       "JOIN platform_repositories r ON r.id=tr.repository_id " +
       "WHERE tr.task_id=? ORDER BY CASE tr.mode WHEN 'editable' THEN 0 ELSE 1 END,r.name",
-  ).all(taskId) as PlatformTaskRepository[];
+  ).all(taskId) as (Omit<PlatformTaskRepository, "protocol_initialized"> & { protocol_initialized: number })[];
+  return rows.map((row) => ({ ...row, protocol_initialized: row.protocol_initialized === 1 }));
 }
 
 function shapeTask(db: DB, row: TaskRow): PlatformTask {
@@ -244,6 +269,18 @@ export function createPlatformTask(db: DB, input: Record<string, unknown>): Plat
 export function updatePlatformTaskStatus(db: DB, key: string, status: unknown): PlatformTask | undefined {
   if (!PLATFORM_TASK_STATUSES.includes(status as PlatformTaskStatus)) {
     throw new PlatformValidationError("Task 状态无效");
+  }
+  const task = getPlatformTask(db, key);
+  if (!task) return undefined;
+  if (task.status === status) return task;
+
+  const transitions: Record<PlatformTaskStatus, readonly PlatformTaskStatus[]> = {
+    draft: ["review"],
+    review: ["draft", "approved"],
+    approved: [],
+  };
+  if (!transitions[task.status].includes(status as PlatformTaskStatus)) {
+    throw new PlatformValidationError(`Task 不能从 ${task.status} 变为 ${status}`);
   }
   const changed = db.prepare(
     "UPDATE platform_tasks SET status=?,updated_at=datetime('now') WHERE task_key=?",

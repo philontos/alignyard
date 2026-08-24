@@ -40,6 +40,32 @@ test("initSchema on a fresh DB has worktree_path and the newer columns", () => {
   ]);
 });
 
+test("initSchema keeps one binary protocol indicator on platform repositories", () => {
+  const db = new Database(":memory:");
+  initSchema(db, opts(false));
+  const columns = (db.prepare("PRAGMA table_info(platform_repositories)").all() as { name: string }[])
+    .map((column) => column.name);
+  assert.ok(columns.includes("protocol_initialized"));
+  db.prepare(
+    "INSERT INTO platform_repositories (name,git_url,created_by) VALUES ('repo','git@example/repo','Phil')",
+  ).run();
+  assert.equal(
+    (db.prepare("SELECT protocol_initialized FROM platform_repositories").get() as { protocol_initialized: number })
+      .protocol_initialized,
+    0,
+  );
+});
+
+test("initSchema stores synchronized knowledge content without adding it to repository metadata", () => {
+  const db = new Database(":memory:");
+  initSchema(db, opts(false));
+  const columns = (db.prepare("PRAGMA table_info(platform_artifacts)").all() as { name: string }[])
+    .map((column) => column.name);
+  for (const name of ["document_id", "scope", "owners", "relations", "content", "content_hash"]) {
+    assert.ok(columns.includes(name), `missing platform_artifacts.${name}`);
+  }
+});
+
 test("initSchema adds stable peer identity and managed SSH state to hosts", () => {
   const db = new Database(":memory:");
   initSchema(db, opts(false));
@@ -107,6 +133,26 @@ test("initSchema on a fresh DB never creates a presets table", () => {
   initSchema(db, opts(false));
   const presets = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='presets'").get();
   assert.equal(presets, undefined);
+});
+
+test("initSchema collapses prototype platform Task statuses to draft, review, and approved", () => {
+  const db = new Database(":memory:");
+  initSchema(db, opts(false));
+  const insert = db.prepare(
+    "INSERT INTO platform_tasks (task_key,title,owner,status) VALUES (?,?,?,?)",
+  );
+  for (const [index, status] of [
+    "draft", "active", "pushed", "in_review", "review", "approved", "merged", "closed", "unexpected",
+  ].entries()) {
+    insert.run(`AY-${index}`, `Task ${index}`, "Phil", status);
+  }
+
+  initSchema(db, opts(false));
+  const statuses = (db.prepare("SELECT status FROM platform_tasks ORDER BY id").all() as { status: string }[])
+    .map((row) => row.status);
+  assert.deepEqual(statuses, [
+    "draft", "draft", "draft", "review", "review", "approved", "approved", "approved", "draft",
+  ]);
 });
 
 test("initSchema creates onboarding evidence storage without a completion flag", () => {

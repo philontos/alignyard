@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#f7f7f4" />
+  <meta name="theme-color" content="#f5f0e8" />
   <title>Alignyard · Tasks</title>
   <link rel="stylesheet" href="/css/platform.css" />
 </head>
@@ -15,12 +15,6 @@
         <strong>Alignyard</strong>
       </a>
 
-      <button class="workspace-switcher" type="button">
-        <span class="workspace-avatar">A</span>
-        <span><strong>Alignyard Team</strong><small>本地交互预览</small></span>
-        <b>⌄</b>
-      </button>
-
       <nav class="nav" aria-label="主导航">
         <button class="nav-item active" type="button" data-view="tasks">
           <span class="nav-symbol">▦</span><span>Tasks</span><em id="nav-task-count">0</em>
@@ -28,23 +22,9 @@
         <button class="nav-item" type="button" data-view="repositories">
           <span class="nav-symbol">◇</span><span>Repositories</span><em id="nav-repo-count">0</em>
         </button>
-        <button class="nav-item" type="button" data-view="reviews">
-          <span class="nav-symbol">✓</span><span>Reviews</span><em id="nav-review-count">0</em>
-        </button>
-        <button class="nav-item" type="button" data-view="knowledge">
-          <span class="nav-symbol">⌘</span><span>Knowledge</span>
-        </button>
       </nav>
 
       <div class="sidebar-spacer"></div>
-      <div class="protocol-state">
-        <span class="pulse"></span>
-        <div><strong>平台已连接</strong><small>metadata only</small></div>
-      </div>
-      <button class="nav-item muted" type="button" disabled>
-        <span class="nav-symbol">⚙</span><span>Workspace settings</span>
-      </button>
-      <div class="user-row"><span>P</span><div><strong>Phil</strong><small>Workspace admin</small></div><b>•••</b></div>
     </aside>
 
     <div class="mobile-scrim" id="mobile-scrim"></div>
@@ -52,96 +32,30 @@
     <main class="main">
       <header class="topbar">
         <button class="mobile-menu" id="mobile-menu" type="button" aria-label="打开导航">☰</button>
-        <div class="breadcrumbs"><span>Alignyard Team</span><b>/</b><strong id="breadcrumb-current">Tasks</strong></div>
-        <div class="top-actions">
-          <button class="command-search" type="button" disabled><span>⌕</span> 搜索 Task 或工程知识 <kbd>⌘ K</kbd></button>
-          <button class="help-button" type="button" title="帮助">?</button>
-        </div>
+        <div class="breadcrumbs"><span>Alignyard</span><b>/</b><strong id="breadcrumb-current">Tasks</strong></div>
+        <span class="top-user" title="当前用户 Phil">P</span>
       </header>
 
       <div class="content">
         <section class="view active" id="view-tasks" data-title="Tasks">
-          <div class="page-heading">
-            <div><p class="eyebrow">SHARED CHANGE WORKSPACE</p><h1>Tasks</h1><p>一个 Task 对应一次需求或变更，串联相关 Repository、分支和工程知识。</p></div>
-            <button class="button primary" type="button" data-create-task>＋ 创建 Task</button>
-          </div>
-
-          <div class="summary-grid">
-            <article><span class="summary-icon active-icon">↗</span><div><strong id="summary-active">0</strong><small>进行中</small></div></article>
-            <article><span class="summary-icon review-icon">✓</span><div><strong id="summary-review">0</strong><small>等待 Review</small></div></article>
-            <article><span class="summary-icon done-icon">◆</span><div><strong id="summary-done">0</strong><small>本月已完成</small></div></article>
-            <article class="summary-note"><span class="summary-icon local-icon">⌘</span><div><strong>本地执行</strong><small>由 ay 使用你的 Git 与 Agent 权限</small></div></article>
-          </div>
-
-          <div class="section-toolbar">
-            <div class="segmented" role="tablist">
+          <div class="task-toolbar">
+            <div class="task-tabs" role="tablist" aria-label="Task 筛选">
               <button class="active" type="button" data-task-filter="all">全部</button>
               <button type="button" data-task-filter="mine">我的</button>
-              <button type="button" data-task-filter="review">待 Review</button>
-              <button type="button" data-task-filter="done">已完成</button>
+              <button type="button" data-task-filter="review">待我 Review</button>
             </div>
-            <label class="inline-search"><span>⌕</span><input id="task-search" type="search" placeholder="搜索 Task" /></label>
+            <button class="button primary task-create" type="button" data-create-task>＋ Task</button>
           </div>
 
           <div id="task-list" class="task-list loading-block"><span class="spinner"></span> 正在加载 Tasks…</div>
         </section>
 
         <section class="view" id="view-repositories" data-title="Repositories">
-          <div class="page-heading">
-            <div><p class="eyebrow">SHARED LOCATOR CATALOG</p><h1>Repositories</h1><p>团队共享仓库地址与协议状态；clone、凭据和 worktree 始终留在成员本机。</p></div>
-            <button class="button primary" type="button" data-add-repository>＋ 登记 Repository</button>
+          <div class="repo-header">
+            <span id="repo-total-label">0 Repositories</span>
+            <button class="button primary task-create" type="button" data-add-repository>＋ Repository</button>
           </div>
-          <div class="notice-card">
-            <span>i</span><p><strong>平台不代理 Git 权限。</strong>点击“本地打开”后，<code>ay</code> 会使用你电脑上的 SSH key 或 Git credential；没有权限就无法拉取。</p>
-          </div>
-          <div class="repo-toolbar"><label class="inline-search wide"><span>⌕</span><input id="repo-search" type="search" placeholder="按名称或 Git 地址搜索" /></label><span id="repo-total-label">0 个 Repository</span></div>
-          <div id="repository-grid" class="repository-grid loading-block"><span class="spinner"></span> 正在加载 Repository Catalog…</div>
-        </section>
-
-        <section class="view" id="view-reviews" data-title="Reviews">
-          <div class="page-heading">
-            <div><p class="eyebrow">DOCUMENT-FIRST REVIEW</p><h1>Reviews</h1><p>先对齐 specs、ADR 和 docs，再确认代码变更是否符合已经评审的约束。</p></div>
-          </div>
-          <div class="review-layout">
-            <div>
-              <div class="section-title"><div><h2>等待你的 Review</h2><span id="review-total-label">0 项</span></div></div>
-              <div id="review-list" class="review-list loading-block"><span class="spinner"></span> 正在加载…</div>
-            </div>
-            <aside class="review-principles">
-              <p class="eyebrow">REVIEW CONTRACT</p><h2>Review 的对象是固定快照</h2>
-              <ol><li><span>1</span><div><strong>固定 commit</strong><p>每次 Review 指向明确的 base/head。</p></div></li><li><span>2</span><div><strong>先看工程知识</strong><p>优先查看 specs、ADR、docs 的变化。</p></div></li><li><span>3</span><div><strong>结论可追溯</strong><p>审批与意见记录回 Task。</p></div></li></ol>
-            </aside>
-          </div>
-        </section>
-
-        <section class="view" id="view-knowledge" data-title="Knowledge">
-          <div class="page-heading">
-            <div><p class="eyebrow">ENGINEERING KNOWLEDGE MAP</p><h1>Knowledge</h1><p>统一阅读 Task 中由 manifest 发现的 docs、specs 和 ADR，并理解它们之间的关联。</p></div>
-          </div>
-
-          <div class="manifest-banner">
-            <div class="manifest-copy"><span class="manifest-mark">Y</span><div><strong>.alignyard/repository.yaml</strong><p>Repository 自描述知识目录；本机 <code>ay sync</code> 解析差异后，只把结构化结果上报平台。</p></div></div>
-            <span class="protocol-badge">protocol v0</span>
-          </div>
-
-          <div class="knowledge-stats">
-            <article><span class="kind-dot docs"></span><div><strong id="knowledge-docs">0</strong><small>docs</small></div></article>
-            <article><span class="kind-dot specs"></span><div><strong id="knowledge-specs">0</strong><small>specs</small></div></article>
-            <article><span class="kind-dot adr"></span><div><strong id="knowledge-adr">0</strong><small>ADR</small></div></article>
-            <article><span class="kind-dot pending"></span><div><strong id="knowledge-pending">0</strong><small>待 Review</small></div></article>
-          </div>
-
-          <div class="knowledge-layout">
-            <div>
-              <div class="section-title"><div><h2>最近变更的工程知识</h2><span>来自 Task 快照</span></div></div>
-              <div id="artifact-list" class="artifact-list"></div>
-            </div>
-            <aside class="knowledge-model">
-              <p class="eyebrow">ONE READING SURFACE</p><h2>平台负责串联，本地负责读取</h2>
-              <div class="model-flow"><span>Repository</span><i>→</i><span>ay sync</span><i>→</i><span>Task</span><i>→</i><span>Review</span></div>
-              <p>源码与原始文档仍在 Git 中。平台保存路径、commit、变更类型、关联关系和评审结论。</p>
-            </aside>
-          </div>
+          <div id="repository-grid" class="repository-list loading-block"><span class="spinner"></span> 正在加载 Repositories…</div>
         </section>
       </div>
     </main>
@@ -150,16 +64,15 @@
   <div class="dialog-backdrop" id="create-task-dialog" hidden>
     <form class="dialog-card task-dialog" id="create-task-form">
       <div class="dialog-head"><div><p class="eyebrow">NEW SHARED TASK</p><h2>创建 Task</h2></div><button class="close-button" type="button" data-close-dialog aria-label="关闭">×</button></div>
-      <p class="dialog-intro">先登记共享任务与 Repository 范围；随后任何有权限的成员都可以在本机执行 <code>ay task open</code>。</p>
+      <p class="dialog-intro">描述要做什么，关联需要的 Repository。</p>
       <div class="form-grid">
         <label class="full"><span>Task 标题</span><input name="title" required autocomplete="off" placeholder="例如：统一登录态续期策略" /></label>
         <label class="full"><span>需求说明 <small>可选</small></span><textarea name="description" rows="3" placeholder="说明目标、范围和验收条件"></textarea></label>
         <label><span>负责人</span><input name="owner" required value="Phil" autocomplete="off" /></label>
         <div class="form-hint"><span>创建后生成</span><strong>AY-xxx</strong></div>
       </div>
-      <div class="repo-selection-head"><div><strong>关联 Repositories</strong><small>至少一个 editable；reference 只作为上下文</small></div><button type="button" class="text-button" data-add-repository>＋ 登记新的</button></div>
+      <div class="repo-selection-head"><div><strong>Repositories</strong><small>至少选择一个 editable</small></div><button type="button" class="text-button" data-add-repository>＋ 添加</button></div>
       <div id="task-repository-options" class="task-repository-options"></div>
-      <p class="multi-repo-note"><span>Beta</span>数据模型支持多个 editable Repository；当前本地执行会逐个创建对等 worktree。</p>
       <div class="form-error" id="task-form-error" role="alert"></div>
       <div class="dialog-actions"><button class="button secondary" type="button" data-close-dialog>取消</button><button class="button primary" id="create-task-submit" type="submit">创建 Task</button></div>
     </form>
@@ -167,17 +80,17 @@
 
   <div class="dialog-backdrop" id="add-repository-dialog" hidden>
     <form class="dialog-card repo-dialog" id="add-repository-form">
-      <div class="dialog-head"><div><p class="eyebrow">SHARED LOCATOR</p><h2>登记 Repository</h2></div><button class="close-button" type="button" data-close-repo-dialog aria-label="关闭">×</button></div>
-      <p class="dialog-intro">只保存团队共享的仓库定位信息。Alignyard 不会要求或保存你的 Git 凭据。</p>
+      <div class="dialog-head"><div><h2>添加 Repository</h2></div><button class="close-button" type="button" data-close-repo-dialog aria-label="关闭">×</button></div>
+      <p class="dialog-intro">先用你的权限添加到本机，再把名称、地址和默认分支同步到平台。</p>
       <div class="form-grid">
         <label><span>名称</span><input name="name" required placeholder="alignyard" autocomplete="off" /></label>
-        <label><span>默认分支</span><input name="default_branch" required value="main" autocomplete="off" /></label>
+        <label><span>默认分支 <small>留空自动检测</small></span><input name="default_branch" autocomplete="off" placeholder="自动" /></label>
         <label class="full"><span>Git 地址</span><input name="git_url" required placeholder="git@github.com:team/alignyard.git" autocomplete="off" /></label>
-        <label class="full"><span>登记人</span><input name="created_by" required value="Phil" autocomplete="off" /></label>
+        <label class="full"><span>HTTPS Token <small>可选，仅保存在本机</small></span><input name="token" type="password" autocomplete="new-password" /></label>
       </div>
-      <div class="security-row"><span>✓</span><p>没有 Token 字段 · 不在服务端 clone · 不创建共享 worktree</p></div>
+      <div class="security-row"><span>✓</span><p>凭据和 clone 留在本机；平台只保存 Repository 元数据。</p></div>
       <div class="form-error" id="repo-form-error" role="alert"></div>
-      <div class="dialog-actions"><button class="button secondary" type="button" data-close-repo-dialog>取消</button><button class="button primary" id="add-repository-submit" type="submit">登记 Repository</button></div>
+      <div class="dialog-actions"><button class="button secondary" type="button" data-close-repo-dialog>取消</button><button class="button primary" id="add-repository-submit" type="submit">添加 Repository</button></div>
     </form>
   </div>
 

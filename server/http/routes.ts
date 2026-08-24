@@ -95,6 +95,8 @@ import {
   PlatformValidationError,
   updatePlatformTaskStatus,
 } from "../platform/catalog.js";
+import { refreshRepositoryProtocol } from "../platform/protocol.js";
+import { PlatformSyncError, syncPlatformTaskKnowledge } from "../platform/sync.js";
 
 function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
@@ -488,6 +490,19 @@ app.post("/api/platform/repositories", (req, res) => {
   }
 });
 
+app.post("/api/platform/repositories/:id/refresh", async (req, res) => {
+  try {
+    const result = await refreshRepositoryProtocol(db, localRunner, Number(req.params.id));
+    if (!result.ok) {
+      const status = result.reason === "not_found" ? 404 : 409;
+      return res.status(status).json({ error: result.message });
+    }
+    res.json(result.repository);
+  } catch (error: any) {
+    res.status(502).json({ error: String(error?.message || error) });
+  }
+});
+
 app.get("/api/platform/tasks", (_req, res) => {
   res.json(listPlatformTasks(db));
 });
@@ -514,6 +529,15 @@ app.patch("/api/platform/tasks/:key", (req, res) => {
     res.json(task);
   } catch (error: any) {
     if (error instanceof PlatformValidationError) return res.status(400).json({ error: error.message });
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+app.post("/api/platform/tasks/:key/sync", (req, res) => {
+  try {
+    res.json({ ok: true, ...syncPlatformTaskKnowledge(db, req.params.key, req.body ?? {}) });
+  } catch (error: any) {
+    if (error instanceof PlatformSyncError) return res.status(error.status).json({ error: error.message });
     res.status(500).json({ error: String(error?.message || error) });
   }
 });

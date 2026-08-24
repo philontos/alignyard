@@ -25,6 +25,9 @@ function setup() {
     dataDir: "/data",
     exec: async (file, args, execOpts = {}) => {
       calls.push({ file, args, cwd: execOpts.cwd });
+      if (args[0] === "ls-remote" && args.includes("--symref")) {
+        return `ref: refs/heads/develop\tHEAD\n${"a".repeat(40)}\tHEAD\n`;
+      }
       if (args[0] === "ls-remote") return `${"a".repeat(40)}\trefs/heads/main\n${"b".repeat(40)}\trefs/heads/develop\n`;
       return "";
     },
@@ -51,10 +54,11 @@ test("repo CRUD executes on the owner and keeps the catalog owner-local", async 
   const created = await registerOwnedRepo(s.env, { name: "switchyard", git_url: "git@example/switchyard" });
   assert.equal(created.ok, true);
   if (!created.ok) return;
-  const row = s.db.prepare("SELECT host_id,mirror_path,status FROM repos WHERE id=?").get(created.id) as any;
+  const row = s.db.prepare("SELECT host_id,mirror_path,status,default_branch FROM repos WHERE id=?").get(created.id) as any;
   assert.equal(row.host_id, 1);
   assert.equal(row.mirror_path, `/data/mirrors/${created.id}-switchyard.git`);
   assert.equal(row.status, "ready");
+  assert.equal(row.default_branch, "develop", "registration discovers the remote default branch");
   assert.ok(s.calls.some((call) => call.args[0] === "init" && call.args[1] === "--bare"));
 
   const branches = await branchesForOwnedRepo(s.env, created.id);

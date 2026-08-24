@@ -349,7 +349,9 @@ export interface CliDeps {
   install: (profile?: string) => {
     src: string;
     binPath: string;
+    ayBinPath?: string;
     localBin: string;
+    ayLocalBin?: string;
     clone: string;
     profile?: string;
     dataDir?: string;
@@ -921,6 +923,7 @@ export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
           (r.dataDir ? `  data   ${r.dataDir}\n` : "") +
           `  command ${r.binPath}\n` +
           `  on PATH ${r.localBin}  (ensure ~/.local/bin is on your PATH)\n` +
+          (r.ayBinPath ? `  ay      ${r.ayLocalBin || r.ayBinPath}\n` : "") +
           `  state  installed only (no server was started)\n` +
           `next: start with \`${command} serve${profile ? " --port <unused-port>" : ""}\`, then check \`${command} serve status\`\n` +
           (profile ? `remove: stop it, then run \`tdsp uninstall --profile ${profile}\`\n` : "") +
