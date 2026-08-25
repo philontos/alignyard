@@ -6,7 +6,9 @@ import {
   createPlatformRepository,
   createRepositoryInitializationTask,
   createPlatformTask,
+  deletePlatformTask,
   deletePlatformRepository,
+  getPlatformRepository,
   getPlatformTask,
   linkPlatformTaskRuntime,
   listPlatformRepositories,
@@ -228,4 +230,39 @@ test("Repository deletion is blocked by Task references and otherwise removes me
   createRepositoryInitializationTask(db, used.id, "Phil");
   assert.equal(platformRepositoryTaskCount(db, used.id), 1);
   assert.throws(() => deletePlatformRepository(db, used.id), /已被 1 个 Task 引用/);
+});
+
+test("deleting an unfinished Repository Init removes its snapshot and releases the Repository", () => {
+  const db = memoryDb();
+  const repository = createPlatformRepository(db, {
+    name: "new-service", git_url: "git@example.com:team/new-service.git", created_by: "Phil",
+  });
+  const task = createRepositoryInitializationTask(db, repository.id, "Phil");
+  db.prepare(
+    "INSERT INTO platform_artifacts (task_id,repository_id,kind,path,title) VALUES (?,?, 'doc',?,?)",
+  ).run(task.id, repository.id, ".alignyard/docs/shared/overview.md", "仓库概览");
+
+  const deleted = deletePlatformTask(db, task.key);
+
+  assert.equal(deleted?.key, task.key);
+  assert.equal(getPlatformTask(db, task.key), undefined);
+  assert.equal(platformRepositoryTaskCount(db, repository.id), 0);
+  assert.equal((db.prepare("SELECT COUNT(*) AS count FROM platform_artifacts").get() as { count: number }).count, 0);
+  assert.equal(getPlatformRepository(db, repository.id)?.protocol_state, "uninitialized");
+});
+
+test("deleting a completed Repository Init preserves the ready Repository", () => {
+  const db = memoryDb();
+  const repository = createPlatformRepository(db, {
+    name: "ready-service", git_url: "git@example.com:team/ready-service.git", created_by: "Phil",
+  });
+  const task = createRepositoryInitializationTask(db, repository.id, "Phil");
+  recordPlatformPullRequest(db, task.key, {
+    number: 7, url: "https://github.com/example/ready-service/pull/7", state: "merged",
+  });
+  setPlatformRepositoryProtocolState(db, repository.id, "ready");
+
+  deletePlatformTask(db, task.key);
+
+  assert.equal(getPlatformRepository(db, repository.id)?.protocol_state, "ready");
 });

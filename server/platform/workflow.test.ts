@@ -9,11 +9,13 @@ import {
   createPlatformRepository,
   createRepositoryInitializationTask,
   getPlatformTask,
+  listPlatformRepositories,
   setPlatformRepositoryProtocolState,
   updatePlatformTaskStatus,
 } from "./catalog.ts";
 import {
   approveAndCreateRepositoryInitializationPullRequest,
+  deletePlatformTaskWithResources,
   mergeRepositoryInitializationPullRequest,
   PlatformWorkflowError,
   repositoryInitializationPrompt,
@@ -40,6 +42,7 @@ function setup(options: { gitUrl?: string } = {}) {
   const task = createRepositoryInitializationTask(db, repository.id, "Phil");
   let pullRequestCreated = false;
   let pullRequestMerged = false;
+  let pullRequestClosed = false;
   const calls: string[] = [];
 
   const runtimeEnv: RepoTaskEnv = {
@@ -70,12 +73,16 @@ function setup(options: { gitUrl?: string } = {}) {
         pullRequestMerged = true;
         return "";
       }
+      if (file === "gh" && args[0] === "pr" && args[1] === "close") {
+        pullRequestClosed = true;
+        return "";
+      }
       if (file === "gh" && args[0] === "pr" && args[1] === "view") {
         if (!pullRequestCreated) throw new Error("no pull request found");
         return JSON.stringify({
           number: 42,
           url: "https://github.com/example/service/pull/42",
-          state: pullRequestMerged ? "MERGED" : "OPEN",
+          state: pullRequestMerged ? "MERGED" : pullRequestClosed ? "CLOSED" : "OPEN",
         });
       }
       if (file === "glab" && args[0] === "mr" && args[1] === "create") {
@@ -86,12 +93,16 @@ function setup(options: { gitUrl?: string } = {}) {
         pullRequestMerged = true;
         return "";
       }
+      if (file === "glab" && args[0] === "mr" && args[1] === "close") {
+        pullRequestClosed = true;
+        return "";
+      }
       if (file === "glab" && args[0] === "mr" && args[1] === "list") {
         if (!pullRequestCreated) return "[]";
         return JSON.stringify([{
           iid: 42,
           web_url: "https://gitlab.com/example/service/-/merge_requests/42",
-          state: pullRequestMerged ? "merged" : "opened",
+          state: pullRequestMerged ? "merged" : pullRequestClosed ? "closed" : "opened",
         }]);
       }
       if (file === "glab" && args[0] === "mr" && args[1] === "view") {
@@ -99,7 +110,7 @@ function setup(options: { gitUrl?: string } = {}) {
         return JSON.stringify({
           iid: 42,
           web_url: "https://gitlab.com/example/service/-/merge_requests/42",
-          state: pullRequestMerged ? "merged" : "opened",
+          state: pullRequestMerged ? "merged" : pullRequestClosed ? "closed" : "opened",
         });
       }
       return "";
@@ -124,6 +135,7 @@ function setup(options: { gitUrl?: string } = {}) {
     },
     async stopRuntimeTask(id) { db.prepare("UPDATE tasks SET status='cleaned' WHERE id=?").run(id); },
     async cleanupRuntimeTask(id) { db.prepare("UPDATE tasks SET status='cleaned' WHERE id=?").run(id); },
+    async deleteRuntimeTask(id) { db.prepare("DELETE FROM tasks WHERE id=?").run(id); },
     async refreshRepository(id) {
       const updated = setPlatformRepositoryProtocolState(db, id, "ready");
       if (!updated) throw new Error("missing repository");
@@ -285,6 +297,22 @@ test("Repository Init revisions update the existing open PR after another Review
   assert.equal(approved.pr_number, 42);
   assert.equal(calls.filter((call) => call.startsWith("gh pr create ")).length, 1);
   assert.equal(calls.filter((call) => call.startsWith("git push --set-upstream origin ")).length, 2);
+});
+
+test("deleting Repository Init closes its PR and removes runtime plus platform state", async () => {
+  const { db, env, repository, task, calls } = setup();
+  const started = await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
+  seedSyncedOverview(db, task.key, repository.id);
+  await submitRepositoryInitializationReview(env, task.key);
+  await approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+
+  const deleted = await deletePlatformTaskWithResources(env, task.key);
+
+  assert.equal(deleted.key, task.key);
+  assert.equal(getPlatformTask(db, task.key), undefined);
+  assert.equal(db.prepare("SELECT id FROM tasks WHERE id=?").get(started.runtime.id), undefined);
+  assert.equal(calls.some((call) => call === "gh pr close 42 --delete-branch"), true);
+  assert.equal(listPlatformRepositories(db)[0].protocol_state, "uninitialized");
 });
 
 test("PR creation reconciles a remote success reported as already existing", async () => {

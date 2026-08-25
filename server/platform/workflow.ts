@@ -5,6 +5,7 @@ import type { Runner } from "../fleet/runner.js";
 import type { AgentKind } from "../session/agent.js";
 import { createRepoTask, type RepoTaskEnv } from "../task/createtask.js";
 import {
+  deletePlatformTask,
   getPlatformTask,
   linkPlatformTaskRuntime,
   markPlatformPullRequestMerged,
@@ -17,6 +18,7 @@ import {
 } from "./catalog.js";
 import {
   changeRequestLabel,
+  closeChangeRequest,
   createChangeRequest,
   mergeChangeRequest,
   resolveForge,
@@ -45,6 +47,7 @@ export interface PlatformWorkflowEnv {
   getRuntimeTask(id: number): Task | undefined;
   stopRuntimeTask(id: number): Promise<void>;
   cleanupRuntimeTask(id: number): Promise<void>;
+  deleteRuntimeTask(id: number): Promise<void>;
   refreshRepository(id: number): Promise<PlatformRepository>;
 }
 
@@ -390,5 +393,52 @@ export async function mergeRepositoryInitializationPullRequest(
     return await operation;
   } finally {
     if (operations.get(normalizedKey) === operation) operations.delete(normalizedKey);
+  }
+}
+
+export async function deletePlatformTaskWithResources(
+  env: PlatformWorkflowEnv,
+  key: string,
+): Promise<PlatformTask> {
+  let task = getPlatformTask(env.db, key);
+  if (!task) throw new PlatformWorkflowError(404, "Task 不存在");
+
+  try {
+    const runtime = task.runtime_task_id ? env.getRuntimeTask(task.runtime_task_id) : undefined;
+    if (task.pr_state === "open") {
+      if (!task.pr_number) throw new PlatformWorkflowError(409, "Task 的合并请求编号缺失，无法安全删除");
+      const repository = editableRepository(task);
+      const local = env.getLocalRepository(repository.git_url);
+      const cwd = runtime?.worktree_path && await env.runner.exists(runtime.worktree_path)
+        ? runtime.worktree_path
+        : local?.mirror_path && await env.runner.exists(local.mirror_path) ? local.mirror_path : null;
+      if (!cwd) throw new PlatformWorkflowError(409, "本机 Repository 不存在，无法关闭打开的合并请求");
+      const headBranch = repository.work_branch || runtime?.work_branch;
+      if (!headBranch) throw new PlatformWorkflowError(409, "Task 的工作分支缺失，无法安全删除");
+      const forge = await resolveForge({ runner: env.runner, cwd, gitUrl: repository.git_url });
+      const closed = await closeChangeRequest(forge, {
+        runner: env.runner,
+        cwd,
+        gitUrl: repository.git_url,
+        baseBranch: repository.base_branch,
+        headBranch,
+      }, task.pr_number);
+      recordPlatformPullRequest(env.db, key, closed);
+      if (closed.state === "merged") await env.refreshRepository(repository.id);
+      task = getPlatformTask(env.db, key) || task;
+    }
+
+    if (runtime) {
+      await env.cleanupRuntimeTask(runtime.id);
+      await env.deleteRuntimeTask(runtime.id);
+    }
+    const deleted = deletePlatformTask(env.db, key);
+    if (!deleted) throw new PlatformWorkflowError(404, "Task 不存在");
+    return deleted;
+  } catch (error: any) {
+    const message = errorMessage(error);
+    if (getPlatformTask(env.db, key)) setPlatformTaskWorkflowError(env.db, key, message);
+    if (error instanceof PlatformWorkflowError) throw error;
+    throw new PlatformWorkflowError(502, `删除 Task 失败：${message}`);
   }
 }

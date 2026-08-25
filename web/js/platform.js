@@ -317,6 +317,31 @@ async function deleteRepository(repositoryId, button) {
   }
 }
 
+async function deletePlatformTask(task, button) {
+  const requestLabel = taskChangeRequestLabel(task);
+  const remoteDetail = task.pr_state === "open"
+    ? `打开的 ${requestLabel} #${task.pr_number} 会关闭，并尝试清理远端工作分支。`
+    : "Repository 本身不会被删除。";
+  const confirmed = await confirmDialog({
+    title: "删除 Task？",
+    message: `确定要删除「${task.key} · ${task.title}」吗？`,
+    detail: `关联的 Agent session、worktree、本地 runtime Task 和工程知识快照都会清理。${remoteDetail}`,
+    confirmText: "删除 Task",
+  });
+  if (!confirmed) return;
+  button.disabled = true;
+  try {
+    await api(`/api/platform/tasks/${encodeURIComponent(task.key)}`, { method: "DELETE" });
+    closeTaskDetail();
+    await loadData({ silent: true });
+    toast(`${task.key} 已删除`);
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    if (button.isConnected) button.disabled = false;
+  }
+}
+
 function closeTaskDialog() { $("#create-task-dialog").hidden = true; }
 function openRepositoryDialog() {
   const form = $("#add-repository-form");
@@ -560,7 +585,7 @@ function openTaskDetail(key) {
     ${workflowNote}${task.task_type === "repository_init" ? "" : commandList}
     <section class="detail-section"><div class="detail-section-head"><h2>Repositories · ${task.repositories.length}</h2><span class="protocol-badge">peer worktrees</span></div><div class="detail-repos">${task.repositories.map(detailRepository).join("")}</div></section>
     <section class="detail-section"><div class="detail-section-head"><h2>工程知识 · ${task.artifacts?.length || 0}</h2>${canInspectChanges ? `<button class="text-button review-changes" type="button" data-open-task-changes>查看全部变更</button>` : `<span class="protocol-badge">manifest snapshot</span>`}</div><div class="artifact-list">${artifacts}</div></section>
-    <div class="detail-actions">${taskNextAction(task)}</div>`;
+    <div class="detail-actions">${taskNextAction(task)}<button class="button danger task-delete-action" type="button" data-delete-task>删除 Task</button></div>`;
   $("#task-drawer").hidden = false;
   $$('[data-copy-command]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => copyCommand(commands[Number(button.dataset.copyCommand)])));
   $$('[data-set-status]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => setTaskStatus(task.key, button.dataset.setStatus)));
@@ -572,6 +597,7 @@ function openTaskDetail(key) {
   const requestLabel = taskChangeRequestLabel(task);
   $('[data-init-pr]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "pull-request", event.currentTarget, `Review 已批准，${requestLabel} 已创建`));
   $('[data-init-merge]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "merge", event.currentTarget, `${requestLabel} 已合并，Repository 已就绪`));
+  $('[data-delete-task]', $("#task-detail"))?.addEventListener("click", (event) => deletePlatformTask(task, event.currentTarget));
 }
 
 function closeTaskDetail() {
