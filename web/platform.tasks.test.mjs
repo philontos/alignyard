@@ -64,6 +64,8 @@ test("Repository Init workspace closes runtime, Review, PR, and merge behind exp
   assert.match(html, /id="agent-terminal"/);
   assert.match(html, /id="task-drawer"[\s\S]*id="task-detail"[\s\S]*id="agent-workspace"/);
   assert.match(agent, /connectPty\(`session=/);
+  assert.match(agent, /attachCustomKeyEventHandler/);
+  assert.match(agent, /event\.isComposing && event\.keyCode === 20/);
   assert.match(agent, /classList\.add\("task-workspace-mode"\)/);
   assert.match(agent, /setConnectionState\("等待启动", "idle"\)/);
   assert.match(agent, /active\?\.taskId === task\.runtime_task_id && active\.session === task\.runtime_session/);
