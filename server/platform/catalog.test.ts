@@ -2,22 +2,27 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import Database from "better-sqlite3";
 import { initSchema } from "../core/schema.ts";
+import { upsertPlatformUser } from "../auth/auth.ts";
 import {
   createPlatformRepository,
   createRepositoryInitializationTask,
   createPlatformTask,
+  decidePlatformTaskReview,
   deletePlatformTask,
   deletePlatformRepository,
   getPlatformRepository,
   getPlatformTask,
   linkPlatformTaskRuntime,
+  listPlatformMembers,
   listPlatformRepositories,
   markPlatformPullRequestMerged,
   platformRepositoryTaskCount,
   PlatformValidationError,
   recordPlatformPullRequest,
+  recordPlatformTaskPush,
   setPlatformRepositoryProtocolState,
   setPlatformTaskWorkflowError,
+  submitPlatformTaskReview,
   updatePlatformTaskCommits,
   updatePlatformTaskStatus,
 } from "./catalog.ts";
@@ -205,6 +210,8 @@ test("platform Task records its runtime, commits, workflow error, and pull reque
   assert.equal(linked?.runtime_task_id, 9);
   assert.equal(linked?.runtime_status, "running");
   assert.equal(linked?.runtime_agent, "codex");
+  assert.equal(linked?.current_assignee, "Phil");
+  assert.equal(linked?.executions[0].role, "author");
   assert.equal(linked?.repositories[0].base_commit, "a".repeat(40));
 
   assert.equal(setPlatformTaskWorkflowError(db, task.key, "boom")?.workflow_error, "boom");
@@ -215,6 +222,53 @@ test("platform Task records its runtime, commits, workflow error, and pull reque
   assert.equal(withPr?.pr_number, 42);
   assert.equal(withPr?.pr_state, "open");
   assert.equal(markPlatformPullRequestMerged(db, task.key)?.pr_state, "merged");
+});
+
+test("Review records handoff, remote push, reviewer execution, and decision separately", () => {
+  const db = memoryDb();
+  const phil = upsertPlatformUser(db, "google", { sub: "phil", name: "Phil", email: "phil@example.com" });
+  const alice = upsertPlatformUser(db, "google", { sub: "alice", name: "Alice", email: "alice@example.com" });
+  db.prepare("INSERT INTO hosts (id,name,target,kind,status) VALUES (1,'local','','local','online')").run();
+  db.prepare(
+    "INSERT INTO repos (id,host_id,name,git_url,mirror_path,status) VALUES (7,1,'service','git@example/service','/mirror','ready')",
+  ).run();
+  db.prepare(
+    "INSERT INTO tasks (id,repo_id,base_branch,base_commit,work_branch,title,worktree_path,session,status,agent) " +
+      "VALUES (9,7,'main',?,'change/ay-001/phil','author','/author','tdsp-9','cleaned','codex')," +
+      "(10,7,'main',?,'change/ay-001/phil','review','/review','tdsp-10','running','claude')",
+  ).run("a".repeat(40), "a".repeat(40));
+  const repository = createPlatformRepository(db, {
+    name: "service", git_url: "git@example/service", created_by: "Phil", created_by_user_id: phil.id,
+  });
+  const task = createRepositoryInitializationTask(db, repository.id, "Phil", phil.id);
+  linkPlatformTaskRuntime(db, task.key, {
+    id: 9, work_branch: "change/ay-001/phil", base_commit: "a".repeat(40), actor: "Phil", role: "author", agent: "codex",
+  });
+  recordPlatformTaskPush(db, task.key, "b".repeat(40));
+  const handedOff = submitPlatformTaskReview(db, task.key, {
+    reviewer: "Alice",
+    reviewer_user_id: alice.id,
+    submitted_by: "Phil",
+    submitted_by_user_id: phil.id,
+  });
+
+  assert.equal(handedOff?.status, "review");
+  assert.equal(handedOff?.current_assignee, "Alice");
+  assert.equal(handedOff?.current_assignee_user_id, alice.id);
+  assert.equal(handedOff?.review?.status, "pending");
+  assert.equal(handedOff?.repositories[0].remote_pushed_at != null, true);
+  const reviewerRuntime = linkPlatformTaskRuntime(db, task.key, {
+    id: 10, work_branch: "change/ay-001/phil", base_commit: "a".repeat(40), actor: "Alice", role: "reviewer", agent: "claude",
+  });
+  assert.equal(reviewerRuntime?.executions.length, 2);
+  assert.equal(reviewerRuntime?.executions[1].actor, "Alice");
+  assert.deepEqual(listPlatformMembers(db).map((member) => member.name), ["Alice", "Phil"]);
+
+  const approved = decidePlatformTaskReview(db, task.key, "approved");
+  assert.equal(approved?.status, "approved");
+  assert.equal(approved?.review?.status, "approved");
+  assert.equal(approved?.current_assignee, "Phil");
+  assert.equal(approved?.current_assignee_user_id, phil.id);
 });
 
 test("Repository deletion is blocked by Task references and otherwise removes metadata", () => {

@@ -3,7 +3,9 @@ import { activateCodexUnicode } from "./core/terminal-unicode.js";
 
 let active = null;
 let notifyError = () => {};
+let startReviewAgent = null;
 let initialized = false;
+let emptyTask = null;
 
 function element(id) { return document.getElementById(id); }
 
@@ -68,22 +70,38 @@ export function openPlatformAgentWorkspace(task) {
   const host = element("agent-terminal");
   const empty = element("agent-workspace-empty");
   const controls = workspace.querySelector(".agent-workspace-controls");
+  const launch = element("agent-workspace-launch");
   element("agent-workspace-key").textContent = task.key;
   element("agent-workspace-title").textContent = task.title;
   workspace.hidden = false;
   element("task-drawer").classList.add("task-workspace-mode");
   document.body.classList.add("agent-workspace-open");
 
-  if (!task?.runtime_task_id || !task.runtime_session) {
+  if (!task?.runtime_task_id || !task.runtime_session || !task.runtime_alive) {
     disposeActiveTerminal();
+    emptyTask = task;
     workspace.classList.add("is-empty");
     host.hidden = true;
     empty.hidden = false;
     controls.hidden = true;
-    setConnectionState("等待启动", "idle");
+    const canStartReview = task?.status === "review" && task?.review
+      && ["pending", "in_progress"].includes(task.review.status);
+    element("agent-workspace-empty-title").textContent = canStartReview ? "Review Agent 尚未启动" : "Agent 尚未运行";
+    element("agent-workspace-empty-copy").textContent = canStartReview
+      ? `工作分支已分派给 ${task.review.reviewer}；选择本机 Agent 后拉取并进入 Review worktree。`
+      : "从左侧开始或继续当前流程后，Agent 会在这里运行。";
+    launch.hidden = !canStartReview;
+    if (canStartReview) {
+      const reviewerExecution = [...(task.executions || [])].reverse().find((execution) => execution.role === "reviewer");
+      element("agent-workspace-start").textContent = reviewerExecution ? "继续 Review" : "开始 Review";
+      element("agent-workspace-agent").disabled = !!reviewerExecution;
+      if (reviewerExecution?.agent) element("agent-workspace-agent").value = reviewerExecution.agent;
+    }
+    setConnectionState(canStartReview ? "等待 Reviewer" : "等待启动", "idle");
     return;
   }
 
+  emptyTask = null;
   workspace.classList.remove("is-empty");
   host.hidden = false;
   empty.hidden = true;
@@ -152,15 +170,28 @@ export function openPlatformAgentWorkspace(task) {
   requestAnimationFrame(fit);
 }
 
-export function initPlatformAgentWorkspace({ onError } = {}) {
+export function initPlatformAgentWorkspace({ onError, onStartReview } = {}) {
   if (initialized) return;
   initialized = true;
   if (onError) notifyError = onError;
+  if (onStartReview) startReviewAgent = onStartReview;
   element("agent-workspace-close").addEventListener("click", closePlatformAgentWorkspace);
   document.querySelectorAll("[data-agent-key]").forEach((button) => button.addEventListener("click", () => {
     const key = button.dataset.agentKey;
     const data = key === "enter" ? "\r" : key === "interrupt" ? "\x03" : key;
     if (!send(data)) notifyError("Agent 尚未连接");
   }));
+  element("agent-workspace-start").addEventListener("click", async () => {
+    if (!emptyTask || !startReviewAgent) return;
+    const button = element("agent-workspace-start");
+    button.disabled = true;
+    try {
+      await startReviewAgent(emptyTask, element("agent-workspace-agent").value, button);
+    } catch (error) {
+      notifyError(error?.message || String(error));
+    } finally {
+      if (button.isConnected) button.disabled = false;
+    }
+  });
   window.addEventListener("resize", () => requestAnimationFrame(fit));
 }

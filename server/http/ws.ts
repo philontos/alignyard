@@ -13,6 +13,7 @@ import { cancelCopyMode, ensureSessionOptions, pasteSubmit } from "../session/tm
 import { tr, langFromQuery } from "../core/i18n.js";
 import { getHost, SSH_BIN, MOSH_BIN, TMUX_BIN, SESSION_RE } from "./context.js";
 import { listOwnedTasks } from "../core/ownership.js";
+import { authenticateHeaders } from "../auth/auth.js";
 
 const wss = new WebSocketServer({ noServer: true });
 
@@ -103,6 +104,11 @@ export function attachWs(server: Server) {
 server.on("upgrade", (req, socket, head) => {
   const { pathname } = new URL(req.url || "", "http://localhost");
   if (pathname === "/pty") {
+    if (!authenticateHeaders(db, req.headers)) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
     return;
   }

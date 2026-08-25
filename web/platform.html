@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="no-referrer-when-downgrade" />
   <meta name="theme-color" content="#f5f0e8" />
   <title>Alignyard · Tasks</title>
   <link rel="stylesheet" href="/vendor/xterm.css" />
@@ -22,7 +23,7 @@
           <span class="nav-symbol">▦</span><span>Tasks</span><em id="nav-task-count">0</em>
         </button>
         <button class="nav-item" type="button" data-view="repositories">
-          <span class="nav-symbol">◇</span><span>Repositories</span><em id="nav-repo-count">0</em>
+          <span class="nav-symbol">◇</span><span>Repos</span><em id="nav-repo-count">0</em>
         </button>
       </nav>
 
@@ -35,7 +36,17 @@
       <header class="topbar">
         <button class="mobile-menu" id="mobile-menu" type="button" aria-label="打开导航">☰</button>
         <div class="breadcrumbs"><span>Alignyard</span><b>/</b><strong id="breadcrumb-current">Tasks</strong></div>
-        <span class="top-user" title="当前用户 Phil">P</span>
+        <div class="account-control">
+          <button class="top-user" id="top-user" type="button" aria-label="当前用户" aria-expanded="false">
+            <img id="top-user-image" alt="" hidden /><span id="top-user-initial">?</span>
+          </button>
+          <section class="account-menu" id="account-menu" hidden>
+            <strong id="account-name">—</strong>
+            <small id="account-email"></small>
+            <span id="account-mode"></span>
+            <button id="logout-button" type="button">退出登录</button>
+          </section>
+        </div>
       </header>
 
       <div class="content">
@@ -52,7 +63,7 @@
           <div id="task-list" class="task-list loading-block"><span class="spinner"></span> 正在加载 Tasks…</div>
         </section>
 
-        <section class="view" id="view-repositories" data-title="Repositories">
+        <section class="view" id="view-repositories" data-title="Repos">
           <div class="repo-header">
             <span id="repo-total-label">0 Repositories</span>
             <button class="button primary task-create" type="button" data-add-repository>＋ Repository</button>
@@ -70,10 +81,9 @@
       <div class="form-grid">
         <label class="full"><span>Task 标题</span><input name="title" required autocomplete="off" placeholder="例如：统一登录态续期策略" /></label>
         <label class="full"><span>需求说明 <small>可选</small></span><textarea name="description" rows="3" placeholder="说明目标、范围和验收条件"></textarea></label>
-        <label><span>负责人</span><input name="owner" required value="Phil" autocomplete="off" /></label>
-        <div class="form-hint"><span>创建后生成</span><strong>AY-xxx</strong></div>
+        <label class="full"><span>负责人</span><input name="owner" required readonly autocomplete="off" /></label>
       </div>
-      <div class="repo-selection-head"><div><strong>Repositories</strong><small>至少选择一个 editable</small></div><button type="button" class="text-button" data-add-repository>＋ 添加</button></div>
+      <div class="repo-selection-head"><div><strong>Repositories</strong><small>至少选择一个已就绪的 Repository</small></div><button type="button" class="text-button" data-add-repository>＋ 添加</button></div>
       <div id="task-repository-options" class="task-repository-options"></div>
       <div class="form-error" id="task-form-error" role="alert"></div>
       <div class="dialog-actions"><button class="button secondary" type="button" data-close-dialog>取消</button><button class="button primary" id="create-task-submit" type="submit">创建 Task</button></div>
@@ -96,6 +106,31 @@
     </form>
   </div>
 
+  <div class="dialog-backdrop" id="repository-detail-dialog" hidden>
+    <section class="dialog-card repository-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="repository-detail-name">
+      <header class="repository-detail-head">
+        <span class="repository-detail-icon" aria-hidden="true">◇</span>
+        <div>
+          <p>REPOSITORY · <span id="repository-detail-id">#0</span></p>
+          <h2 id="repository-detail-name">Repository</h2>
+        </div>
+        <button class="close-button" id="repository-detail-close" type="button" aria-label="关闭">×</button>
+      </header>
+      <dl class="repository-detail-list">
+        <div><dt>Git 平台</dt><dd id="repository-detail-forge">—</dd></div>
+        <div><dt>Git 地址</dt><dd><code id="repository-detail-url">—</code></dd></div>
+        <div><dt>默认分支</dt><dd><code id="repository-detail-branch">—</code></dd></div>
+        <div><dt>初始化状态</dt><dd><span class="repository-detail-status" id="repository-detail-status">—</span></dd></div>
+        <div><dt>关联 Tasks</dt><dd id="repository-detail-tasks">0</dd></div>
+        <div><dt>添加者</dt><dd id="repository-detail-creator">—</dd></div>
+        <div><dt>添加时间</dt><dd id="repository-detail-created">—</dd></div>
+        <div><dt>最近更新</dt><dd id="repository-detail-updated">—</dd></div>
+      </dl>
+      <p class="repository-detail-error" id="repository-detail-error" hidden></p>
+      <footer class="repository-detail-actions"><button class="button secondary" type="button" data-close-repository-detail>关闭</button></footer>
+    </section>
+  </div>
+
   <div class="dialog-backdrop" id="confirm-dialog" hidden>
     <section class="dialog-card confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message confirm-dialog-detail">
       <div class="confirm-dialog-mark" aria-hidden="true">!</div>
@@ -111,11 +146,37 @@
     </section>
   </div>
 
+  <div class="dialog-backdrop" id="review-dialog" hidden>
+    <form class="dialog-card review-dialog" id="review-form">
+      <div class="dialog-head">
+        <div><p class="eyebrow">HAND OFF FOR REVIEW</p><h2>提交 Review</h2></div>
+        <button class="close-button" type="button" data-close-review-dialog aria-label="关闭">×</button>
+      </div>
+      <p class="dialog-intro">平台会先确认 worktree 已提交并同步，再把工作分支推送到远端，然后将 Task 分派给 reviewer。</p>
+      <label class="field"><span>Reviewer</span><select name="reviewer_user_id" required></select></label>
+      <input name="task_key" type="hidden" />
+      <p class="form-hint">Reviewer 来自已登录过 Alignyard 的用户；GitHub / GitLab 仍决定其是否能拉取、修改和推送该分支。</p>
+      <p class="form-error" id="review-form-error"></p>
+      <div class="dialog-actions"><button class="button secondary" type="button" data-close-review-dialog>取消</button><button class="button primary" id="review-submit" type="submit">推送并分派</button></div>
+    </form>
+  </div>
+
   <div class="global-loading" id="global-loading" role="status" aria-live="polite" hidden>
     <div class="global-loading-card">
       <span class="spinner" aria-hidden="true"></span>
       <span><strong id="global-loading-title">正在处理…</strong><small id="global-loading-detail"></small></span>
     </div>
+  </div>
+
+  <div class="auth-gate" id="auth-gate" hidden>
+    <section class="auth-card" aria-labelledby="auth-title">
+      <span class="brand-mark auth-brand" aria-hidden="true"><i></i><i></i><i></i></span>
+      <p class="eyebrow">ALIGNYARD WORKSPACE</p>
+      <h1 id="auth-title">登录 Alignyard</h1>
+      <p>使用 Google 账号进入共享工程知识与 Task 工作区。</p>
+      <div id="google-signin-button" class="google-signin-button"></div>
+      <p class="auth-error" id="auth-error" role="alert"></p>
+    </section>
   </div>
 
   <div class="drawer-backdrop" id="task-drawer" hidden>
@@ -136,8 +197,12 @@
         <div class="agent-terminal" id="agent-terminal"></div>
         <div class="agent-workspace-empty" id="agent-workspace-empty" hidden>
           <span aria-hidden="true">🖥</span>
-          <strong>Agent 尚未启动</strong>
-          <p>从左侧开始当前流程后，Agent 会在这里运行。</p>
+          <strong id="agent-workspace-empty-title">Agent 尚未启动</strong>
+          <p id="agent-workspace-empty-copy">从左侧开始当前流程后，Agent 会在这里运行。</p>
+          <div class="agent-workspace-launch" id="agent-workspace-launch" hidden>
+            <label><span>Agent</span><select id="agent-workspace-agent"><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="kimi">Kimi CLI</option></select></label>
+            <button class="button primary" id="agent-workspace-start" type="button">开始 Review</button>
+          </div>
         </div>
       </div>
       <footer class="agent-workspace-controls">

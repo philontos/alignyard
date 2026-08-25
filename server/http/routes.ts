@@ -95,6 +95,7 @@ import {
   getPlatformRepository,
   getPlatformTask,
   listPlatformArtifacts,
+  listPlatformMembers,
   listPlatformRepositories,
   listPlatformTasks,
   platformRepositoryTaskCount,
@@ -105,14 +106,17 @@ import {
 import { refreshRepositoryProtocol } from "../platform/protocol.js";
 import { PlatformSyncError, syncPlatformTaskKnowledge } from "../platform/sync.js";
 import {
-  approveAndCreateRepositoryInitializationPullRequest,
+  createRepositoryInitializationPullRequest,
+  decidePlatformTaskReviewWorkflow,
   deletePlatformTaskWithResources,
   mergeRepositoryInitializationPullRequest,
   PlatformWorkflowError,
   startRepositoryInitialization,
-  submitRepositoryInitializationReview,
+  startPlatformTaskReviewAgent,
+  submitPlatformTaskForReview,
   type PlatformWorkflowEnv,
 } from "../platform/workflow.js";
+import { authenticatedUser, getPlatformUser } from "../auth/auth.js";
 
 function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
@@ -516,9 +520,28 @@ app.get("/api/platform/repositories", (_req, res) => {
   res.json(listPlatformRepositories(db));
 });
 
+// Alignyard keeps only credential-free Repository metadata. Resolve that row
+// back to this node's owned Repository, then reuse Switchyard's live branch
+// catalog (git ls-remote) so the browser never guesses or hand-types a ref.
+app.get("/api/platform/repositories/:id/branches", async (req, res) => {
+  const repository = getPlatformRepository(db, Number(req.params.id));
+  if (!repository) return res.status(404).json({ error: "Repository 不存在" });
+  const hostId = localHostId(db);
+  const local = hostId == null ? undefined : findRepoByGitUrl(db, hostId, repository.git_url);
+  if (!local) return res.status(409).json({ error: "请先在本机添加这个 Repository" });
+  const result = await branchesForOwnedRepo(ownedRepoEnv, local.id);
+  if (!result.ok) return sendRepoFailure(req, res, result);
+  res.json(result.branches);
+});
+
 app.post("/api/platform/repositories", (req, res) => {
   try {
-    res.status(201).json(createPlatformRepository(db, req.body ?? {}));
+    const user = authenticatedUser(req);
+    res.status(201).json(createPlatformRepository(db, {
+      ...(req.body ?? {}),
+      created_by: user.name,
+      created_by_user_id: user.id,
+    }));
   } catch (error: any) {
     if (error instanceof PlatformValidationError) return res.status(400).json({ error: error.message });
     res.status(500).json({ error: String(error?.message || error) });
@@ -551,13 +574,10 @@ app.delete("/api/platform/repositories/:id", async (req, res) => {
 
 app.post("/api/platform/repositories/:id/initialize", async (req, res) => {
   try {
-    let task = createRepositoryInitializationTask(db, Number(req.params.id), req.body?.owner);
-    const started = await startRepositoryInitialization(
-      platformWorkflowEnvFor(), task.key, requestBaseUrl(req), asAgentKind(req.body?.agent || "codex"),
-    );
-    task = started.task;
+    const user = authenticatedUser(req);
+    const task = createRepositoryInitializationTask(db, Number(req.params.id), user.name, user.id);
     const repository = getPlatformRepository(db, Number(req.params.id));
-    res.json({ task: await platformTaskPayload(task), repository, runtime_created: started.created });
+    res.json({ task: await platformTaskPayload(task), repository, runtime_created: false });
   } catch (error: any) {
     if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
     if (error instanceof PlatformValidationError) return res.status(409).json({ error: error.message });
@@ -582,6 +602,10 @@ app.get("/api/platform/tasks", async (_req, res) => {
   res.json(await Promise.all(listPlatformTasks(db).map(platformTaskPayload)));
 });
 
+app.get("/api/platform/members", (_req, res) => {
+  res.json(listPlatformMembers(db));
+});
+
 app.get("/api/platform/tasks/:key", async (req, res) => {
   const task = getPlatformTask(db, req.params.key);
   if (!task) return res.status(404).json({ error: "Task 不存在" });
@@ -590,7 +614,12 @@ app.get("/api/platform/tasks/:key", async (req, res) => {
 
 app.post("/api/platform/tasks", (req, res) => {
   try {
-    res.status(201).json(createPlatformTask(db, req.body ?? {}));
+    const user = authenticatedUser(req);
+    res.status(201).json(createPlatformTask(db, {
+      ...(req.body ?? {}),
+      owner: user.name,
+      owner_user_id: user.id,
+    }));
   } catch (error: any) {
     if (error instanceof PlatformValidationError) return res.status(400).json({ error: error.message });
     res.status(500).json({ error: String(error?.message || error) });
@@ -599,9 +628,8 @@ app.post("/api/platform/tasks", (req, res) => {
 
 app.patch("/api/platform/tasks/:key", async (req, res) => {
   try {
-    const current = getPlatformTask(db, req.params.key);
-    if (current?.task_type === "repository_init" && req.body?.status !== "draft") {
-      return res.status(409).json({ error: "初始化 Task 请使用对应的 Review、PR 和 Merge 操作" });
+    if (["review", "approved"].includes(req.body?.status)) {
+      return res.status(409).json({ error: "请使用 Review 分派与审核结论操作流转 Task" });
     }
     const task = updatePlatformTaskStatus(db, req.params.key, req.body?.status);
     if (!task) return res.status(404).json({ error: "Task 不存在" });
@@ -644,7 +672,55 @@ app.post("/api/platform/tasks/:key/run", async (req, res) => {
 
 app.post("/api/platform/tasks/:key/review", async (req, res) => {
   try {
-    const task = await submitRepositoryInitializationReview(platformWorkflowEnvFor(), req.params.key);
+    const submittedBy = authenticatedUser(req);
+    const reviewerUserId = Number(req.body?.reviewer_user_id);
+    const reviewer = Number.isInteger(reviewerUserId) ? getPlatformUser(db, reviewerUserId) : undefined;
+    if (!reviewer || reviewer.status !== "active") {
+      return res.status(400).json({ error: "请选择有效的 Reviewer" });
+    }
+    const task = await submitPlatformTaskForReview(platformWorkflowEnvFor(), req.params.key, {
+      reviewer: reviewer.name,
+      reviewer_user_id: reviewer.id,
+      submitted_by: submittedBy.name,
+      submitted_by_user_id: submittedBy.id,
+    });
+    res.json(await platformTaskPayload(task));
+  } catch (error: any) {
+    if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
+    if (error instanceof PlatformValidationError) return res.status(409).json({ error: error.message });
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+app.post("/api/platform/tasks/:key/review/run", async (req, res) => {
+  try {
+    const started = await startPlatformTaskReviewAgent(
+      platformWorkflowEnvFor(), req.params.key, asAgentKind(req.body?.agent || "codex"),
+    );
+    let runtime = started.runtime;
+    const alive = runtime.session ? await hasSession(localRunner, runtime.session).catch(() => false) : false;
+    if (!alive && runtime.worktree_path) {
+      await resumePlatformRuntimeTask(runtime.id);
+      runtime = getTask.get(runtime.id) as Task;
+    }
+    res.json({
+      task: await platformTaskPayload(getPlatformTask(db, req.params.key) || started.task),
+      runtime_created: started.created,
+    });
+  } catch (error: any) {
+    if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
+    if (error instanceof PlatformValidationError) return res.status(409).json({ error: error.message });
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+app.post("/api/platform/tasks/:key/review/decision", async (req, res) => {
+  try {
+    const decision = req.body?.decision;
+    if (decision !== "approved" && decision !== "changes_requested") {
+      return res.status(400).json({ error: "Review 结论无效" });
+    }
+    const task = await decidePlatformTaskReviewWorkflow(platformWorkflowEnvFor(), req.params.key, decision);
     res.json(await platformTaskPayload(task));
   } catch (error: any) {
     if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
@@ -655,7 +731,7 @@ app.post("/api/platform/tasks/:key/review", async (req, res) => {
 
 app.post("/api/platform/tasks/:key/pull-request", async (req, res) => {
   try {
-    const task = await approveAndCreateRepositoryInitializationPullRequest(platformWorkflowEnvFor(), req.params.key);
+    const task = await createRepositoryInitializationPullRequest(platformWorkflowEnvFor(), req.params.key);
     res.json(await platformTaskPayload(task));
   } catch (error: any) {
     if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });

@@ -11,16 +11,17 @@ import {
   getPlatformTask,
   listPlatformRepositories,
   setPlatformRepositoryProtocolState,
-  updatePlatformTaskStatus,
 } from "./catalog.ts";
 import {
-  approveAndCreateRepositoryInitializationPullRequest,
+  createRepositoryInitializationPullRequest,
+  decidePlatformTaskReviewWorkflow,
   deletePlatformTaskWithResources,
   mergeRepositoryInitializationPullRequest,
   PlatformWorkflowError,
   repositoryInitializationPrompt,
   startRepositoryInitialization,
-  submitRepositoryInitializationReview,
+  startPlatformTaskReviewAgent,
+  submitPlatformTaskForReview,
   type PlatformWorkflowEnv,
 } from "./workflow.ts";
 
@@ -185,15 +186,26 @@ test("Repository Init closes runtime, Review, PR, merge, cleanup, and ready stat
   assert.ok(calls.includes("agent:codex:true:true"));
 
   seedSyncedOverview(db, task.key, repository.id);
-  const review = await submitRepositoryInitializationReview(env, task.key);
+  const review = await submitPlatformTaskForReview(env, task.key, { reviewer: "Alice", submitted_by: "Phil" });
   assert.equal(review.status, "review");
   assert.equal(review.runtime_status, "cleaned");
+  assert.equal(review.current_assignee, "Alice");
+  assert.equal(review.review?.status, "pending");
+  assert.equal(review.repositories[0].remote_pushed_at != null, true);
 
-  const approved = await approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+  const reviewer = await startPlatformTaskReviewAgent(env, task.key, "claude");
+  assert.notEqual(reviewer.runtime.id, started.runtime.id);
+  assert.equal(reviewer.task.review?.status, "in_progress");
+  assert.equal(reviewer.task.executions.at(-1)?.role, "reviewer");
+
+  const approved = await decidePlatformTaskReviewWorkflow(env, task.key, "approved");
   assert.equal(approved.status, "approved");
-  assert.equal(approved.pr_number, 42);
-  assert.equal(approved.pr_state, "open");
-  assert.match(approved.pr_url || "", /pull\/42/);
+  assert.equal(approved.pr_state, "none");
+
+  const withPr = await createRepositoryInitializationPullRequest(env, task.key);
+  assert.equal(withPr.pr_number, 42);
+  assert.equal(withPr.pr_state, "open");
+  assert.match(withPr.pr_url || "", /pull\/42/);
 
   const merged = await mergeRepositoryInitializationPullRequest(env, task.key);
   assert.equal(merged.task.pr_state, "merged");
@@ -206,9 +218,10 @@ test("GitLab Repository Init uses local glab for MR creation and merge", async (
   const { db, env, repository, task, calls } = setup({ gitUrl: "git@gitlab.com:example/service.git" });
   await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
   seedSyncedOverview(db, task.key, repository.id);
-  await submitRepositoryInitializationReview(env, task.key);
+  await submitPlatformTaskForReview(env, task.key, { reviewer: "Alice", submitted_by: "Phil" });
+  await decidePlatformTaskReviewWorkflow(env, task.key, "approved");
 
-  const approved = await approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+  const approved = await createRepositoryInitializationPullRequest(env, task.key);
   assert.equal(approved.status, "approved");
   assert.equal(approved.pr_number, 42);
   assert.match(approved.pr_url || "", /merge_requests\/42/);
@@ -256,7 +269,8 @@ test("concurrent PR confirmations share one local forge operation", async () => 
   const { db, env, repository, task } = setup();
   await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
   seedSyncedOverview(db, task.key, repository.id);
-  await submitRepositoryInitializationReview(env, task.key);
+  await submitPlatformTaskForReview(env, task.key, { reviewer: "Alice", submitted_by: "Phil" });
+  await decidePlatformTaskReviewWorkflow(env, task.key, "approved");
 
   const originalExec = env.runner.exec.bind(env.runner);
   let release!: () => void;
@@ -273,9 +287,9 @@ test("concurrent PR confirmations share one local forge operation", async () => 
     return originalExec(file, args, options);
   };
 
-  const first = approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+  const first = createRepositoryInitializationPullRequest(env, task.key);
   await createStarted;
-  const second = approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+  const second = createRepositoryInitializationPullRequest(env, task.key);
   release();
   const [firstResult, secondResult] = await Promise.all([first, second]);
 
@@ -284,23 +298,23 @@ test("concurrent PR confirmations share one local forge operation", async () => 
   assert.equal(secondResult.pr_number, 42);
 });
 
-test("Repository Init revisions update the existing open PR after another Review", async () => {
+test("Repository Init changes requested returns to author and pushes a revised Review", async () => {
   const { db, env, repository, task, calls } = setup();
   await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
   seedSyncedOverview(db, task.key, repository.id);
-  await submitRepositoryInitializationReview(env, task.key);
-  await approveAndCreateRepositoryInitializationPullRequest(env, task.key);
-
-  const draft = updatePlatformTaskStatus(db, task.key, "draft");
-  assert.equal(draft?.pr_state, "open");
+  await submitPlatformTaskForReview(env, task.key, { reviewer: "Alice", submitted_by: "Phil" });
+  const draft = await decidePlatformTaskReviewWorkflow(env, task.key, "changes_requested");
+  assert.equal(draft.status, "draft");
+  await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
   db.prepare(
     "UPDATE platform_task_repositories SET manifest_status='valid',head_commit=? WHERE task_id=? AND repository_id=?",
   ).run(HEAD, task.id, repository.id);
-  await submitRepositoryInitializationReview(env, task.key);
-  const approved = await approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+  await submitPlatformTaskForReview(env, task.key, { reviewer: "Alice", submitted_by: "Phil" });
+  const approved = await decidePlatformTaskReviewWorkflow(env, task.key, "approved");
+  const withPr = await createRepositoryInitializationPullRequest(env, task.key);
 
   assert.equal(approved.status, "approved");
-  assert.equal(approved.pr_number, 42);
+  assert.equal(withPr.pr_number, 42);
   assert.equal(calls.filter((call) => call.startsWith("gh pr create ")).length, 1);
   assert.equal(calls.filter((call) => call.startsWith("git push --set-upstream origin ")).length, 2);
 });
@@ -309,8 +323,9 @@ test("deleting Repository Init closes its PR and removes runtime plus platform s
   const { db, env, repository, task, calls } = setup();
   const started = await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
   seedSyncedOverview(db, task.key, repository.id);
-  await submitRepositoryInitializationReview(env, task.key);
-  await approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+  await submitPlatformTaskForReview(env, task.key, { reviewer: "Alice", submitted_by: "Phil" });
+  await decidePlatformTaskReviewWorkflow(env, task.key, "approved");
+  await createRepositoryInitializationPullRequest(env, task.key);
 
   const deleted = await deletePlatformTaskWithResources(env, task.key);
 
@@ -321,11 +336,29 @@ test("deleting Repository Init closes its PR and removes runtime plus platform s
   assert.equal(listPlatformRepositories(db)[0].protocol_state, "uninitialized");
 });
 
+test("deleting a Task stops its Agent session even when the worktree is already missing", async () => {
+  const { db, env, task } = setup();
+  const started = await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
+  const cleaned: number[] = [];
+  const cleanup = env.cleanupRuntimeTask;
+  env.cleanupRuntimeTask = async (id) => {
+    cleaned.push(id);
+    await cleanup(id);
+  };
+  env.runner.exists = async () => false;
+
+  await deletePlatformTaskWithResources(env, task.key);
+
+  assert.deepEqual(cleaned, [started.runtime.id]);
+  assert.equal(db.prepare("SELECT id FROM tasks WHERE id=?").get(started.runtime.id), undefined);
+});
+
 test("PR creation reconciles a remote success reported as already existing", async () => {
   const { db, env, repository, task } = setup();
   await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
   seedSyncedOverview(db, task.key, repository.id);
-  await submitRepositoryInitializationReview(env, task.key);
+  await submitPlatformTaskForReview(env, task.key, { reviewer: "Alice", submitted_by: "Phil" });
+  await decidePlatformTaskReviewWorkflow(env, task.key, "approved");
 
   const originalExec = env.runner.exec.bind(env.runner);
   env.runner.exec = async (file, args, options) => {
@@ -338,7 +371,7 @@ test("PR creation reconciles a remote success reported as already existing", asy
     return originalExec(file, args, options);
   };
 
-  const approved = await approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+  const approved = await createRepositoryInitializationPullRequest(env, task.key);
   assert.equal(approved.status, "approved");
   assert.equal(approved.pr_number, 42);
   assert.equal(approved.workflow_error, null);
@@ -348,8 +381,9 @@ test("merge reconciles a remote success reported as a local CLI error", async ()
   const { db, env, repository, task } = setup();
   await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
   seedSyncedOverview(db, task.key, repository.id);
-  await submitRepositoryInitializationReview(env, task.key);
-  await approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+  await submitPlatformTaskForReview(env, task.key, { reviewer: "Alice", submitted_by: "Phil" });
+  await decidePlatformTaskReviewWorkflow(env, task.key, "approved");
+  await createRepositoryInitializationPullRequest(env, task.key);
 
   const originalExec = env.runner.exec.bind(env.runner);
   env.runner.exec = async (file, args, options) => {
@@ -372,8 +406,9 @@ test("Repository Init can finish protocol refresh after the PR merged even if it
   const { db, env, repository, task } = setup();
   await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
   seedSyncedOverview(db, task.key, repository.id);
-  await submitRepositoryInitializationReview(env, task.key);
-  await approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+  await submitPlatformTaskForReview(env, task.key, { reviewer: "Alice", submitted_by: "Phil" });
+  await decidePlatformTaskReviewWorkflow(env, task.key, "approved");
+  await createRepositoryInitializationPullRequest(env, task.key);
 
   env.refreshRepository = async (id) => {
     const updated = setPlatformRepositoryProtocolState(db, id, "uninitialized");

@@ -10,6 +10,39 @@ type DB = Database.Database;
 export interface SchemaOpts { didMigrate: boolean; legacyDir: string; dataDir: string; }
 
 const CREATE_SQL = `
+-- Platform identity is intentionally independent from GitHub/GitLab identity.
+-- Google subject is the stable account key; email and name are mutable display
+-- attributes refreshed at each login.
+CREATE TABLE IF NOT EXISTS platform_users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider TEXT NOT NULL,
+  provider_subject TEXT NOT NULL,
+  email TEXT,
+  email_verified INTEGER NOT NULL DEFAULT 0,
+  name TEXT NOT NULL,
+  avatar_url TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  last_login_at TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(provider, provider_subject)
+);
+
+-- The browser receives only the opaque token. SQLite stores its SHA-256 hash,
+-- so copying the DB alone does not yield a reusable login cookie.
+CREATE TABLE IF NOT EXISTS platform_sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  last_seen_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS platform_sessions_user_id
+  ON platform_sessions(user_id);
+CREATE INDEX IF NOT EXISTS platform_sessions_expires_at
+  ON platform_sessions(expires_at);
+
 CREATE TABLE IF NOT EXISTS repos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -99,6 +132,7 @@ CREATE TABLE IF NOT EXISTS platform_repositories (
   protocol_state TEXT NOT NULL DEFAULT 'uninitialized',
   protocol_error TEXT,
   created_by TEXT NOT NULL,
+  created_by_user_id INTEGER,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -112,6 +146,9 @@ CREATE TABLE IF NOT EXISTS platform_tasks (
   title TEXT NOT NULL,
   description TEXT,
   owner TEXT NOT NULL,
+  owner_user_id INTEGER,
+  current_assignee TEXT,
+  current_assignee_user_id INTEGER,
   task_type TEXT NOT NULL DEFAULT 'change',
   status TEXT NOT NULL DEFAULT 'draft',
   runtime_task_id INTEGER,
@@ -137,11 +174,51 @@ CREATE TABLE IF NOT EXISTS platform_task_repositories (
   assignee TEXT,
   manifest_status TEXT NOT NULL DEFAULT 'waiting',
   last_reported_at TEXT,
+  remote_pushed_at TEXT,
   PRIMARY KEY (task_id, repository_id)
 );
 
 CREATE INDEX IF NOT EXISTS platform_task_repositories_repository_id
   ON platform_task_repositories(repository_id);
+
+-- Review is a durable handoff, not just a Task status. Labels are immutable
+-- display snapshots; nullable user ids preserve old rows while new handoffs use
+-- stable authenticated identities.
+CREATE TABLE IF NOT EXISTS platform_task_reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  reviewer TEXT NOT NULL,
+  reviewer_user_id INTEGER,
+  submitted_by TEXT NOT NULL,
+  submitted_by_user_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'pending',
+  submitted_at TEXT DEFAULT (datetime('now')),
+  started_at TEXT,
+  decided_at TEXT,
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS platform_task_reviews_task_id
+  ON platform_task_reviews(task_id, id DESC);
+
+-- One platform Task may pass through several local runtimes as ownership moves
+-- from author to reviewer and back. platform_tasks.runtime_task_id remains the
+-- compatibility pointer to the current runtime; this table preserves history.
+CREATE TABLE IF NOT EXISTS platform_task_executions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  runtime_task_id INTEGER NOT NULL,
+  actor TEXT NOT NULL,
+  role TEXT NOT NULL,
+  agent TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(task_id, runtime_task_id)
+);
+
+CREATE INDEX IF NOT EXISTS platform_task_executions_task_id
+  ON platform_task_executions(task_id, id DESC);
 
 -- Normalized manifest output reported by a local ay sync. The platform can
 -- link and review these artifacts without ever reading the private checkout.
@@ -236,13 +313,20 @@ function reconcileColumns(db: DB) {
   addColumn(db, "platform_repositories", "protocol_initialized", "INTEGER NOT NULL DEFAULT 0");
   addColumn(db, "platform_repositories", "protocol_state", "TEXT NOT NULL DEFAULT 'uninitialized'");
   addColumn(db, "platform_repositories", "protocol_error", "TEXT");
+  addColumn(db, "platform_repositories", "created_by_user_id", "INTEGER");
   addColumn(db, "platform_tasks", "task_type", "TEXT NOT NULL DEFAULT 'change'");
+  addColumn(db, "platform_tasks", "owner_user_id", "INTEGER");
+  addColumn(db, "platform_tasks", "current_assignee", "TEXT");
+  addColumn(db, "platform_tasks", "current_assignee_user_id", "INTEGER");
   addColumn(db, "platform_tasks", "runtime_task_id", "INTEGER");
   addColumn(db, "platform_tasks", "workflow_error", "TEXT");
   addColumn(db, "platform_tasks", "pr_number", "INTEGER");
   addColumn(db, "platform_tasks", "pr_url", "TEXT");
   addColumn(db, "platform_tasks", "pr_state", "TEXT NOT NULL DEFAULT 'none'");
   addColumn(db, "platform_tasks", "merged_at", "TEXT");
+  addColumn(db, "platform_task_repositories", "remote_pushed_at", "TEXT");
+  addColumn(db, "platform_task_reviews", "reviewer_user_id", "INTEGER");
+  addColumn(db, "platform_task_reviews", "submitted_by_user_id", "INTEGER");
   addColumn(db, "platform_artifacts", "document_id", "TEXT");
   addColumn(db, "platform_artifacts", "scope", "TEXT");
   addColumn(db, "platform_artifacts", "owners", "TEXT NOT NULL DEFAULT '[]'");
@@ -251,6 +335,15 @@ function reconcileColumns(db: DB) {
   addColumn(db, "platform_artifacts", "content_hash", "TEXT");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS hosts_node_id_unique ON hosts(node_id) WHERE node_id IS NOT NULL");
   db.exec("CREATE INDEX IF NOT EXISTS task_references_repo_id ON task_references(repo_id)");
+  db.exec("UPDATE platform_tasks SET current_assignee=owner WHERE current_assignee IS NULL OR current_assignee=''");
+  db.exec(`
+    INSERT OR IGNORE INTO platform_task_executions
+      (task_id,runtime_task_id,actor,role,agent,status)
+    SELECT pt.id,pt.runtime_task_id,pt.owner,'author',rt.agent,'stopped'
+    FROM platform_tasks pt
+    JOIN tasks rt ON rt.id=pt.runtime_task_id
+    WHERE pt.runtime_task_id IS NOT NULL
+  `);
 }
 
 /** Migrate the prototype's title-based init convention and binary Repository

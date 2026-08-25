@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import { repositoryForgeKind, type RepositoryForgeKind } from "./forge.js";
+import { listAuthenticatedUsers, publicPlatformUser, type PublicPlatformUser } from "../auth/auth.js";
 
 type DB = Database.Database;
 
@@ -26,6 +27,7 @@ export interface PlatformRepository {
   protocol_state: RepositoryProtocolState;
   protocol_error: string | null;
   created_by: string;
+  created_by_user_id: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -56,6 +58,33 @@ export interface PlatformTaskRepository extends PlatformRepository {
   assignee: string | null;
   manifest_status: string;
   last_reported_at: string | null;
+  remote_pushed_at: string | null;
+}
+
+export type PlatformReviewStatus = "pending" | "in_progress" | "changes_requested" | "approved";
+
+export interface PlatformTaskReview {
+  id: number;
+  reviewer: string;
+  reviewer_user_id: number | null;
+  submitted_by: string;
+  submitted_by_user_id: number | null;
+  status: PlatformReviewStatus;
+  submitted_at: string;
+  started_at: string | null;
+  decided_at: string | null;
+  updated_at: string;
+}
+
+export interface PlatformTaskExecution {
+  id: number;
+  runtime_task_id: number;
+  actor: string;
+  role: "author" | "reviewer";
+  agent: string | null;
+  status: "active" | "stopped" | "cleaned";
+  created_at: string;
+  updated_at: string;
 }
 
 export interface PlatformArtifact {
@@ -80,6 +109,9 @@ export interface PlatformTask {
   title: string;
   description: string | null;
   owner: string;
+  owner_user_id: number | null;
+  current_assignee: string;
+  current_assignee_user_id: number | null;
   task_type: PlatformTaskType;
   status: PlatformTaskStatus;
   runtime_task_id: number | null;
@@ -97,6 +129,8 @@ export interface PlatformTask {
   updated_at: string;
   repositories: PlatformTaskRepository[];
   artifacts: PlatformArtifact[];
+  review: PlatformTaskReview | null;
+  executions: PlatformTaskExecution[];
 }
 
 export class PlatformValidationError extends Error {
@@ -122,7 +156,7 @@ function branchSlug(value: string): string {
 export function listPlatformRepositories(db: DB): PlatformRepository[] {
   const rows = db.prepare(
     "SELECT id,name,git_url,default_branch,protocol_initialized,protocol_state,protocol_error," +
-      "created_by,created_at,updated_at " +
+      "created_by,created_by_user_id,created_at,updated_at " +
       "FROM platform_repositories ORDER BY updated_at DESC,id DESC",
   ).all() as PlatformRepositoryRow[];
   return rows.map(shapeRepository);
@@ -131,7 +165,7 @@ export function listPlatformRepositories(db: DB): PlatformRepository[] {
 export function getPlatformRepository(db: DB, id: number): PlatformRepository | undefined {
   const row = db.prepare(
     "SELECT id,name,git_url,default_branch,protocol_initialized,protocol_state,protocol_error," +
-      "created_by,created_at,updated_at " +
+      "created_by,created_by_user_id,created_at,updated_at " +
       "FROM platform_repositories WHERE id=?",
   ).get(id) as PlatformRepositoryRow | undefined;
   return row ? shapeRepository(row) : undefined;
@@ -159,11 +193,15 @@ export function createPlatformRepository(db: DB, input: Record<string, unknown>)
   const createdBy = typeof input.created_by === "string" && input.created_by.trim()
     ? input.created_by.trim()
     : "当前用户";
+  const createdByUserId = Number.isInteger(Number(input.created_by_user_id)) && Number(input.created_by_user_id) > 0
+    ? Number(input.created_by_user_id)
+    : null;
 
   try {
     const result = db.prepare(
-      "INSERT INTO platform_repositories (name,git_url,default_branch,created_by) VALUES (?,?,?,?)",
-    ).run(name, gitUrl, defaultBranch, createdBy);
+      "INSERT INTO platform_repositories " +
+        "(name,git_url,default_branch,created_by,created_by_user_id) VALUES (?,?,?,?,?)",
+    ).run(name, gitUrl, defaultBranch, createdBy, createdByUserId);
     const repository = getPlatformRepository(db, Number(result.lastInsertRowid));
     if (!repository) throw new Error("Repository 创建后未找到");
     return repository;
@@ -175,7 +213,7 @@ export function createPlatformRepository(db: DB, input: Record<string, unknown>)
   }
 }
 
-type TaskRow = Omit<PlatformTask, "key" | "repositories" | "artifacts"> & { task_key: string };
+type TaskRow = Omit<PlatformTask, "key" | "repositories" | "artifacts" | "review" | "executions"> & { task_key: string };
 
 function artifactsForTask(db: DB, taskId: number): PlatformArtifact[] {
   return db.prepare(
@@ -191,9 +229,9 @@ function artifactsForTask(db: DB, taskId: number): PlatformArtifact[] {
 function repositoriesForTask(db: DB, taskId: number): PlatformTaskRepository[] {
   const rows = db.prepare(
     "SELECT r.id,r.name,r.git_url,r.default_branch,r.protocol_initialized,r.protocol_state,r.protocol_error," +
-      "r.created_by,r.created_at,r.updated_at," +
+      "r.created_by,r.created_by_user_id,r.created_at,r.updated_at," +
       "tr.mode,tr.base_branch,tr.base_commit,tr.work_branch,tr.head_commit,tr.assignee," +
-      "tr.manifest_status,tr.last_reported_at " +
+      "tr.manifest_status,tr.last_reported_at,tr.remote_pushed_at " +
       "FROM platform_task_repositories tr " +
       "JOIN platform_repositories r ON r.id=tr.repository_id " +
       "WHERE tr.task_id=? ORDER BY CASE tr.mode WHEN 'editable' THEN 0 ELSE 1 END,r.name",
@@ -205,6 +243,21 @@ function repositoriesForTask(db: DB, taskId: number): PlatformTaskRepository[] {
   }));
 }
 
+function reviewForTask(db: DB, taskId: number): PlatformTaskReview | null {
+  return (db.prepare(
+    "SELECT id,reviewer,reviewer_user_id,submitted_by,submitted_by_user_id,status," +
+      "submitted_at,started_at,decided_at,updated_at " +
+      "FROM platform_task_reviews WHERE task_id=? ORDER BY id DESC LIMIT 1",
+  ).get(taskId) as PlatformTaskReview | undefined) || null;
+}
+
+function executionsForTask(db: DB, taskId: number): PlatformTaskExecution[] {
+  return db.prepare(
+    "SELECT id,runtime_task_id,actor,role,agent,status,created_at,updated_at " +
+      "FROM platform_task_executions WHERE task_id=? ORDER BY id",
+  ).all(taskId) as PlatformTaskExecution[];
+}
+
 function shapeTask(db: DB, row: TaskRow): PlatformTask {
   return {
     id: row.id,
@@ -212,6 +265,9 @@ function shapeTask(db: DB, row: TaskRow): PlatformTask {
     title: row.title,
     description: row.description,
     owner: row.owner,
+    owner_user_id: row.owner_user_id,
+    current_assignee: row.current_assignee,
+    current_assignee_user_id: row.current_assignee_user_id,
     task_type: row.task_type,
     status: row.status,
     runtime_task_id: row.runtime_task_id,
@@ -229,12 +285,15 @@ function shapeTask(db: DB, row: TaskRow): PlatformTask {
     updated_at: row.updated_at,
     repositories: repositoriesForTask(db, row.id),
     artifacts: artifactsForTask(db, row.id),
+    review: reviewForTask(db, row.id),
+    executions: executionsForTask(db, row.id),
   };
 }
 
 export function listPlatformTasks(db: DB): PlatformTask[] {
   const rows = db.prepare(
-    "SELECT pt.id,pt.task_key,pt.title,pt.description,pt.owner,pt.task_type,pt.status," +
+    "SELECT pt.id,pt.task_key,pt.title,pt.description,pt.owner,pt.owner_user_id," +
+      "pt.current_assignee,pt.current_assignee_user_id,pt.task_type,pt.status," +
       "pt.runtime_task_id,rt.status AS runtime_status,rt.error AS runtime_error," +
       "rt.worktree_path AS runtime_worktree,rt.session AS runtime_session,rt.agent AS runtime_agent," +
       "pt.workflow_error,pt.pr_number,pt.pr_url,pt.pr_state,pt.merged_at,pt.created_at,pt.updated_at " +
@@ -246,7 +305,8 @@ export function listPlatformTasks(db: DB): PlatformTask[] {
 
 export function getPlatformTask(db: DB, key: string): PlatformTask | undefined {
   const row = db.prepare(
-    "SELECT pt.id,pt.task_key,pt.title,pt.description,pt.owner,pt.task_type,pt.status," +
+    "SELECT pt.id,pt.task_key,pt.title,pt.description,pt.owner,pt.owner_user_id," +
+      "pt.current_assignee,pt.current_assignee_user_id,pt.task_type,pt.status," +
       "pt.runtime_task_id,rt.status AS runtime_status,rt.error AS runtime_error," +
       "rt.worktree_path AS runtime_worktree,rt.session AS runtime_session,rt.agent AS runtime_agent," +
       "pt.workflow_error,pt.pr_number,pt.pr_url,pt.pr_state,pt.merged_at,pt.created_at,pt.updated_at " +
@@ -258,7 +318,14 @@ export function getPlatformTask(db: DB, key: string): PlatformTask | undefined {
 export function linkPlatformTaskRuntime(
   db: DB,
   key: string,
-  runtime: { id: number; work_branch: string; base_commit: string | null },
+  runtime: {
+    id: number;
+    work_branch: string;
+    base_commit: string | null;
+    actor?: string;
+    role?: "author" | "reviewer";
+    agent?: string | null;
+  },
 ): PlatformTask | undefined {
   const task = getPlatformTask(db, key);
   if (!task) return undefined;
@@ -270,8 +337,114 @@ export function linkPlatformTaskRuntime(
       "UPDATE platform_task_repositories SET work_branch=?,base_commit=COALESCE(?,base_commit) " +
         "WHERE task_id=? AND mode='editable'",
     ).run(runtime.work_branch, runtime.base_commit, task.id);
+    db.prepare(
+      "INSERT INTO platform_task_executions (task_id,runtime_task_id,actor,role,agent,status) " +
+        "VALUES (?,?,?,?,?,'active') " +
+        "ON CONFLICT(task_id,runtime_task_id) DO UPDATE SET actor=excluded.actor,role=excluded.role," +
+        "agent=excluded.agent,status='active',updated_at=datetime('now')",
+    ).run(task.id, runtime.id, runtime.actor || task.current_assignee || task.owner, runtime.role || "author", runtime.agent || null);
   })();
   return getPlatformTask(db, key);
+}
+
+export function updatePlatformTaskExecutionStatus(
+  db: DB,
+  key: string,
+  runtimeTaskId: number,
+  status: PlatformTaskExecution["status"],
+): PlatformTask | undefined {
+  const task = getPlatformTask(db, key);
+  if (!task) return undefined;
+  db.prepare(
+    "UPDATE platform_task_executions SET status=?,updated_at=datetime('now') WHERE task_id=? AND runtime_task_id=?",
+  ).run(status, task.id, runtimeTaskId);
+  return getPlatformTask(db, key);
+}
+
+export function recordPlatformTaskPush(
+  db: DB,
+  key: string,
+  headCommit: string,
+): PlatformTask | undefined {
+  const task = getPlatformTask(db, key);
+  if (!task) return undefined;
+  db.prepare(
+    "UPDATE platform_task_repositories SET head_commit=?,remote_pushed_at=datetime('now')," +
+      "last_reported_at=datetime('now') WHERE task_id=? AND mode='editable'",
+  ).run(headCommit, task.id);
+  return getPlatformTask(db, key);
+}
+
+export function submitPlatformTaskReview(
+  db: DB,
+  key: string,
+  input: {
+    reviewer: unknown;
+    reviewer_user_id?: unknown;
+    submitted_by: unknown;
+    submitted_by_user_id?: unknown;
+  },
+): PlatformTask | undefined {
+  const task = getPlatformTask(db, key);
+  if (!task) return undefined;
+  const reviewer = requiredText(input.reviewer, "Reviewer");
+  const submittedBy = requiredText(input.submitted_by, "提交人");
+  const reviewerUserId = Number.isInteger(Number(input.reviewer_user_id)) && Number(input.reviewer_user_id) > 0
+    ? Number(input.reviewer_user_id)
+    : null;
+  const submittedByUserId = Number.isInteger(Number(input.submitted_by_user_id)) && Number(input.submitted_by_user_id) > 0
+    ? Number(input.submitted_by_user_id)
+    : null;
+  db.transaction(() => {
+    db.prepare(
+      "INSERT INTO platform_task_reviews " +
+        "(task_id,reviewer,reviewer_user_id,submitted_by,submitted_by_user_id,status) " +
+        "VALUES (?,?,?,?,?,'pending')",
+    ).run(task.id, reviewer, reviewerUserId, submittedBy, submittedByUserId);
+    db.prepare(
+      "UPDATE platform_tasks SET status='review',current_assignee=?,current_assignee_user_id=?," +
+        "workflow_error=NULL,updated_at=datetime('now') WHERE id=?",
+    ).run(reviewer, reviewerUserId, task.id);
+  })();
+  return getPlatformTask(db, key);
+}
+
+export function markPlatformTaskReviewStarted(db: DB, key: string): PlatformTask | undefined {
+  const task = getPlatformTask(db, key);
+  if (!task?.review || !["pending", "in_progress"].includes(task.review.status)) return task;
+  db.prepare(
+    "UPDATE platform_task_reviews SET status='in_progress',started_at=COALESCE(started_at,datetime('now'))," +
+      "updated_at=datetime('now') WHERE id=?",
+  ).run(task.review.id);
+  return getPlatformTask(db, key);
+}
+
+export function decidePlatformTaskReview(
+  db: DB,
+  key: string,
+  decision: "approved" | "changes_requested",
+): PlatformTask | undefined {
+  const task = getPlatformTask(db, key);
+  if (!task?.review) return task;
+  db.transaction(() => {
+    db.prepare(
+      "UPDATE platform_task_reviews SET status=?,decided_at=datetime('now'),updated_at=datetime('now') WHERE id=?",
+    ).run(decision, task.review!.id);
+    db.prepare(
+      "UPDATE platform_tasks SET status=?,current_assignee=?,current_assignee_user_id=?," +
+        "updated_at=datetime('now') WHERE id=?",
+    ).run(decision === "approved" ? "approved" : "draft", task.owner, task.owner_user_id, task.id);
+    if (decision === "changes_requested" && task.task_type === "repository_init") {
+      db.prepare(
+        "UPDATE platform_task_repositories SET manifest_status='waiting' WHERE task_id=? AND mode='editable'",
+      ).run(task.id);
+    }
+  })();
+  return getPlatformTask(db, key);
+}
+
+export function listPlatformMembers(db: DB): PublicPlatformUser[] {
+  return listAuthenticatedUsers(db).map(publicPlatformUser);
 }
 
 export function setPlatformTaskWorkflowError(db: DB, key: string, error: string | null): PlatformTask | undefined {
@@ -319,6 +492,9 @@ export function markPlatformPullRequestMerged(db: DB, key: string): PlatformTask
 export function createPlatformTask(db: DB, input: Record<string, unknown>): PlatformTask {
   const title = requiredText(input.title, "Task 标题");
   const owner = requiredText(input.owner, "负责人");
+  const ownerUserId = Number.isInteger(Number(input.owner_user_id)) && Number(input.owner_user_id) > 0
+    ? Number(input.owner_user_id)
+    : null;
   const taskType = input.task_type == null ? "change" : String(input.task_type) as PlatformTaskType;
   if (!PLATFORM_TASK_TYPES.includes(taskType)) throw new PlatformValidationError("Task 类型无效");
   const description = typeof input.description === "string" && input.description.trim()
@@ -351,8 +527,19 @@ export function createPlatformTask(db: DB, input: Record<string, unknown>): Plat
 
   const create = db.transaction(() => {
     const taskInfo = db.prepare(
-      "INSERT INTO platform_tasks (task_key,title,description,owner,task_type) VALUES (?,?,?,?,?)",
-    ).run(`pending-${Date.now()}-${Math.random()}`, title, description, owner, taskType);
+      "INSERT INTO platform_tasks " +
+        "(task_key,title,description,owner,owner_user_id,current_assignee,current_assignee_user_id,task_type) " +
+        "VALUES (?,?,?,?,?,?,?,?)",
+    ).run(
+      `pending-${Date.now()}-${Math.random()}`,
+      title,
+      description,
+      owner,
+      ownerUserId,
+      owner,
+      ownerUserId,
+      taskType,
+    );
     const taskId = Number(taskInfo.lastInsertRowid);
     const key = `AY-${String(taskId).padStart(3, "0")}`;
     db.prepare("UPDATE platform_tasks SET task_key=? WHERE id=?").run(key, taskId);
@@ -406,6 +593,7 @@ export function createRepositoryInitializationTask(
   db: DB,
   repositoryId: number,
   ownerValue: unknown,
+  ownerUserId: number | null = null,
 ): PlatformTask {
   const repository = getPlatformRepository(db, repositoryId);
   if (!repository) throw new PlatformValidationError("Repository 不存在");
@@ -430,6 +618,7 @@ export function createRepositoryInitializationTask(
       `为 ${repository.name} 建立版本化工程知识：运行 ay init，按 alignyard-knowledge Skill ` +
       "盘点仓库事实并梳理 scopes、架构、稳定接口与维护流程等基础 Docs，运行 ay validate、ay sync，提交 Review 后合并到默认分支。",
     owner,
+    owner_user_id: ownerUserId,
     repositories: [{ repository_id: repository.id, mode: "editable", base_branch: repository.default_branch }],
   });
 }
@@ -460,6 +649,8 @@ export function deletePlatformTask(db: DB, key: string): PlatformTask | undefine
   const task = getPlatformTask(db, key);
   if (!task) return undefined;
   db.transaction(() => {
+    db.prepare("DELETE FROM platform_task_executions WHERE task_id=?").run(task.id);
+    db.prepare("DELETE FROM platform_task_reviews WHERE task_id=?").run(task.id);
     db.prepare("DELETE FROM platform_artifacts WHERE task_id=?").run(task.id);
     db.prepare("DELETE FROM platform_task_repositories WHERE task_id=?").run(task.id);
     db.prepare("DELETE FROM platform_tasks WHERE id=?").run(task.id);

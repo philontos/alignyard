@@ -5,9 +5,13 @@ import express from "express";
 import path from "node:path";
 import { ROOT, WEB_DIR } from "../core/paths.js";
 import { registerRoutes } from "./routes.js";
+import { db } from "../core/db.js";
+import { requireAuthentication } from "../auth/auth.js";
+import { registerAuthRoutes } from "./auth-routes.js";
 
 export function createApp() {
   const app = express();
+  app.set("trust proxy", "loopback");
   app.use(express.json({ limit: "10mb" }));
   // Alignyard's shared Task workspace is the product entry point. Its embedded
   // Agent workspace uses the reusable owner-local PTY/runtime services directly;
@@ -18,6 +22,8 @@ export function createApp() {
   // known grammar on demand; code preview never depends on a public CDN.
   app.use("/vendor/highlight", express.static(path.join(ROOT, "node_modules", "@highlightjs", "cdn-assets")));
   app.use(express.static(WEB_DIR, { index: false }));
+  registerAuthRoutes(app, db);
+  app.use("/api", requireAuthentication(db));
   registerRoutes(app);
   return app;
 }

@@ -62,9 +62,20 @@ test("initSchema stores platform runtime and pull-request workflow state", () =>
   initSchema(db, opts(false));
   const columns = (db.prepare("PRAGMA table_info(platform_tasks)").all() as { name: string }[])
     .map((column) => column.name);
-  for (const field of ["runtime_task_id", "workflow_error", "pr_number", "pr_url", "pr_state", "merged_at"]) {
+  for (const field of ["owner_user_id", "current_assignee", "current_assignee_user_id", "runtime_task_id", "workflow_error", "pr_number", "pr_url", "pr_state", "merged_at"]) {
     assert.ok(columns.includes(field), `missing ${field}`);
   }
+  const repositoryColumns = (db.prepare("PRAGMA table_info(platform_task_repositories)").all() as { name: string }[])
+    .map((column) => column.name);
+  assert.ok(repositoryColumns.includes("remote_pushed_at"));
+  assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='platform_task_reviews'").get());
+  assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='platform_task_executions'").get());
+  assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='platform_users'").get());
+  assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='platform_sessions'").get());
+  const reviewColumns = (db.prepare("PRAGMA table_info(platform_task_reviews)").all() as { name: string }[])
+    .map((column) => column.name);
+  assert.ok(reviewColumns.includes("reviewer_user_id"));
+  assert.ok(reviewColumns.includes("submitted_by_user_id"));
   db.prepare("INSERT INTO platform_tasks (task_key,title,owner) VALUES ('AY-1','Init','Phil')").run();
   assert.equal((db.prepare("SELECT pr_state FROM platform_tasks").get() as { pr_state: string }).pr_state, "none");
 });
