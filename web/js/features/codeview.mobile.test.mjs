@@ -41,3 +41,10 @@ test("code tree icons use accessible state and stable vector masks", () => {
   assert.match(css, /\.cv-caret\.open\s*\{\s*transform:\s*rotate\(90deg\)/);
   assert.match(css, /\.cv-file-mark\s*\{[^}]*-webkit-mask:/s);
 });
+
+test("shared viewer accepts an external task context and initial diff path", () => {
+  assert.match(feature, /export function openTaskCodeContext/);
+  assert.match(feature, /initialTab === "changes"/);
+  assert.match(feature, /initialPath && changes\?\.files\.some/);
+  assert.match(feature, /await selectChange\(initialPath\)/);
+});

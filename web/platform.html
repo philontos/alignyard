@@ -7,6 +7,7 @@
   <title>Alignyard · Tasks</title>
   <link rel="stylesheet" href="/vendor/xterm.css" />
   <link rel="stylesheet" href="/css/platform.css" />
+  <link rel="stylesheet" href="/css/platform-codeview.css" />
 </head>
 <body>
   <div class="app-shell">
@@ -137,7 +138,39 @@
     </section>
   </div>
 
+  <!-- Shared Switchyard read-only file/diff viewer, opened with the runtime Task
+       id so worktree paths never cross the browser API boundary. -->
+  <div id="code-modal" class="modal-bg code-modal-bg" style="display:none" role="dialog" aria-modal="true" aria-labelledby="cv-title">
+    <div class="modal code-modal">
+      <div class="cv-head">
+        <div class="cv-heading">
+          <h2 id="cv-title"></h2>
+          <div id="cv-revision" class="cv-revision"></div>
+        </div>
+        <button id="cv-refresh" class="cv-head-btn" type="button" data-i18n-title="code.refresh" aria-label="Refresh"><span class="sync-icon" aria-hidden="true"></span></button>
+        <button id="cv-close" class="cv-head-btn cv-close" type="button" data-i18n-title="code.close" aria-label="Close">×</button>
+      </div>
+      <div class="cv-tabs" role="tablist">
+        <button id="cv-tab-files" type="button" role="tab" data-i18n="code.files"></button>
+        <button id="cv-tab-changes" type="button" role="tab" data-i18n="code.changes"></button>
+      </div>
+      <div id="cv-banner" class="cv-banner"></div>
+      <div class="cv-body">
+        <aside id="cv-nav" class="cv-nav" aria-label="Files"></aside>
+        <main id="cv-main" class="cv-main">
+          <div class="cv-mobile-bar">
+            <button id="cv-back" type="button">‹ <span data-i18n="code.back"></span></button>
+          </div>
+          <div id="cv-path" class="cv-path"></div>
+          <div id="cv-content" class="cv-content"></div>
+        </main>
+      </div>
+    </div>
+  </div>
+
   <div class="toast-region" id="toast-region" aria-live="polite"></div>
+  <script src="/i18n.js"></script>
+  <script>I18N.init(); I18N.applyStatic();</script>
   <script src="/vendor/xterm.js"></script>
   <script src="/vendor/addon-unicode11.js"></script>
   <script type="module" src="/js/platform.js"></script>

@@ -510,18 +510,26 @@ export function setCodeTab(next) {
   } else loadChanges();
 }
 
-async function openCode(nextContext) {
+async function openCode(nextContext, { initialTab = "files", initialPath = null } = {}) {
   if (nextContext.nodeId != null && !nodeSupportsCode(nextContext.nodeId)) {
     toast(t("code.nodeUpdate"), "error", 6000);
     return;
   }
   context = nextContext;
-  tab = "files";
+  tab = initialTab === "changes" && nextContext.scope === "task" ? "changes" : "files";
   resetState();
   updateChrome();
   $("code-modal").style.display = "flex";
   $("cv-close").focus();
-  await loadTree();
+  if (tab === "changes") {
+    await loadChanges();
+    if (initialPath && changes?.files.some((file) => file.path === initialPath || file.oldPath === initialPath)) {
+      await selectChange(initialPath);
+    }
+  } else {
+    await loadTree();
+    if (initialPath && treeMeta?.files.includes(initialPath)) await selectFile(initialPath);
+  }
 }
 
 export function openRepoCode(id, nodeId = null) {
@@ -532,6 +540,16 @@ export function openRepoCode(id, nodeId = null) {
 export function openTaskCode(id, nodeId = null) {
   const task = taskFor(id, nodeId);
   return openCode({ scope: "task", id: Number(id), nodeId: nodeId == null ? null : Number(nodeId), name: task ? `#${id} ${task.title}` : `#${id}` });
+}
+
+/** Open the shared viewer for callers that own their own task catalog (for
+ * example Alignyard's platform Tasks). The inspector still receives only the
+ * owner-local runtime Task id; paths and worktree locations stay server-side. */
+export function openTaskCodeContext(id, name, options = {}) {
+  return openCode({ scope: "task", id: Number(id), nodeId: null, name: String(name || `#${id}`) }, {
+    initialTab: options.tab,
+    initialPath: options.path,
+  });
 }
 
 export function closeCodeView() {
