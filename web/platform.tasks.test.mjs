@@ -6,6 +6,7 @@ const html = fs.readFileSync(new URL("./platform.html", import.meta.url), "utf8"
 const script = fs.readFileSync(new URL("./js/platform.js", import.meta.url), "utf8");
 const agent = fs.readFileSync(new URL("./js/platform-agent.js", import.meta.url), "utf8");
 const styles = fs.readFileSync(new URL("./css/platform.css", import.meta.url), "utf8");
+const codeViewStyles = fs.readFileSync(new URL("./css/platform-codeview.css", import.meta.url), "utf8");
 
 test("Tasks surface keeps only the three primary filters and one create action", () => {
   const taskView = html.match(/<section class="view active" id="view-tasks"[\s\S]*?<\/section>/)?.[0] || "";
@@ -67,6 +68,19 @@ test("Repository Init drawer closes runtime, Review, PR, and merge behind explic
   assert.match(styles, /\.drawer-backdrop\.agent-mode \.task-drawer\s*\{[^}]*flex:/);
   assert.doesNotMatch(styles, /\.agent-workspace\s*\{[^}]*position:\s*fixed/);
   assert.match(script, /手动模式与诊断命令/);
+});
+
+test("Task Review reuses the Switchyard file and diff viewer", () => {
+  assert.match(html, /href="\/css\/platform-codeview\.css"/);
+  assert.match(html, /id="code-modal"[\s\S]*id="cv-tab-files"[\s\S]*id="cv-tab-changes"/);
+  assert.match(script, /openTaskCodeContext/);
+  assert.match(script, /task\.runtime_task_id/);
+  assert.match(script, /tab: "changes"/);
+  assert.match(script, /data-open-task-changes/);
+  assert.match(script, /data-artifact-path/);
+  assert.match(script, /openTaskChanges\(task, button\.dataset\.artifactPath\)/);
+  assert.match(codeViewStyles, /#code-modal\.code-modal-bg[\s\S]*z-index:\s*150/);
+  assert.match(styles, /\.artifact-row:not\(:disabled\):hover/);
 });
 
 test("Repositories surface exposes guarded deletion through the platform API", () => {

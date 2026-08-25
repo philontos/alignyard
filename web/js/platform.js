@@ -4,6 +4,12 @@ import {
   openPlatformAgentWorkspace,
   platformAgentWorkspaceIsOpen,
 } from "./platform-agent.js";
+import {
+  closeCodeView,
+  initCodeView,
+  isCodeViewOpen,
+  openTaskCodeContext,
+} from "./features/codeview.js";
 
 const state = {
   view: "tasks",
@@ -525,6 +531,17 @@ function taskLocalCommands(task) {
     : ["ay validate .", sync];
 }
 
+function openTaskChanges(task, path = null) {
+  if (!task.runtime_task_id || !task.runtime_has_worktree) {
+    toast("Task worktree 已清理，当前无法读取本地 diff", "error");
+    return;
+  }
+  openTaskCodeContext(task.runtime_task_id, `${task.key} ${task.title}`, {
+    tab: "changes",
+    ...(path ? { path } : {}),
+  });
+}
+
 function openTaskDetail(key) {
   const task = state.tasks.find((item) => item.key === key);
   if (!task) return;
@@ -534,18 +551,21 @@ function openTaskDetail(key) {
   const workflowNote = task.task_type === "repository_init"
     ? `${initWorkflowPanel(task)}<details class="manual-workflow"><summary>手动模式与诊断命令</summary><p>自动 Agent 无法完成时，才需要在保留的 worktree 中执行这些命令。</p>${commandList}</details>`
     : "";
-  const artifacts = task.artifacts?.length ? task.artifacts.map((artifact) => `<article class="artifact-row"><span class="artifact-kind ${artifactKind(artifact.kind)}">${escapeHtml(artifactKind(artifact.kind).slice(0, 4))}</span><div><strong>${escapeHtml(artifact.title || artifact.path)}</strong><small>${escapeHtml(artifact.path)}</small></div><span>${escapeHtml(artifact.review_status)}</span></article>`).join("") : `<div class="detail-empty">尚未收到 manifest 结果。成员在本地执行 <code>ay sync</code> 后，这里会显示 docs、specs 和 ADR 的差异。</div>`;
+  const canInspectChanges = !!task.runtime_task_id && !!task.runtime_has_worktree;
+  const artifacts = task.artifacts?.length ? task.artifacts.map((artifact) => `<button class="artifact-row" type="button" data-artifact-path="${escapeHtml(artifact.path)}" ${canInspectChanges ? "" : "disabled"}><span class="artifact-kind ${artifactKind(artifact.kind)}">${escapeHtml(artifactKind(artifact.kind).slice(0, 4))}</span><span><strong>${escapeHtml(artifact.title || artifact.path)}</strong><small>${escapeHtml(artifact.path)}</small></span><span>${escapeHtml(artifact.review_status)} <i aria-hidden="true">›</i></span></button>`).join("") : `<div class="detail-empty">尚未收到 manifest 结果。成员在本地执行 <code>ay sync</code> 后，这里会显示 docs、specs 和 ADR 的差异。</div>`;
   $("#task-detail").innerHTML = `<div class="detail-top"><span class="task-key">${escapeHtml(task.key)}</span><h1>${escapeHtml(task.title)}</h1><p>${escapeHtml(task.description || "尚未填写需求说明")}</p></div>
     <div class="detail-meta">${statusPill(task.status)}<span>负责人：${escapeHtml(task.owner)}</span><span>创建于 ${escapeHtml(formatDate(task.created_at))}</span></div>
     ${workflowNote}${task.task_type === "repository_init" ? "" : commandList}
     <section class="detail-section"><div class="detail-section-head"><h2>Repositories · ${task.repositories.length}</h2><span class="protocol-badge">peer worktrees</span></div><div class="detail-repos">${task.repositories.map(detailRepository).join("")}</div></section>
-    <section class="detail-section"><div class="detail-section-head"><h2>工程知识 · ${task.artifacts?.length || 0}</h2><span class="protocol-badge">manifest snapshot</span></div><div class="artifact-list">${artifacts}</div></section>
+    <section class="detail-section"><div class="detail-section-head"><h2>工程知识 · ${task.artifacts?.length || 0}</h2>${canInspectChanges ? `<button class="text-button review-changes" type="button" data-open-task-changes>查看全部变更</button>` : `<span class="protocol-badge">manifest snapshot</span>`}</div><div class="artifact-list">${artifacts}</div></section>
     <div class="detail-actions">${taskNextAction(task)}</div>`;
   $("#task-drawer").hidden = false;
   $$('[data-copy-command]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => copyCommand(commands[Number(button.dataset.copyCommand)])));
   $$('[data-set-status]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => setTaskStatus(task.key, button.dataset.setStatus)));
   $('[data-run-init]', $("#task-detail"))?.addEventListener("click", (event) => runInitTask(task.key, event.currentTarget));
   $('[data-open-agent]', $("#task-detail"))?.addEventListener("click", () => openPlatformAgentWorkspace(task));
+  $('[data-open-task-changes]', $("#task-detail"))?.addEventListener("click", () => openTaskChanges(task));
+  $$('[data-artifact-path]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => openTaskChanges(task, button.dataset.artifactPath)));
   $('[data-init-review]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "review", event.currentTarget, "已提交 Review"));
   const requestLabel = taskChangeRequestLabel(task);
   $('[data-init-pr]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "pull-request", event.currentTarget, `Review 已批准，${requestLabel} 已创建`));
@@ -674,13 +694,15 @@ function bindEvents() {
   $("#drawer-close").addEventListener("click", closeTaskDetail);
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    if (platformAgentWorkspaceIsOpen()) closePlatformAgentWorkspace();
+    if (isCodeViewOpen()) closeCodeView();
+    else if (platformAgentWorkspaceIsOpen()) closePlatformAgentWorkspace();
     else if (!$("#confirm-dialog").hidden) closeConfirmDialog(false);
     else if (!$("#add-repository-dialog").hidden) closeRepositoryDialog();
     else if (!$("#create-task-dialog").hidden) closeTaskDialog();
     else if (!$("#task-drawer").hidden) closeTaskDetail();
   });
   wireDynamicButtons();
+  initCodeView();
   initPlatformAgentWorkspace({ onError: (message) => toast(message, "error") });
 }
 
