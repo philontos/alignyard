@@ -97,6 +97,7 @@ test("Task detail exposes only implemented ay workflow commands", () => {
   assert.doesNotMatch(script, /ay task open/);
   assert.match(script, /"ay init \."/);
   assert.match(script, /ay new doc overview --scope shared/);
+  assert.match(script, /--title \\"仓库概览\\"/);
   assert.match(script, /ay validate \./);
   assert.match(script, /ay sync \. --platform/);
 });

@@ -465,6 +465,7 @@ function initWorkflowStage(task) {
   if (task.pr_state === "merged") return { key: "error", label: "等待完成初始化", note: `${requestLabel} 已合并，正在确认默认分支上的 Alignyard 文件。` };
   if (task.status === "approved" && task.pr_state === "open") return { key: "pr", label: `${requestLabel} 待合并`, note: `Review 已批准，${requestLabel} 已创建，等待人工确认合并。` };
   if (task.status === "review") return { key: "review", label: "等待 Review", note: `Agent worktree 已冻结；确认工程知识后创建 ${requestLabel}。` };
+  if (task.status === "draft" && task.pr_state === "open") return { key: "paused", label: "要求修改", note: `${requestLabel} 保持打开；继续 Agent 修改并 sync 后重新提交 Review。` };
   if (repository?.manifest_status === "valid") return { key: "ready", label: "可提交 Review", note: `Agent 已提交并同步 ${task.artifacts?.length || 0} 个工程知识产物。` };
   if (task.runtime_task_id && task.runtime_alive) return { key: "running", label: "Agent 执行中", note: "Agent 正在初始化 worktree；产物 sync 后这里会自动更新。" };
   if (task.runtime_task_id) return { key: "paused", label: "Agent 已暂停", note: "worktree 已保留，可以进入工作区检查或继续 Agent。" };
@@ -511,6 +512,7 @@ function initTaskActions(task) {
     actions.push(`<button class="button secondary" type="button" data-set-status="draft">要求修改</button>`);
     actions.push(`<button class="button primary" type="button" data-init-pr ${pendingAction(task, "pull-request") ? "disabled" : ""}>${pendingAction(task, "pull-request") ? `正在创建 ${requestLabel}…` : `审核通过并创建 ${requestLabel}`}</button>`);
   } else if (task.status === "approved" && task.pr_state === "open") {
+    actions.push(`<button class="button secondary" type="button" data-set-status="draft">要求修改</button>`);
     actions.push(`<a class="button secondary link" href="${escapeHtml(task.pr_url)}" target="_blank" rel="noreferrer">查看 ${requestLabel} #${task.pr_number}</a>`);
     actions.push(`<button class="button primary" type="button" data-init-merge ${pendingAction(task, "merge") ? "disabled" : ""}>${pendingAction(task, "merge") ? `正在合并 ${requestLabel}…` : `合并 ${requestLabel}`}</button>`);
   } else if (task.status === "approved" && task.pr_state === "merged" && repository?.protocol_state !== "ready") {
@@ -527,7 +529,7 @@ function taskLocalCommands(task) {
   if (!repository) return [];
   const sync = `ay sync . --platform ${location.origin} --task ${task.key} --repository-id ${repository.id}`;
   return task.task_type === "repository_init"
-    ? ["ay init .", "ay new doc overview --scope shared --title \"Repository Overview\"", "ay validate .", sync]
+    ? ["ay init .", "ay new doc overview --scope shared --title \"仓库概览\"", "ay validate .", sync]
     : ["ay validate .", sync];
 }
 

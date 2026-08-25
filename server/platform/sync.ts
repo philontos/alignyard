@@ -15,6 +15,7 @@ const MAX_DOCUMENTS = 500;
 const MAX_DOCUMENT_BYTES = 1024 * 1024;
 const MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 const CHANGE_KINDS = new Set(["snapshot", "added", "modified", "unchanged"]);
+const HAN_CHARACTER = /\p{Script=Han}/u;
 
 export class PlatformSyncError extends Error {
   constructor(public status: number, message: string) {
@@ -103,6 +104,22 @@ function normalizeDocument(raw: unknown, scopes: Set<string>): SyncDocument {
   return { id, kind, scope, title, path: filePath, owners, relations, content, content_hash: contentHash, change_kind: changeKind };
 }
 
+function assertChineseInitializationDocument(document: SyncDocument): void {
+  const body = document.content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
+  if (!HAN_CHARACTER.test(document.title)) {
+    throw new PlatformSyncError(400, `${document.path}: 初始化工程知识的 title 必须使用中文`);
+  }
+  if (!HAN_CHARACTER.test(body)) {
+    throw new PlatformSyncError(400, `${document.path}: 初始化工程知识的正文必须使用中文`);
+  }
+  const nonChineseHeading = [...body.matchAll(/^#{1,6}\s+(.+)$/gm)]
+    .map((match) => match[1].trim())
+    .find((heading) => !HAN_CHARACTER.test(heading));
+  if (nonChineseHeading) {
+    throw new PlatformSyncError(400, `${document.path}: 章节标题「${nonChineseHeading}」必须使用中文`);
+  }
+}
+
 export function syncPlatformTaskKnowledge(
   db: DB,
   taskKey: string,
@@ -128,6 +145,9 @@ export function syncPlatformTaskKnowledge(
     document.kind === "doc" && document.path === ".alignyard/docs/shared/overview.md"
   )) {
     throw new PlatformSyncError(400, "初始化 Task 必须包含 .alignyard/docs/shared/overview.md");
+  }
+  if (task.task_type === "repository_init") {
+    for (const document of documents) assertChineseInitializationDocument(document);
   }
   const totalBytes = documents.reduce((sum, document) => sum + Buffer.byteLength(document.content), 0);
   if (totalBytes > MAX_TOTAL_BYTES) throw new PlatformSyncError(413, "文档总大小超过 8 MiB");

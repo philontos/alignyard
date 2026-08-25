@@ -67,10 +67,28 @@ const KIND_DIRS: Record<KnowledgeKind, string> = {
   adr: "adrs",
 };
 
-const REQUIRED_SECTIONS: Record<KnowledgeKind, string[]> = {
-  doc: ["Overview"],
-  spec: ["Context", "Goals", "Non-goals", "Design", "Acceptance Criteria"],
-  adr: ["Context", "Decision", "Consequences"],
+interface RequiredSection {
+  label: string;
+  headings: string[];
+}
+
+// New repositories use Chinese headings. English aliases remain valid so the
+// protocol upgrade does not invalidate repositories initialized before the
+// language policy was introduced.
+const REQUIRED_SECTIONS: Record<KnowledgeKind, RequiredSection[]> = {
+  doc: [{ label: "概述", headings: ["概述", "Overview"] }],
+  spec: [
+    { label: "背景", headings: ["背景", "Context"] },
+    { label: "目标", headings: ["目标", "Goals"] },
+    { label: "非目标", headings: ["非目标", "Non-goals", "Non Goals"] },
+    { label: "设计", headings: ["设计", "Design"] },
+    { label: "验收标准", headings: ["验收标准", "Acceptance Criteria"] },
+  ],
+  adr: [
+    { label: "背景", headings: ["背景", "Context"] },
+    { label: "决策", headings: ["决策", "Decision"] },
+    { label: "影响", headings: ["影响", "Consequences"] },
+  ],
 };
 
 const SCOPE_ID = /^[a-z][a-z0-9-]*$/;
@@ -223,10 +241,13 @@ function validateDocument(
     if (idMatch[2] !== scope) errors.push(`${filePath}: id 中的 scope 必须是 ${scope}`);
   }
 
-  for (const heading of REQUIRED_SECTIONS[kind]) {
-    const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (!new RegExp(`^#{1,2}\\s+${escaped}\\s*$`, "mi").test(parsed.body)) {
-      errors.push(`${filePath}: 缺少「${heading}」章节`);
+  for (const section of REQUIRED_SECTIONS[kind]) {
+    const present = section.headings.some((heading) => {
+      const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`^#{1,2}\\s+${escaped}\\s*$`, "mi").test(parsed.body);
+    });
+    if (!present) {
+      errors.push(`${filePath}: 缺少「${section.label}」章节`);
     }
   }
   return id && title && scope && declaredKind === kind
@@ -249,10 +270,13 @@ function validateTemplate(root: string, kind: KnowledgeKind, errors: string[]) {
   for (const token of ["{{id}}", "{{title}}", "{{kind}}", "{{scope}}"] as const) {
     if (!text.includes(token)) errors.push(`${relative}: 缺少模板变量 ${token}`);
   }
-  for (const heading of REQUIRED_SECTIONS[kind]) {
-    const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (!new RegExp(`^#{1,2}\\s+${escaped}\\s*$`, "mi").test(text)) {
-      errors.push(`${relative}: 缺少「${heading}」章节`);
+  for (const section of REQUIRED_SECTIONS[kind]) {
+    const present = section.headings.some((heading) => {
+      const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`^#{1,2}\\s+${escaped}\\s*$`, "mi").test(text);
+    });
+    if (!present) {
+      errors.push(`${relative}: 缺少「${section.label}」章节`);
     }
   }
 }
@@ -313,9 +337,9 @@ export function validateRepositoryProtocol(repositoryRoot: string): ProtocolVali
 }
 
 const DEFAULT_TEMPLATES: Record<KnowledgeKind, string> = {
-  doc: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nowners: []\nrelations: []\n---\n\n# Overview\n`,
-  spec: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nowners: []\nrelations: []\n---\n\n# Context\n\n# Goals\n\n# Non-goals\n\n# Design\n\n# Acceptance Criteria\n`,
-  adr: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nowners: []\nrelations: []\n---\n\n# Context\n\n# Decision\n\n# Consequences\n`,
+  doc: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nowners: []\nrelations: []\n---\n\n# 概述\n`,
+  spec: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nowners: []\nrelations: []\n---\n\n# 背景\n\n# 目标\n\n# 非目标\n\n# 设计\n\n# 验收标准\n`,
+  adr: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nowners: []\nrelations: []\n---\n\n# 背景\n\n# 决策\n\n# 影响\n`,
 };
 
 export const DEFAULT_KNOWLEDGE_SKILL = `---
@@ -357,6 +381,7 @@ Use this repository's \`.alignyard/repository.yaml\` as the routing contract and
 
 ## Safety and quality
 
+- Write Docs, Specs, and ADRs in Simplified Chinese, including titles, headings, and prose. Keep code identifiers, commands, paths, API names, and established product names unchanged when translation would reduce precision. This Skill itself may remain in English.
 - Do not invent behavior, ownership, commands, or decisions. Mark uncertain facts for confirmation.
 - Do not read or reproduce secret values. Refer to environment-variable names only when relevant.
 - Do not edit source paths outside the Task's scope merely to make documentation appear complete.
@@ -373,7 +398,7 @@ export function initializeRepositoryProtocol(repositoryRoot: string): { created:
   const title = repositoryTitle(root);
   const defaultFiles: Record<string, string> = {
     "repository.yaml": `version: 1\npreset: basic\n\nscopes:\n  - id: shared\n    title: ${JSON.stringify(title)}\n`,
-    "README.md": `# Alignyard Knowledge\n\nThis directory is the repository's versioned engineering-knowledge workspace. \`repository.yaml\` declares logical scopes; Docs describe current truth, Specs define intended changes, and ADRs preserve durable decisions.\n\nUse \`ay new\` to create documents, \`ay validate\` before review, and \`ay sync\` to publish the current Task snapshot to Alignyard.\n`,
+    "README.md": `# Alignyard 工程知识\n\n这个目录是 Repository 中随代码版本管理的工程知识工作区。\`repository.yaml\` 声明逻辑 scopes；Docs 记录当前事实，Specs 描述计划中的变更，ADRs 保存长期有效的决策。\n\n使用 \`ay new\` 创建文档，在 Review 前运行 \`ay validate\`，并通过 \`ay sync\` 将当前 Task 的知识快照同步到 Alignyard。\n`,
     "templates/doc.md": DEFAULT_TEMPLATES.doc,
     "templates/spec.md": DEFAULT_TEMPLATES.spec,
     "templates/adr.md": DEFAULT_TEMPLATES.adr,

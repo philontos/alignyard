@@ -475,7 +475,7 @@ export function updatePlatformTaskStatus(db: DB, key: string, status: unknown): 
   const transitions: Record<PlatformTaskStatus, readonly PlatformTaskStatus[]> = {
     draft: ["review"],
     review: ["draft", "approved"],
-    approved: [],
+    approved: task.task_type === "repository_init" && task.pr_state === "open" ? ["draft"] : [],
   };
   if (!transitions[task.status].includes(status as PlatformTaskStatus)) {
     throw new PlatformValidationError(`Task 不能从 ${task.status} 变为 ${status}`);
@@ -483,7 +483,7 @@ export function updatePlatformTaskStatus(db: DB, key: string, status: unknown): 
   const changed = db.prepare(
     "UPDATE platform_tasks SET status=?,updated_at=datetime('now') WHERE task_key=?",
   ).run(status, key.toUpperCase()).changes;
-  if (changed && task.task_type === "repository_init" && task.status === "review" && status === "draft") {
+  if (changed && task.task_type === "repository_init" && status === "draft") {
     db.prepare(
       "UPDATE platform_task_repositories SET manifest_status='waiting' WHERE task_id=? AND mode='editable'",
     ).run(task.id);
