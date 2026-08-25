@@ -554,7 +554,7 @@ function initTaskActions(task) {
   const requestLabel = taskChangeRequestLabel(task);
   const actions = [];
   if (task.runtime_task_id && task.runtime_has_worktree) {
-    actions.push(`<button class="button secondary" type="button" data-open-agent>进入 Agent 工作区</button>`);
+    actions.push(`<button class="button secondary mobile-agent-action" type="button" data-open-agent>打开 Agent</button>`);
   }
   if (task.status === "draft" && !task.runtime_task_id) {
     actions.push(`<button class="button primary" type="button" data-run-init>开始初始化</button>`);
@@ -626,6 +626,9 @@ function openTaskDetail(key) {
   const requestLabel = taskChangeRequestLabel(task);
   $('[data-init-pr]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "pull-request", event.currentTarget, `Review 已批准，${requestLabel} 已创建`));
   $('[data-init-merge]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "merge", event.currentTarget, `${requestLabel} 已合并，Repository 已就绪`));
+  if (!matchMedia("(max-width: 760px)").matches || platformAgentWorkspaceIsOpen()) {
+    openPlatformAgentWorkspace(task);
+  }
 }
 
 function closeTaskDetail() {
@@ -751,7 +754,7 @@ function bindEvents() {
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     if (isCodeViewOpen()) closeCodeView();
-    else if (platformAgentWorkspaceIsOpen()) closePlatformAgentWorkspace();
+    else if (platformAgentWorkspaceIsOpen() && matchMedia("(max-width: 760px)").matches) closePlatformAgentWorkspace();
     else if (!$("#confirm-dialog").hidden) closeConfirmDialog(false);
     else if (!$("#add-repository-dialog").hidden) closeRepositoryDialog();
     else if (!$("#create-task-dialog").hidden) closeTaskDialog();
