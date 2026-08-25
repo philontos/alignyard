@@ -5,6 +5,7 @@ import fs from "node:fs";
 const html = fs.readFileSync(new URL("./platform.html", import.meta.url), "utf8");
 const script = fs.readFileSync(new URL("./js/platform.js", import.meta.url), "utf8");
 const agent = fs.readFileSync(new URL("./js/platform-agent.js", import.meta.url), "utf8");
+const codeViewer = fs.readFileSync(new URL("./js/features/codeview.js", import.meta.url), "utf8");
 const styles = fs.readFileSync(new URL("./css/platform.css", import.meta.url), "utf8");
 const codeViewStyles = fs.readFileSync(new URL("./css/platform-codeview.css", import.meta.url), "utf8");
 
@@ -86,6 +87,10 @@ test("Task Review reuses the Switchyard file and diff viewer", () => {
   assert.match(script, /data-open-task-changes/);
   assert.match(script, /data-artifact-path/);
   assert.match(script, /openTaskChanges\(task, button\.dataset\.artifactPath\)/);
+  assert.match(codeViewer, /buildFileTree\(changes\.files\.map\(\(file\) => file\.path\)\)/);
+  assert.match(codeViewer, /renderChangeTreeNode\(changeTree, list, 0, changeByPath\)/);
+  assert.match(codeViewer, /openChangeDirs = parentDirectoryPaths/);
+  assert.match(codeViewer, /label\.textContent = treeFile\.name/);
   assert.match(codeViewStyles, /#code-modal\.code-modal-bg[\s\S]*z-index:\s*150/);
   assert.match(styles, /\.artifact-row:not\(:disabled\):hover/);
 });

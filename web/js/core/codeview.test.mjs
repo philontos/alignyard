@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildFileTree, sortedTreeChildren, diffLineKind, classifyCodePath,
+  buildFileTree, parentDirectoryPaths, sortedTreeChildren, diffLineKind, classifyCodePath,
   codeLineCount, canHighlightCode, parseStructuredJson, shouldWrapCodePath,
   MAX_HIGHLIGHT_BYTES, MAX_HIGHLIGHT_LINES, MAX_STRUCTURED_JSON_BYTES,
 } from "./codeview.js";
@@ -14,6 +14,13 @@ test("buildFileTree turns flat Git paths into stable directory/file nodes", () =
   const src = sortedTreeChildren(top.dirs[0]);
   assert.deepEqual(src.dirs.map((x) => x.name), ["lib"]);
   assert.deepEqual(src.files.map((x) => x.name), ["a.ts", "z.ts"]);
+});
+
+test("parentDirectoryPaths expands every changed-file ancestor", () => {
+  assert.deepEqual(
+    [...parentDirectoryPaths(["README.md", "src/app.ts", "src/lib/parser.ts"])],
+    ["src", "src/lib"],
+  );
 });
 
 test("diffLineKind keeps file headers distinct from additions/deletions", () => {

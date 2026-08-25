@@ -6,7 +6,7 @@ import { $, api } from "../core/dom.js";
 import { toast } from "../core/feedback.js";
 import { state } from "../core/state.js";
 import {
-  buildFileTree, sortedTreeChildren, diffLineKind, classifyCodePath,
+  buildFileTree, parentDirectoryPaths, sortedTreeChildren, diffLineKind, classifyCodePath,
   codeLineCount, canHighlightCode, parseStructuredJson, shouldWrapCodePath,
 } from "../core/codeview.js";
 import { highlightCodeToHtml } from "./code-highlight.js";
@@ -21,7 +21,7 @@ let tab = "files";
 let tree = null, treeMeta = null, changes = null;
 let selectedFile = null, selectedChange = null, currentPayload = null;
 let fileView = null;                // null (choose default), "structure", or "source"
-let openDirs = new Set();
+let openDirs = new Set(), openChangeDirs = new Set();
 let requestSerial = 0;
 let activeRequest = null;
 let localTaskLookup = () => null;
@@ -56,6 +56,7 @@ function resetState() {
   selectedFile = selectedChange = null;
   fileView = null;
   openDirs = new Set();
+  openChangeDirs = new Set();
   $("code-modal").classList.remove("detail");
   $("cv-banner").className = "cv-banner";
   $("cv-banner").textContent = "";
@@ -203,23 +204,55 @@ function renderChanges() {
   if (!changes.files.length) return stateBox(nav, t("code.noChanges"));
   const list = document.createElement("div");
   list.className = "cv-list cv-change-list";
-  for (const file of changes.files) {
+  const changeByPath = new Map(changes.files.map((file) => [file.path, file]));
+  const changeTree = buildFileTree(changes.files.map((file) => file.path));
+  renderChangeTreeNode(changeTree, list, 0, changeByPath);
+  nav.append(list);
+}
+
+function renderChangeTreeNode(node, parent, depth, changeByPath) {
+  const { dirs, files } = sortedTreeChildren(node);
+  for (const dir of dirs) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "cv-item cv-dir";
+    row.style.setProperty("--depth", depth);
+    const isOpen = openChangeDirs.has(dir.path);
+    row.setAttribute("aria-expanded", String(isOpen));
+    const caret = document.createElement("span");
+    caret.className = "cv-caret";
+    caret.classList.toggle("open", isOpen);
+    caret.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span");
+    label.className = "cv-item-label";
+    label.textContent = dir.name;
+    row.append(caret, label);
+    row.onclick = () => {
+      isOpen ? openChangeDirs.delete(dir.path) : openChangeDirs.add(dir.path);
+      renderChanges();
+    };
+    parent.append(row);
+    if (isOpen) renderChangeTreeNode(dir, parent, depth + 1, changeByPath);
+  }
+  for (const treeFile of files) {
+    const file = changeByPath.get(treeFile.path);
+    if (!file) continue;
     const row = document.createElement("button");
     row.type = "button";
     row.className = "cv-item cv-change";
     row.classList.toggle("selected", selectedChange === file.path);
+    row.style.setProperty("--depth", depth);
     row.title = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
     const status = document.createElement("span");
     status.className = `cv-status s-${file.status === "?" ? "new" : file.status.toLowerCase()}`;
     status.textContent = file.status === "?" ? "A" : file.status;
     const label = document.createElement("span");
     label.className = "cv-item-label";
-    label.textContent = file.path;
+    label.textContent = treeFile.name;
     row.append(status, label);
     row.onclick = () => selectChange(file.path);
-    list.append(row);
+    parent.append(row);
   }
-  nav.append(list);
 }
 
 async function loadTree(refresh = false) {
@@ -244,6 +277,7 @@ async function loadChanges() {
   banner();
   try {
     changes = await inspect("changes");
+    openChangeDirs = parentDirectoryPaths(changes.files.map((file) => file.path));
     setRevision(changes);
     updateChrome();
     renderChanges();
@@ -581,6 +615,7 @@ export async function refreshCodeView() {
   fileView = null;
   selectedFile = selectedChange = null;
   openDirs = new Set();
+  openChangeDirs = new Set();
   $("code-modal").classList.remove("detail");
   updateChrome();
   try {

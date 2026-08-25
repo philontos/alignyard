@@ -140,6 +140,20 @@ export function buildFileTree(paths) {
   return root;
 }
 
+export function parentDirectoryPaths(paths) {
+  const directories = new Set();
+  for (const raw of paths || []) {
+    const parts = String(raw).split("/").filter(Boolean);
+    parts.pop();
+    let current = "";
+    for (const part of parts) {
+      current = current ? `${current}/${part}` : part;
+      directories.add(current);
+    }
+  }
+  return directories;
+}
+
 export function sortedTreeChildren(node) {
   return {
     dirs: [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name)),
