@@ -15,7 +15,7 @@ import { initReading, reflectWaiting } from "./features/reading.js";
 import { state } from "./core/state.js";
 import { loadRepos, openRepoModal, closeRepoModal, addRepo, delRepo, openRepoDetails, openRepoDetailsKey, closeRepoDetails, repaintRepoDetails } from "./features/repos.js";
 import { loadHosts, selectHost, openHostModal, closeHostModal, addHost, delHost, toggleRepo, toggleArchived, toggleHostMenu, initHostMenuDismiss, loadFleet, bootstrapHost, connectNode, stopNodeTask, removeNodeWt, resumeNodeTask, deleteNodeTask, delNodeRepo, updateHost, updateSelf, openDiscoveryModal, closeDiscoveryModal, openManualHostModal, discoverNodes, connectDiscoveredAt } from "./features/hosts.js";
-import { loadTasks, addTask, archive, removeWt, deleteTask, resume, connect, openTaskModal, closeTaskModal, cancelTaskModal, addLocalTask, renameTask, focusPending, openNodeTaskModal, selectAgent, addNodeShell, allTasks, addTaskReference, repaintTaskReferences } from "./features/tasks.js";
+import { loadTasks, addTask, archive, removeWt, deleteTask, resume, connect, openTaskModal, closeTaskModal, cancelTaskModal, addLocalTask, renameTask, focusPending, openNodeTaskModal, selectAgent, addNodeShell, allTasks, taskById, addTaskReference, repaintTaskReferences } from "./features/tasks.js";
 import { initCodeView, openRepoCode, openTaskCode, closeCodeView, repaintCodeView, isCodeViewOpen } from "./features/codeview.js";
 import {
   initRuntimeReferences,
@@ -144,7 +144,7 @@ initReading({ onEmpty: () => setMode("live") });   // mobile reading view; empty
 showTermEmpty();
 initHostMenuDismiss();   // close the machine ⚙ menu on any outside click
 initReorder();           // long-press drag-to-reorder of repo task cards (session-only)
-initCodeView();          // read-only repository tree + task diff modal
+initCodeView({ taskLookup: taskById }); // read-only repository tree + task diff modal
 $("t-base").dataset.ph = t("task.branchPh");   // localized placeholder for the branch select
 csMount("t-base");
 csMount("h-kind").setOptions([{ value: "ssh", label: "ssh" }, { value: "mosh", label: "mosh" }]);
