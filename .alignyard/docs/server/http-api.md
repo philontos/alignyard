@@ -28,7 +28,7 @@ relations:
 
 | 路由 | 语义 |
 |---|---|
-| `GET/POST /api/platform/repositories` | 列出或登记不含凭据的平台 Repository |
+| `GET/POST /api/platform/repositories` | 列出或登记平台 Repository；`git_url` 必须由调用方保证不含凭据 |
 | `DELETE /api/platform/repositories/:id` | 仅在没有 Platform Task 引用时删除；同时清理匹配的本地 Repository |
 | `POST /api/platform/repositories/:id/initialize` | 创建初始化 Task 并启动或复用本地 runtime |
 | `POST /api/platform/repositories/:id/refresh` | 从默认分支读取必需 `.alignyard/` 文件并更新协议状态 |
@@ -42,6 +42,8 @@ relations:
 | `GET /api/platform/artifacts` | 列出已同步的工程知识 artifact |
 
 初始化 Task 不允许用通用 PATCH 跳过 Review、PR/MR 和 Merge 操作。平台 workflow 对同一 Task 的并发启动、创建合并请求和合并操作做进程内折叠；外部 Git forge 操作失败后会先查询远端实际状态，再决定是否报错。
+
+Platform Repository 的 credential-free 性质目前是接口契约，不是服务端已强制的输入不变量。`POST /api/platform/repositories` 只检查 `git_url` 非空，并会由读取接口原样返回；调用方不得传入 `https://user:token@host/...` 一类带内嵌凭据的 URL。Repository token 应只通过 owner-local `/api/repos` 流程保存。在服务端增加 URL 清洗或拒绝逻辑前，反向代理认证也不能替代这项输入约束。
 
 ## 节点运行时接口
 

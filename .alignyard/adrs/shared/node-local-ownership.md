@@ -12,7 +12,7 @@ relations:
 
 # 背景
 
-README 明确把 Switchyard 描述为本地优先、无中心服务器的节点网络，并说明每台机器是自身 Repository、数据库、worktree、tmux session 与 Agent 的唯一真源。`server/core/schema.ts`、`server/task/cli.ts` 和 `server/http/routes.ts` 进一步把这项约束写进数据模型和跨节点接口：平台共享行不保存 clone 与凭据，远端 Repository/Task 操作必须交给目标节点执行。
+README 明确把 Switchyard 描述为本地优先、无中心服务器的节点网络，并说明每台机器是自身 Repository、数据库、worktree、tmux session 与 Agent 的唯一真源。`server/core/schema.ts`、`server/task/cli.ts` 和 `server/http/routes.ts` 进一步把这项约束写进数据模型和跨节点接口：平台共享行按设计不应保存 clone 与凭据，远端 Repository/Task 操作必须交给目标节点执行。
 
 如果控制节点复制远端路径、凭据或 Task 状态并在本地代办，节点离线、数据漂移和权限泄漏会让同一资源出现多个互相矛盾的真源；远端没有安装 Switchyard 时走兼容捷径也会破坏相同边界。
 
@@ -20,7 +20,7 @@ README 明确把 Switchyard 描述为本地优先、无中心服务器的节点�
 
 每个节点永久拥有并执行位于该节点的 Repository mirror、凭据、runtime Task、worktree、tmux session、Agent、Provider 与文件操作。控制节点只保存连接所需的节点元数据，并通过 SSH 调用目标节点已安装的准确 `tdsp` 命令；读取 fleet 状态时按需聚合各节点的版本化 JSON，而不是复制完整运行记录。
 
-Alignyard 的 Platform Repository、Platform Task 和 artifact 可以作为协作目录存在，但平台 Repository 行保持 credential-free。创建或初始化 Task 时，服务必须先找到本机 owner-local Repository，再复用相同的 `repo/task/session` 服务建立 runtime。Repository ID、Task ID 和 Provider ID 始终按目标节点解释，不能用控制节点路径替代。
+Alignyard 的 Platform Repository、Platform Task 和 artifact 可以作为协作目录存在，但平台 Repository 行必须保持 credential-free。当前创建接口不会剥离 `git_url` 中的用户名、密码或 token，因此调用方必须先提供无凭据 URL；服务端后续应把这项约束变成显式校验。创建或初始化 Task 时，服务必须先找到本机 owner-local Repository，再复用相同的 `repo/task/session` 服务建立 runtime。Repository ID、Task ID 和 Provider ID 始终按目标节点解释，不能用控制节点路径替代。
 
 Tailscale 提供私有身份、发现和可达性，HTTPS 支持页面、探测和首次双向连接；实际远端 Repository、Task、终端和文件操作仍通过 SSH 在目标节点完成。目标节点缺少 Switchyard、离线或协议版本不兼容时，系统如实报告不可用，不回退到控制节点执行。
 

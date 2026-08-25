@@ -35,7 +35,7 @@ repo/task/session 领域 ──► Git mirror + worktree + tmux + Agent
 
 ## Repository 初始化数据流
 
-1. 浏览器先通过 `/api/repos` 在本机登记并准备 Git mirror，再通过 `/api/platform/repositories` 建立不含凭据的平台 Repository 行。
+1. 浏览器先通过 `/api/repos` 在本机登记并准备 Git mirror，再通过 `/api/platform/repositories` 建立契约上不含凭据的平台 Repository 行。
 2. `/api/platform/repositories/:id/initialize` 创建 `repository_init` 类型的 Platform Task。`server/platform/workflow.ts` 生成初始化提示，并用 `createRepoTask` 从目标分支创建稳定工作分支、隔离 worktree 与 runtime Task。
 3. tmux 持有 Agent 进程；浏览器的内嵌终端通过 `/pty?session=...` 附着，关闭页面不会终止任务。
 4. Agent 在 worktree 内维护 `.alignyard/`，提交后执行 `ay sync`。客户端先本地校验和索引文档，再把 manifest、全文、SHA-256、基准提交、当前提交和变更类型发送到 `/api/platform/tasks/:key/sync`。
@@ -61,5 +61,6 @@ Switchyard 界面或 HTTP API 把 Repository Task 交给拥有该 Repository 的
 - 默认仅监听 `127.0.0.1:4500`。Tailscale Serve 提供 tailnet 私有 HTTPS；现有私网可通过 `--host-cidr` 增加选定地址。
 - Web 终端等同 shell 权限，服务当前没有应用层多用户认证。不得把 `HOST=0.0.0.0` 直接暴露到公网。
 - Repository token 与 Provider key 留在拥有节点的本地 SQLite，跨节点列表会再次投影字段，去掉 token、路径、prompt 和 Provider 信息。
+- Platform Repository 的 `git_url` 当前只做非空校验，创建接口不会剥离 URL 内嵌凭据；credential-free 仍是调用方必须遵守的契约。不得向 `/api/platform/repositories` 提交带用户名、密码或 token 的 URL。
 - Tailscale 负责身份、发现和私有可达；HTTPS 用于页面、探测和首次双向配对；真实远端 Repository、Task、终端与文件操作通过 SSH 在目标节点执行。
 - 平台 Repository 行只保存定位和协议状态，不承担 clone、凭据或 worktree 的所有权。详见 [节点本地归属](../../adrs/shared/node-local-ownership.md)。
