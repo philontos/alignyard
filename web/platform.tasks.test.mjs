@@ -119,8 +119,10 @@ test("Task items expose protected deletion without opening the detail drawer", (
   assert.doesNotMatch(script, /window\.confirm/);
 });
 
-test("long deletion operations use one blocking global loading state", () => {
+test("long repository and deletion operations use one blocking global loading state", () => {
   assert.match(html, /id="global-loading"[^>]+role="status"/);
+  assert.match(script, /showGlobalLoading\("正在初始化 Repository…"/);
+  assert.match(script, /正在创建初始化 Task、准备 worktree 并启动 Agent，请稍候/);
   assert.match(script, /showGlobalLoading\("正在删除 Task…"/);
   assert.match(script, /showGlobalLoading\("正在删除 Repository…"/);
   assert.match(script, /hideGlobalLoading\(\)/);

@@ -289,6 +289,7 @@ async function initializeRepository(repositoryId, button) {
   const repository = state.repositories.find((item) => item.id === repositoryId);
   if (!repository) return;
   button.disabled = true;
+  showGlobalLoading("正在初始化 Repository…", "正在创建初始化 Task、准备 worktree 并启动 Agent，请稍候。");
   try {
     const result = await api(`/api/platform/repositories/${repositoryId}/initialize`, {
       method: "POST",
@@ -307,6 +308,7 @@ async function initializeRepository(repositoryId, button) {
     toast(error.message, "error");
     await loadData({ silent: true });
   } finally {
+    hideGlobalLoading();
     if (button.isConnected) button.disabled = false;
   }
 }
