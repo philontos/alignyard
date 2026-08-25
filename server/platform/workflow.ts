@@ -86,12 +86,14 @@ export function repositoryInitializationPrompt(input: {
 
 请自主完成以下流程，不要等待用户逐条确认：
 1. 运行 ${ay} init .
-2. 运行 ${ay} new doc overview --scope shared --title "Repository Overview"
+2. 运行 ${ay} new doc overview --scope shared --title "仓库概览"
 3. 阅读仓库的 README、package metadata、主要目录和关键入口；按生成的 alignyard-knowledge Skill 更新 scopes，并把 overview 写成对本仓库真实有用的说明。不要编造事实。
 4. 只修改 .alignyard/。运行 ${ay} validate .，修复全部问题。
 5. 运行 git add .alignyard && git commit -m "docs: initialize Alignyard knowledge"。如果 Git 身份缺失，使用当前仓库已有的 author 配置；不要改全局配置。
 6. 提交后运行 ${ay} sync . --platform ${shellArg(input.platformUrl)} --task ${input.task.key} --repository-id ${repository.id} --base-commit "$(git merge-base HEAD ${shellArg(`origin/${repository.base_branch}`)})"。
 7. 最后确认 git status --short 为空，并总结生成的 scopes、Docs、Specs、ADRs 和验证结果。
+
+语言要求：SKILL.md 可以使用英文；所有 Docs、Specs、ADRs 的 title、章节标题和叙述正文必须使用简体中文。代码标识符、命令、路径、API 名称和已有产品名保持原样，不要为了翻译而降低准确性。
 
 边界：不要修改业务源代码，不要 push，不要创建或合并 PR/MR，不要修改 ${repository.base_branch}。Review、push、创建与合并请求由平台在人工确认后执行。`;
 }

@@ -154,6 +154,33 @@ test("requesting changes on Repository Init requires a fresh sync before another
   assert.throws(() => updatePlatformTaskStatus(db, task.key, "review"), /ay validate、ay sync/);
 });
 
+test("an approved Repository Init with an open change request can return to draft", () => {
+  const db = memoryDb();
+  const repository = createPlatformRepository(db, {
+    name: "new-service", git_url: "git@example/new-service", created_by: "Phil",
+  });
+  const task = createRepositoryInitializationTask(db, repository.id, "Phil");
+  db.prepare(
+    "UPDATE platform_task_repositories SET manifest_status='valid' WHERE task_id=? AND repository_id=?",
+  ).run(task.id, repository.id);
+  db.prepare(
+    "INSERT INTO platform_artifacts (task_id,repository_id,document_id,kind,scope,path,title) " +
+      "VALUES (?,?,?,'doc','shared','.alignyard/docs/shared/overview.md','仓库概览')",
+  ).run(task.id, repository.id, "overview");
+
+  updatePlatformTaskStatus(db, task.key, "review");
+  recordPlatformPullRequest(db, task.key, {
+    number: 42, url: "https://github.com/example/new-service/pull/42", state: "open",
+  });
+  updatePlatformTaskStatus(db, task.key, "approved");
+  const draft = updatePlatformTaskStatus(db, task.key, "draft");
+
+  assert.equal(draft?.status, "draft");
+  assert.equal(draft?.pr_state, "open");
+  assert.equal(draft?.pr_number, 42);
+  assert.equal(draft?.repositories[0].manifest_status, "waiting");
+});
+
 test("platform Task records its runtime, commits, workflow error, and pull request", () => {
   const db = memoryDb();
   db.prepare("INSERT INTO hosts (id,name,target,kind,status) VALUES (1,'local','','local','online')").run();

@@ -24,7 +24,8 @@ function fixture() {
   const task = createRepositoryInitializationTask(db, repository.id, "Phil");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "alignyard-sync-"));
   initializeRepositoryProtocol(root);
-  createRepositoryDocument(root, { kind: "doc", slug: "overview", scope: "shared", title: "Overview" });
+  const overview = createRepositoryDocument(root, { kind: "doc", slug: "overview", scope: "shared", title: "仓库概览" });
+  fs.appendFileSync(path.join(root, overview.path), "\n这里记录仓库当前已经验证的工程事实。\n", "utf8");
   const indexed = indexRepositoryProtocol(root);
   return { db, repository, task, root, indexed };
 }
@@ -50,8 +51,24 @@ test("platform accepts a validated editable Task knowledge snapshot", () => {
     ).get() as { document_id: string; scope: string; content: string; content_hash: string };
     assert.equal(stored.document_id, "doc.shared.overview");
     assert.equal(stored.scope, "shared");
-    assert.match(stored.content, /# Overview/);
+    assert.match(stored.content, /# 概述/);
     assert.equal(stored.content_hash.length, 64);
+  } finally {
+    fs.rmSync(value.root, { recursive: true, force: true });
+  }
+});
+
+test("repository init rejects English-only knowledge before Review", () => {
+  const value = fixture();
+  try {
+    const target = path.join(value.root, ".alignyard/docs/shared/overview.md");
+    fs.writeFileSync(target, `---\nid: doc.shared.overview\ntitle: Repository Overview\nkind: doc\nscope: shared\nowners: []\nrelations: []\n---\n\n# Overview\n\nEnglish-only repository facts.\n`, "utf8");
+    const indexed = indexRepositoryProtocol(value.root);
+    assert.throws(() => syncPlatformTaskKnowledge(value.db, value.task.key, {
+      repository_id: value.repository.id,
+      manifest: indexed.manifest,
+      documents: indexed.documents.map((document) => ({ ...document, change_kind: "added" })),
+    }), (error: unknown) => error instanceof PlatformSyncError && /必须使用中文/.test(error.message));
   } finally {
     fs.rmSync(value.root, { recursive: true, force: true });
   }

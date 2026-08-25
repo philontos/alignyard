@@ -10,6 +10,7 @@ import {
   createRepositoryInitializationTask,
   getPlatformTask,
   setPlatformRepositoryProtocolState,
+  updatePlatformTaskStatus,
 } from "./catalog.ts";
 import {
   approveAndCreateRepositoryInitializationPullRequest,
@@ -150,6 +151,9 @@ test("Repository Init prompt makes agent execution automatic but keeps push and 
   assert.match(prompt, /init \./);
   assert.match(prompt, /validate \./);
   assert.match(prompt, /sync \./);
+  assert.match(prompt, /仓库概览/);
+  assert.match(prompt, /简体中文/);
+  assert.match(prompt, /SKILL\.md 可以使用英文/);
   assert.match(prompt, /不要 push/);
   assert.match(prompt, /不要创建或合并 PR/);
 });
@@ -260,6 +264,27 @@ test("concurrent PR confirmations share one local forge operation", async () => 
   assert.equal(creates, 1);
   assert.equal(firstResult.pr_number, 42);
   assert.equal(secondResult.pr_number, 42);
+});
+
+test("Repository Init revisions update the existing open PR after another Review", async () => {
+  const { db, env, repository, task, calls } = setup();
+  await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
+  seedSyncedOverview(db, task.key, repository.id);
+  await submitRepositoryInitializationReview(env, task.key);
+  await approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+
+  const draft = updatePlatformTaskStatus(db, task.key, "draft");
+  assert.equal(draft?.pr_state, "open");
+  db.prepare(
+    "UPDATE platform_task_repositories SET manifest_status='valid',head_commit=? WHERE task_id=? AND repository_id=?",
+  ).run(HEAD, task.id, repository.id);
+  await submitRepositoryInitializationReview(env, task.key);
+  const approved = await approveAndCreateRepositoryInitializationPullRequest(env, task.key);
+
+  assert.equal(approved.status, "approved");
+  assert.equal(approved.pr_number, 42);
+  assert.equal(calls.filter((call) => call.startsWith("gh pr create ")).length, 1);
+  assert.equal(calls.filter((call) => call.startsWith("git push --set-upstream origin ")).length, 2);
 });
 
 test("PR creation reconciles a remote success reported as already existing", async () => {
