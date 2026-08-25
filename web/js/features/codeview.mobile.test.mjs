@@ -44,6 +44,8 @@ test("code tree icons use accessible state and stable vector masks", () => {
 
 test("shared viewer accepts an external task context and initial diff path", () => {
   assert.match(feature, /export function openTaskCodeContext/);
+  assert.doesNotMatch(feature, /from "\.\/tasks\.js"/);
+  assert.match(feature, /localTaskLookup/);
   assert.match(feature, /initialTab === "changes"/);
   assert.match(feature, /initialPath && changes\?\.files\.some/);
   assert.match(feature, /await selectChange\(initialPath\)/);

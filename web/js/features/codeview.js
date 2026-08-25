@@ -10,7 +10,6 @@ import {
   codeLineCount, canHighlightCode, parseStructuredJson,
 } from "../core/codeview.js";
 import { highlightCodeToHtml } from "./code-highlight.js";
-import { taskById } from "./tasks.js";
 
 const CAPABILITY = "code-view-v1";
 const MAX_DIFF_LINES = 10000;
@@ -25,6 +24,7 @@ let fileView = null;                // null (choose default), "structure", or "s
 let openDirs = new Set();
 let requestSerial = 0;
 let activeRequest = null;
+let localTaskLookup = () => null;
 
 function mobile() { return matchMedia("(max-width: 760px)").matches; }
 
@@ -37,7 +37,7 @@ function repoFor(id, nodeId) {
 function taskFor(id, nodeId) {
   return nodeId != null
     ? state.fleet[nodeId]?.tasks?.find((x) => Number(x.id) === Number(id))
-    : taskById(id);
+    : localTaskLookup(Number(id));
 }
 
 function nodeSupportsCode(nodeId) {
@@ -596,7 +596,8 @@ export function isCodeViewOpen() {
   return $("code-modal")?.style.display === "flex";
 }
 
-export function initCodeView() {
+export function initCodeView({ taskLookup } = {}) {
+  if (typeof taskLookup === "function") localTaskLookup = taskLookup;
   $("cv-close").addEventListener("click", closeCodeView);
   $("cv-refresh").addEventListener("click", refreshCodeView);
   $("cv-tab-files").addEventListener("click", () => setCodeTab("files"));
