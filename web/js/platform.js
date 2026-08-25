@@ -78,6 +78,16 @@ function toast(message, kind = "success") {
   setTimeout(() => element.remove(), 2800);
 }
 
+function showGlobalLoading(title, detail = "") {
+  $("#global-loading-title").textContent = title;
+  $("#global-loading-detail").textContent = detail;
+  $("#global-loading").hidden = false;
+}
+
+function hideGlobalLoading() {
+  $("#global-loading").hidden = true;
+}
+
 let confirmDialogResolve = null;
 let confirmDialogPreviousFocus = null;
 
@@ -151,12 +161,19 @@ function renderTaskList() {
     return;
   }
   target.classList.remove("is-empty");
-  target.innerHTML = tasks.map((task) => `<button class="task-row" type="button" data-task-key="${escapeHtml(task.key)}">
-    <span class="task-main"><span class="task-key-line"><span class="task-key">${escapeHtml(task.key)}</span>${statusPill(task.status)}</span><strong class="task-title">${escapeHtml(task.title)}</strong></span>
-    <span class="repo-chips">${repositoryChips(task.repositories)}</span>
-    <span class="task-owner"><span class="mini-avatar">${escapeHtml(initial(task.owner))}</span>${escapeHtml(task.owner)}</span>
-  </button>`).join("");
+  target.innerHTML = tasks.map((task) => `<article class="task-row">
+    <button class="task-row-open" type="button" data-task-key="${escapeHtml(task.key)}">
+      <span class="task-main"><span class="task-key-line"><span class="task-key">${escapeHtml(task.key)}</span>${statusPill(task.status)}</span><strong class="task-title">${escapeHtml(task.title)}</strong></span>
+      <span class="repo-chips">${repositoryChips(task.repositories)}</span>
+      <span class="task-owner"><span class="mini-avatar">${escapeHtml(initial(task.owner))}</span>${escapeHtml(task.owner)}</span>
+    </button>
+    <button class="button danger small task-row-delete" type="button" data-delete-task-key="${escapeHtml(task.key)}" aria-label="删除 ${escapeHtml(task.key)}">删除</button>
+  </article>`).join("");
   $$('[data-task-key]', target).forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.taskKey)));
+  $$('[data-delete-task-key]', target).forEach((button) => button.addEventListener("click", () => {
+    const task = state.tasks.find((item) => item.key === button.dataset.deleteTaskKey);
+    if (task) deletePlatformTask(task, button);
+  }));
 }
 
 function renderTaskSummary() {
@@ -305,6 +322,7 @@ async function deleteRepository(repositoryId, button) {
   });
   if (!confirmed) return;
   button.disabled = true;
+  showGlobalLoading("正在删除 Repository…", "正在清理本机 clone 和平台元数据，请稍候。");
   try {
     await api(`/api/platform/repositories/${repositoryId}`, { method: "DELETE" });
     state.repositories = state.repositories.filter((item) => item.id !== repositoryId);
@@ -313,6 +331,7 @@ async function deleteRepository(repositoryId, button) {
   } catch (error) {
     toast(error.message, "error");
   } finally {
+    hideGlobalLoading();
     if (button.isConnected) button.disabled = false;
   }
 }
@@ -330,14 +349,24 @@ async function deletePlatformTask(task, button) {
   });
   if (!confirmed) return;
   button.disabled = true;
+  showGlobalLoading("正在删除 Task…", "正在关闭合并请求并清理 Agent、worktree 与本地记录，请稍候。");
   try {
     await api(`/api/platform/tasks/${encodeURIComponent(task.key)}`, { method: "DELETE" });
+    state.tasks = state.tasks.filter((item) => item.key !== task.key);
+    if (task.task_type === "repository_init" && task.pr_state !== "merged") {
+      const repositoryIds = new Set(task.repositories.map((item) => item.id));
+      state.repositories = state.repositories.map((repository) => repositoryIds.has(repository.id)
+        ? { ...repository, protocol_initialized: false, protocol_state: "uninitialized", protocol_error: null }
+        : repository);
+    }
     closeTaskDetail();
+    renderAll();
     await loadData({ silent: true });
     toast(`${task.key} 已删除`);
   } catch (error) {
     toast(error.message, "error");
   } finally {
+    hideGlobalLoading();
     if (button.isConnected) button.disabled = false;
   }
 }
@@ -585,7 +614,7 @@ function openTaskDetail(key) {
     ${workflowNote}${task.task_type === "repository_init" ? "" : commandList}
     <section class="detail-section"><div class="detail-section-head"><h2>Repositories · ${task.repositories.length}</h2><span class="protocol-badge">peer worktrees</span></div><div class="detail-repos">${task.repositories.map(detailRepository).join("")}</div></section>
     <section class="detail-section"><div class="detail-section-head"><h2>工程知识 · ${task.artifacts?.length || 0}</h2>${canInspectChanges ? `<button class="text-button review-changes" type="button" data-open-task-changes>查看全部变更</button>` : `<span class="protocol-badge">manifest snapshot</span>`}</div><div class="artifact-list">${artifacts}</div></section>
-    <div class="detail-actions">${taskNextAction(task)}<button class="button danger task-delete-action" type="button" data-delete-task>删除 Task</button></div>`;
+    <div class="detail-actions">${taskNextAction(task)}</div>`;
   $("#task-drawer").hidden = false;
   $$('[data-copy-command]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => copyCommand(commands[Number(button.dataset.copyCommand)])));
   $$('[data-set-status]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => setTaskStatus(task.key, button.dataset.setStatus)));
@@ -597,7 +626,6 @@ function openTaskDetail(key) {
   const requestLabel = taskChangeRequestLabel(task);
   $('[data-init-pr]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "pull-request", event.currentTarget, `Review 已批准，${requestLabel} 已创建`));
   $('[data-init-merge]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "merge", event.currentTarget, `${requestLabel} 已合并，Repository 已就绪`));
-  $('[data-delete-task]', $("#task-detail"))?.addEventListener("click", (event) => deletePlatformTask(task, event.currentTarget));
 }
 
 function closeTaskDetail() {
