@@ -93,6 +93,15 @@ test("Repositories surface exposes guarded deletion through the platform API", (
   assert.match(script, /closeConfirmDialog\(false\)/);
 });
 
+test("Task detail exposes protected deletion and cleans its owned workflow resources", () => {
+  assert.match(script, /data-delete-task/);
+  assert.match(script, /删除 Task？/);
+  assert.match(script, /Agent session、worktree、本地 runtime Task 和工程知识快照都会清理/);
+  assert.match(script, /\/api\/platform\/tasks\/\$\{encodeURIComponent\(task\.key\)\}/);
+  assert.match(script, /method: "DELETE"/);
+  assert.doesNotMatch(script, /window\.confirm/);
+});
+
 test("Task detail exposes only implemented ay workflow commands", () => {
   assert.doesNotMatch(script, /ay task open/);
   assert.match(script, /"ay init \."/);

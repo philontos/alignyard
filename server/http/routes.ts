@@ -31,7 +31,7 @@ import {
 import { fleetTargets, type FleetTarget } from "../fleet/fleet.js";
 import { bootstrapMachine, validProfileName } from "../fleet/bootstrap.js";
 import { createLocalTask, createRepoTask, stopTask, type RepoTaskEnv } from "../task/createtask.js";
-import { cleanupTask, resumeTask } from "../task/lifecycle.js";
+import { cleanupTask, deleteTaskRecord, resumeTask } from "../task/lifecycle.js";
 import { addTaskReference, type AddTaskReferenceResult } from "../task/addreference.js";
 import {
   listTaskReferences,
@@ -106,6 +106,7 @@ import { refreshRepositoryProtocol } from "../platform/protocol.js";
 import { PlatformSyncError, syncPlatformTaskKnowledge } from "../platform/sync.js";
 import {
   approveAndCreateRepositoryInitializationPullRequest,
+  deletePlatformTaskWithResources,
   mergeRepositoryInitializationPullRequest,
   PlatformWorkflowError,
   startRepositoryInitialization,
@@ -611,6 +612,17 @@ app.patch("/api/platform/tasks/:key", async (req, res) => {
   }
 });
 
+app.delete("/api/platform/tasks/:key", async (req, res) => {
+  try {
+    const task = await deletePlatformTaskWithResources(platformWorkflowEnvFor(), req.params.key);
+    res.json({ ok: true, task_key: task.key });
+  } catch (error: any) {
+    if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
+    if (error instanceof PlatformValidationError) return res.status(409).json({ error: error.message });
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
 app.post("/api/platform/tasks/:key/run", async (req, res) => {
   try {
     const started = await startRepositoryInitialization(
@@ -806,6 +818,14 @@ function platformWorkflowEnvFor(): PlatformWorkflowEnv {
         removeWorktree: (mirror, worktree, workBranch) => removeWorktree(localRunner, mirror, worktree, workBranch),
         removeReferenceRoot: (taskId) => localRunner.rmrf(referenceRootPath(DATA_DIR, taskId)),
         writeManifest: (taskId) => syncTaskManifest(taskId),
+      }, id);
+      if (!result.ok) throw new PlatformWorkflowError(409, result.message || result.error);
+    },
+    async deleteRuntimeTask(id) {
+      const result = await deleteTaskRecord({
+        db,
+        exists: (target) => localRunner.exists(target),
+        removeManifest: (taskId) => removeTaskManifest(DATA_DIR, taskId),
       }, id);
       if (!result.ok) throw new PlatformWorkflowError(409, result.message || result.error);
     },

@@ -452,6 +452,28 @@ export function deletePlatformRepository(db: DB, repositoryId: number): Platform
   return repository;
 }
 
+/** Remove one platform Task and its current knowledge snapshot. Runtime and
+ * forge resources are cleaned by the workflow layer before this local
+ * transaction runs. An unfinished Repository Init releases its repository so
+ * a fresh initialization Task can be created. */
+export function deletePlatformTask(db: DB, key: string): PlatformTask | undefined {
+  const task = getPlatformTask(db, key);
+  if (!task) return undefined;
+  db.transaction(() => {
+    db.prepare("DELETE FROM platform_artifacts WHERE task_id=?").run(task.id);
+    db.prepare("DELETE FROM platform_task_repositories WHERE task_id=?").run(task.id);
+    db.prepare("DELETE FROM platform_tasks WHERE id=?").run(task.id);
+    if (task.task_type === "repository_init" && task.pr_state !== "merged") {
+      const reset = db.prepare(
+        "UPDATE platform_repositories SET protocol_initialized=0,protocol_state='uninitialized'," +
+          "protocol_error=NULL,updated_at=datetime('now') WHERE id=?",
+      );
+      for (const repository of task.repositories) reset.run(repository.id);
+    }
+  })();
+  return task;
+}
+
 export function updatePlatformTaskStatus(db: DB, key: string, status: unknown): PlatformTask | undefined {
   if (!PLATFORM_TASK_STATUSES.includes(status as PlatformTaskStatus)) {
     throw new PlatformValidationError("Task 状态无效");

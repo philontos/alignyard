@@ -169,6 +169,36 @@ export async function createChangeRequest(
   return created;
 }
 
+/** Close an open change request before its platform Task is deleted. GitHub
+ * can remove the source branch in the same operation; GitLab closes first and
+ * then uses Git for a best-effort remote branch cleanup. */
+export async function closeChangeRequest(
+  kind: ForgeKind,
+  input: ChangeRequestInput,
+  number: number,
+): Promise<ChangeRequestInfo> {
+  const existing = await findChangeRequest(kind, input, number);
+  if (!existing) throw new Error(`${changeRequestLabel(kind)} #${number} 未找到`);
+  if (existing.state !== "open") return existing;
+
+  try {
+    if (kind === "github") {
+      await input.runner.exec("gh", ["pr", "close", String(number), "--delete-branch"], { cwd: input.cwd });
+    } else {
+      await input.runner.exec("glab", ["mr", "close", String(number)], { cwd: input.cwd });
+      await input.runner.exec("git", ["push", "origin", "--delete", input.headBranch], { cwd: input.cwd }).catch(() => {});
+    }
+  } catch (error) {
+    const reconciled = await findChangeRequest(kind, input, number);
+    if (reconciled?.state === "closed") return reconciled;
+    throw error;
+  }
+
+  const closed = await findChangeRequest(kind, input, number);
+  if (closed?.state !== "closed") throw new Error(`${changeRequestLabel(kind)} #${number} 关闭后状态未确认`);
+  return closed;
+}
+
 export async function mergeChangeRequest(
   kind: ForgeKind,
   input: ChangeRequestInput,
