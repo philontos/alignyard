@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildFileTree, sortedTreeChildren, diffLineKind, classifyCodePath,
-  codeLineCount, canHighlightCode, parseStructuredJson,
+  codeLineCount, canHighlightCode, parseStructuredJson, shouldWrapCodePath,
   MAX_HIGHLIGHT_BYTES, MAX_HIGHLIGHT_LINES, MAX_STRUCTURED_JSON_BYTES,
 } from "./codeview.js";
 
@@ -51,6 +51,15 @@ test("only strict JSON files opt into the structured view", () => {
   assert.equal(classifyCodePath("map.GEOJSON").kind, "json");
   assert.equal(classifyCodePath("settings.jsonc").kind, "code");
   assert.equal(classifyCodePath("events.jsonl").kind, "code");
+});
+
+test("documentation and configuration formats opt into soft-wrapped reading", () => {
+  for (const path of ["README.md", "specs/api.yaml", "config/app.toml", "package.json", "notes.txt"]) {
+    assert.equal(shouldWrapCodePath(path), true, path);
+  }
+  for (const path of ["src/app.ts", "scripts/release.sh", "Dockerfile"]) {
+    assert.equal(shouldWrapCodePath(path), false, path);
+  }
 });
 
 test("codeLineCount matches the visible source gutter", () => {

@@ -83,6 +83,13 @@ test("Task Review reuses the Switchyard file and diff viewer", () => {
   assert.match(styles, /\.artifact-row:not\(:disabled\):hover/);
 });
 
+test("document and config previews use a compact soft-wrapped reading mode", () => {
+  assert.match(codeViewStyles, /\.cv-content\.cv-readable\s*\{[^}]*overflow-x:\s*hidden/);
+  assert.match(codeViewStyles, /\.cv-readable \.cv-source\s*\{[^}]*width:\s*min\(100%, 88ch\)[^}]*white-space:\s*pre-wrap[^}]*word-break:\s*break-word/);
+  assert.match(codeViewStyles, /\.cv-readable \.cv-json-leaf\s*\{[^}]*white-space:\s*pre-wrap[^}]*overflow-wrap:\s*anywhere/);
+  assert.match(codeViewStyles, /\.cv-readable \.cv-diff-line\s*\{[^}]*white-space:\s*pre-wrap/);
+});
+
 test("Repositories surface exposes guarded deletion through the platform API", () => {
   assert.match(script, /data-delete-repository/);
   assert.match(script, /method: "DELETE"/);

@@ -77,6 +77,7 @@ const LANGUAGE_LABELS = new Map([
 ]);
 
 const STRICT_JSON_EXTENSIONS = new Set(["json", "geojson", "ipynb", "har", "webmanifest"]);
+const READABLE_TEXT_LANGUAGES = new Set(["markdown", "yaml", "ini", "json", "plaintext"]);
 
 function basename(path) {
   return String(path || "").split("/").at(-1) || "";
@@ -96,6 +97,10 @@ export function classifyCodePath(path) {
     language,
     label: LANGUAGE_LABELS.get(language) || language,
   };
+}
+
+export function shouldWrapCodePath(path) {
+  return READABLE_TEXT_LANGUAGES.has(classifyCodePath(path).language);
 }
 
 export function codeLineCount(content) {
