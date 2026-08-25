@@ -131,6 +131,7 @@ test("Repository initialization is a first-class idempotent Task and gates ordin
   const second = createRepositoryInitializationTask(db, repo.id, "Phil");
   assert.equal(first.key, second.key);
   assert.equal(first.task_type, "repository_init");
+  assert.match(first.description || "", /架构、稳定接口与维护流程/);
   assert.equal(first.repositories.length, 1);
   assert.equal(first.repositories[0].mode, "editable");
   assert.equal(listPlatformRepositories(db)[0].protocol_state, "initializing");

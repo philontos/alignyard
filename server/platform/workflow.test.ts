@@ -164,6 +164,12 @@ test("Repository Init prompt makes agent execution automatic but keeps push and 
   assert.match(prompt, /validate \./);
   assert.match(prompt, /sync \./);
   assert.match(prompt, /仓库概览/);
+  assert.match(prompt, /小而完整/);
+  assert.match(prompt, /先形成文档计划/);
+  assert.match(prompt, /架构与边界、开发\/构建\/测试\/发布、CLI\/API\/配置契约/);
+  assert.match(prompt, /内容完整性检查/);
+  assert.match(prompt, /不要把 .*validate \. 通过当作内容已经完整/);
+  assert.match(prompt, /主动省略的主题及原因/);
   assert.match(prompt, /简体中文/);
   assert.match(prompt, /SKILL\.md 可以使用英文/);
   assert.match(prompt, /不要 push/);

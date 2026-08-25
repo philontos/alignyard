@@ -35,7 +35,12 @@ test("ay init scaffold is idempotent and requires a shared overview baseline", (
     assert.equal(validateRepositoryProtocol(root).ok, true);
     assert.match(fs.readFileSync(path.join(root, ".alignyard/README.md"), "utf8"), /工程知识工作区/);
     assert.match(fs.readFileSync(path.join(root, ".alignyard/templates/spec.md"), "utf8"), /# 验收标准/);
-    assert.match(fs.readFileSync(path.join(root, ".alignyard/skills/alignyard-knowledge/SKILL.md"), "utf8"), /Simplified Chinese/);
+    const skill = fs.readFileSync(path.join(root, ".alignyard/skills/alignyard-knowledge/SKILL.md"), "utf8");
+    assert.match(skill, /small but complete/);
+    assert.match(skill, /architecture and boundaries/);
+    assert.match(skill, /content-completeness review/);
+    assert.match(skill, /Passing validation proves protocol structure, not content completeness/);
+    assert.match(skill, /Simplified Chinese/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

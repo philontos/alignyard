@@ -428,7 +428,7 @@ export function createRepositoryInitializationTask(
     title: `Initialize Alignyard · ${repository.name}`,
     description:
       `为 ${repository.name} 建立版本化工程知识：运行 ay init，按 alignyard-knowledge Skill ` +
-      "梳理 scopes 与最小基础 Docs，运行 ay validate、ay sync，提交 Review 后合并到默认分支。",
+      "盘点仓库事实并梳理 scopes、架构、稳定接口与维护流程等基础 Docs，运行 ay validate、ay sync，提交 Review 后合并到默认分支。",
     owner,
     repositories: [{ repository_id: repository.id, mode: "editable", base_branch: repository.default_branch }],
   });
