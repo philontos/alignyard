@@ -42,10 +42,7 @@ function send(data) {
   return true;
 }
 
-export function closePlatformAgentWorkspace() {
-  element("agent-workspace").hidden = true;
-  element("task-drawer").classList.remove("agent-mode");
-  document.body.classList.remove("agent-workspace-open");
+function disposeActiveTerminal() {
   if (!active) return;
   const closing = active;
   active = null;
@@ -55,23 +52,48 @@ export function closePlatformAgentWorkspace() {
   closing.host.replaceChildren();
 }
 
+export function closePlatformAgentWorkspace() {
+  element("agent-workspace").hidden = true;
+  element("task-drawer").classList.remove("task-workspace-mode");
+  document.body.classList.remove("agent-workspace-open");
+  disposeActiveTerminal();
+}
+
 export function platformAgentWorkspaceIsOpen() {
   return !element("agent-workspace").hidden;
 }
 
 export function openPlatformAgentWorkspace(task) {
-  if (!task?.runtime_task_id || !task.runtime_session) {
-    notifyError("Agent runtime 尚未就绪");
-    return;
-  }
-  closePlatformAgentWorkspace();
   const workspace = element("agent-workspace");
   const host = element("agent-terminal");
+  const empty = element("agent-workspace-empty");
+  const controls = workspace.querySelector(".agent-workspace-controls");
   element("agent-workspace-key").textContent = task.key;
   element("agent-workspace-title").textContent = task.title;
   workspace.hidden = false;
-  element("task-drawer").classList.add("agent-mode");
+  element("task-drawer").classList.add("task-workspace-mode");
   document.body.classList.add("agent-workspace-open");
+
+  if (!task?.runtime_task_id || !task.runtime_session) {
+    disposeActiveTerminal();
+    workspace.classList.add("is-empty");
+    host.hidden = true;
+    empty.hidden = false;
+    controls.hidden = true;
+    setConnectionState("等待启动", "idle");
+    return;
+  }
+
+  workspace.classList.remove("is-empty");
+  host.hidden = false;
+  empty.hidden = true;
+  controls.hidden = false;
+  if (active?.taskId === task.runtime_task_id && active.session === task.runtime_session) {
+    requestAnimationFrame(fit);
+    return;
+  }
+
+  disposeActiveTerminal();
   setConnectionState("正在连接…", "connecting");
 
   const agent = task.runtime_agent === "codex" || task.runtime_agent === "kimi" ? task.runtime_agent : "claude";
@@ -95,7 +117,7 @@ export function openPlatformAgentWorkspace(task) {
   }
   term.open(host);
 
-  const terminalState = { taskId: task.runtime_task_id, host, term, socket: null, observer: null, lastSize: "" };
+  const terminalState = { taskId: task.runtime_task_id, session: task.runtime_session, host, term, socket: null, observer: null, lastSize: "" };
   active = terminalState;
   term.onData((data) => send(data));
   terminalState.socket = connectPty(`session=${encodeURIComponent(task.runtime_session)}`, {

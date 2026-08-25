@@ -42,7 +42,7 @@ test("Repositories surface shows protocol workflow state and creates a dedicated
   assert.doesNotMatch(html, /notice-card|repo-search|repository-card/);
 });
 
-test("Repository Init drawer closes runtime, Review, PR, and merge behind explicit actions", () => {
+test("Repository Init workspace closes runtime, Review, PR, and merge behind explicit actions", () => {
   assert.match(script, /data-run-init/);
   assert.match(script, /data-init-review/);
   assert.match(script, /data-init-pr/);
@@ -56,16 +56,21 @@ test("Repository Init drawer closes runtime, Review, PR, and merge behind explic
   assert.match(script, /正在创建 \$\{requestLabel\}/);
   assert.match(script, /要求修改/);
   assert.match(script, /重试完成初始化/);
-  assert.match(script, /data-open-agent/);
   assert.match(script, /openPlatformAgentWorkspace\(task\)/);
+  assert.match(script, /mobile-agent-action[^>]+data-open-agent/);
   assert.doesNotMatch(script, /index\.html\?task=/);
   assert.match(html, /id="agent-workspace"/);
+  assert.match(html, /id="agent-workspace-empty"[\s\S]*Agent 尚未启动/);
   assert.match(html, /id="agent-terminal"/);
   assert.match(html, /id="task-drawer"[\s\S]*id="task-detail"[\s\S]*id="agent-workspace"/);
   assert.match(agent, /connectPty\(`session=/);
-  assert.match(agent, /classList\.add\("agent-mode"\)/);
-  assert.match(styles, /\.drawer-backdrop\.agent-mode\s*\{[^}]*inset:\s*64px 0 0 242px/);
-  assert.match(styles, /\.drawer-backdrop\.agent-mode \.task-drawer\s*\{[^}]*flex:/);
+  assert.match(agent, /classList\.add\("task-workspace-mode"\)/);
+  assert.match(agent, /setConnectionState\("等待启动", "idle"\)/);
+  assert.match(agent, /active\?\.taskId === task\.runtime_task_id && active\.session === task\.runtime_session/);
+  assert.match(styles, /\.drawer-backdrop\.task-workspace-mode\s*\{[^}]*inset:\s*64px 0 0 242px/);
+  assert.match(styles, /\.drawer-backdrop\.task-workspace-mode \.task-drawer\s*\{[^}]*flex:/);
+  assert.match(styles, /\.agent-workspace-empty\s*\{[^}]*align-items:\s*center[^}]*justify-content:\s*center/);
+  assert.match(styles, /\.agent-workspace-close,\.mobile-agent-action\s*\{\s*display:\s*none/);
   assert.doesNotMatch(styles, /\.agent-workspace\s*\{[^}]*position:\s*fixed/);
   assert.match(script, /手动模式与诊断命令/);
 });

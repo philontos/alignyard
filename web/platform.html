@@ -130,9 +130,16 @@
           <strong id="agent-workspace-title">Agent 工作区</strong>
         </div>
         <span class="agent-workspace-status" id="agent-workspace-status">正在连接…</span>
-        <button class="agent-workspace-close" id="agent-workspace-close" type="button" aria-label="关闭 Agent 工作区">×</button>
+        <button class="agent-workspace-close" id="agent-workspace-close" type="button" aria-label="返回 Task 详情">×</button>
       </header>
-      <div class="agent-terminal" id="agent-terminal"></div>
+      <div class="agent-workspace-stage">
+        <div class="agent-terminal" id="agent-terminal"></div>
+        <div class="agent-workspace-empty" id="agent-workspace-empty" hidden>
+          <span aria-hidden="true">🖥</span>
+          <strong>Agent 尚未启动</strong>
+          <p>从左侧开始当前流程后，Agent 会在这里运行。</p>
+        </div>
+      </div>
       <footer class="agent-workspace-controls">
         <span>操作当前 Task 的 Agent；关闭工作区不会停止任务。</span>
         <div>
