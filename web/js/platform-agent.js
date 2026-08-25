@@ -117,6 +117,17 @@ export function openPlatformAgentWorkspace(task) {
   }
   term.open(host);
 
+  // Keep the same IME guard as Switchyard's mature terminal path. On macOS,
+  // CapsLock commonly switches Pinyin to English while composition is active.
+  // Letting xterm handle that keydown finalizes the composition once, then the
+  // browser's compositionend sends it again. Ignore only that composing key so
+  // the text is committed exactly once by compositionend.
+  term.attachCustomKeyEventHandler((event) => {
+    if (event.type !== "keydown") return true;
+    if (event.isComposing && event.keyCode === 20) return false;
+    return true;
+  });
+
   const terminalState = { taskId: task.runtime_task_id, session: task.runtime_session, host, term, socket: null, observer: null, lastSize: "" };
   active = terminalState;
   term.onData((data) => send(data));
