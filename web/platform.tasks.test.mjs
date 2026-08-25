@@ -93,13 +93,30 @@ test("Repositories surface exposes guarded deletion through the platform API", (
   assert.match(script, /closeConfirmDialog\(false\)/);
 });
 
-test("Task detail exposes protected deletion and cleans its owned workflow resources", () => {
-  assert.match(script, /data-delete-task/);
+test("Task items expose protected deletion without opening the detail drawer", () => {
+  assert.match(script, /class="task-row"/);
+  assert.match(script, /class="task-row-open"[^>]+data-task-key/);
+  assert.match(script, /data-delete-task-key/);
+  assert.match(script, /class="button danger small task-row-delete"/);
   assert.match(script, /删除 Task？/);
   assert.match(script, /Agent session、worktree、本地 runtime Task 和工程知识快照都会清理/);
   assert.match(script, /\/api\/platform\/tasks\/\$\{encodeURIComponent\(task\.key\)\}/);
   assert.match(script, /method: "DELETE"/);
   assert.doesNotMatch(script, /window\.confirm/);
+});
+
+test("long deletion operations use one blocking global loading state", () => {
+  assert.match(html, /id="global-loading"[^>]+role="status"/);
+  assert.match(script, /showGlobalLoading\("正在删除 Task…"/);
+  assert.match(script, /showGlobalLoading\("正在删除 Repository…"/);
+  assert.match(script, /hideGlobalLoading\(\)/);
+  assert.match(styles, /\.global-loading\s*\{[^}]*position:\s*fixed[^}]*z-index:\s*140/);
+});
+
+test("empty Tasks and Repositories use a low-contrast patterned board", () => {
+  assert.match(styles, /\.task-list\.is-empty\s*\{[^}]*radial-gradient[^}]*22px 22px/);
+  assert.match(styles, /\.repository-list\.is-empty\s*\{[^}]*radial-gradient[^}]*22px 22px/);
+  assert.match(styles, /inset 0 -28px 70px/);
 });
 
 test("Task detail exposes only implemented ay workflow commands", () => {
