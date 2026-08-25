@@ -7,7 +7,7 @@ import { toast } from "../core/feedback.js";
 import { state } from "../core/state.js";
 import {
   buildFileTree, sortedTreeChildren, diffLineKind, classifyCodePath,
-  codeLineCount, canHighlightCode, parseStructuredJson,
+  codeLineCount, canHighlightCode, parseStructuredJson, shouldWrapCodePath,
 } from "../core/codeview.js";
 import { highlightCodeToHtml } from "./code-highlight.js";
 
@@ -339,6 +339,10 @@ function renderSource(payload, presentation, content) {
   });
 }
 
+function setReadableContentMode(content, path) {
+  content.classList.toggle("cv-readable", shouldWrapCodePath(path));
+}
+
 function appendJsonKey(parent, key, arrayIndex) {
   if (key == null) return;
   const name = document.createElement("span");
@@ -424,6 +428,7 @@ function renderFile(payload) {
   const pathLabel = `${payload.path} · ${formatBytes(payload.size)}`;
   const content = $("cv-content");
   content.replaceChildren();
+  setReadableContentMode(content, payload.path);
   if (payload.content == null) {
     fileView = "source";
     renderPathBar(pathLabel, presentation);
@@ -447,6 +452,7 @@ function renderDiff(payload) {
   renderPathBar(payload.path);
   const content = $("cv-content");
   content.replaceChildren();
+  setReadableContentMode(content, payload.path);
   if (payload.binary) return stateBox(content, t("code.binaryDiff"));
   if (payload.content == null) return stateBox(content, t("code.diffTooLarge"));
   const allLines = payload.content.split("\n");
