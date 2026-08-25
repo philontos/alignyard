@@ -1,0 +1,10 @@
+version: 1
+preset: basic
+
+scopes:
+  - id: shared
+    title: "仓库共享知识"
+  - id: switchyard
+    title: "Switchyard 运行控制面"
+  - id: alignyard
+    title: "Alignyard 协作与知识协议"
