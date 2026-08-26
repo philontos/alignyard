@@ -127,7 +127,9 @@ export function syncPlatformTaskKnowledge(
 ): { task: PlatformTask; documents: number } {
   const task = getPlatformTask(db, taskKey);
   if (!task) throw new PlatformSyncError(404, "Task 不存在");
-  if (task.status === "approved") throw new PlatformSyncError(409, "Approved Task 不能再同步文档");
+  if (["approved", "completed"].includes(task.status)) {
+    throw new PlatformSyncError(409, "已通过或已完成的 Task 不能再同步文档");
+  }
 
   const repositoryId = Number(input.repository_id);
   if (!Number.isInteger(repositoryId) || repositoryId <= 0) throw new PlatformSyncError(400, "repository_id 无效");

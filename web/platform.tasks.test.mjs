@@ -5,6 +5,7 @@ import fs from "node:fs";
 const html = fs.readFileSync(new URL("./platform.html", import.meta.url), "utf8");
 const script = fs.readFileSync(new URL("./js/platform.js", import.meta.url), "utf8");
 const agent = fs.readFileSync(new URL("./js/platform-agent.js", import.meta.url), "utf8");
+const terminalScript = fs.readFileSync(new URL("./js/features/terminal.js", import.meta.url), "utf8");
 const codeViewer = fs.readFileSync(new URL("./js/features/codeview.js", import.meta.url), "utf8");
 const styles = fs.readFileSync(new URL("./css/platform.css", import.meta.url), "utf8");
 const codeViewStyles = fs.readFileSync(new URL("./css/platform-codeview.css", import.meta.url), "utf8");
@@ -94,6 +95,12 @@ test("Task creation keeps one Repository role and leaves edit intent to the user
 test("Repository Init workspace closes runtime, Review, PR, and merge behind explicit actions", () => {
   assert.match(script, /data-run-init/);
   assert.match(script, /data-author-agent[\s\S]*Codex[\s\S]*Claude Code[\s\S]*Kimi CLI/);
+  const initActions = script.match(/function initTaskActions[\s\S]*?\n}/)?.[0] || "";
+  assert.doesNotMatch(initActions, /<select/);
+  assert.match(initActions, /class="agent-picker"[\s\S]*aria-haspopup="listbox"/);
+  assert.match(script, /function wireAgentPicker/);
+  assert.match(script, /data-agent-value/);
+  assert.match(styles, /\.agent-picker-menu\s*\{[^}]*background:\s*var\(--paper\)/);
   assert.match(script, /body: JSON\.stringify\(\{ agent \}\)/);
   assert.match(script, /data-init-review/);
   assert.match(script, /data-init-pr/);
@@ -107,34 +114,74 @@ test("Repository Init workspace closes runtime, Review, PR, and merge behind exp
   assert.match(script, /正在创建 \$\{requestLabel\}/);
   assert.match(script, /要求修改/);
   assert.match(script, /重试完成初始化/);
-  assert.match(script, /openPlatformAgentWorkspace\(task\)/);
+  assert.match(script, /openPlatformAgentWorkspace\(workspaceTask\)/);
   assert.match(script, /mobile-agent-action[^>]+data-open-agent/);
   assert.doesNotMatch(script, /index\.html\?task=/);
   assert.match(html, /id="agent-workspace"/);
   assert.match(html, /id="agent-workspace-empty"[\s\S]*Agent 尚未启动/);
   assert.match(html, /id="agent-terminal"/);
   assert.match(html, /id="task-drawer"[\s\S]*id="task-detail"[\s\S]*id="agent-workspace"/);
-  assert.match(agent, /connectPty\(`session=/);
+  assert.match(script, /class="detail-title-row"[\s\S]*id="drawer-close"[\s\S]*class="task-key"[\s\S]*<h1>[\s\S]*taskContextHelp/);
+  assert.match(styles, /\.detail-title-row\s*\{[^}]*display:\s*flex[^}]*align-items:\s*center/);
+  assert.match(styles, /\.drawer-close\s*\{[^}]*display:\s*inline-flex[^}]*align-items:\s*center[^}]*white-space:\s*nowrap/);
+  assert.match(styles, /\.drawer-close::before\s*\{[^}]*transform:\s*rotate\(45deg\)/);
+  assert.match(styles, /\.detail-top h1\s*\{[^}]*line-height:\s*1[^}]*transform:\s*translateY\(-2px\)/);
+  assert.match(styles, /\.detail-meta\s*\{[^}]*flex-wrap:\s*wrap[^}]*row-gap:\s*8px/);
+  assert.match(styles, /\.detail-meta > \*\s*\{[^}]*white-space:\s*nowrap/);
+  assert.match(styles, /\.status-pill\s*\{[^}]*flex:\s*0 0 auto[^}]*white-space:\s*nowrap/);
+  assert.match(styles, /\.task-drawer\s*\{\s*scrollbar-width:\s*none/);
+  assert.match(styles, /\.task-drawer::\-webkit-scrollbar\s*\{\s*display:\s*none/);
+  assert.match(agent, /connectPty\(/);
+  assert.match(html, /vendor\/addon-canvas\.js/);
+  assert.match(agent, /activateCanvasRenderer/);
+  assert.match(terminalScript, /activateCanvasRenderer/);
   assert.match(agent, /attachCustomKeyEventHandler/);
   assert.match(agent, /event\.isComposing && event\.keyCode === 20/);
+  assert.match(agent, /Math\.floor\(width \/ cell\.width\)/);
+  assert.match(agent, /rescaleOverlappingGlyphs:\s*true/);
+  assert.match(terminalScript, /rescaleOverlappingGlyphs:\s*true/);
   assert.match(agent, /classList\.add\("task-workspace-mode"\)/);
   assert.match(agent, /setConnectionState\(canStartReview \? "等待 Reviewer" : "等待启动", "idle"\)/);
   assert.match(agent, /active\?\.taskId === task\.runtime_task_id && active\.session === task\.runtime_session/);
-  assert.match(styles, /\.drawer-backdrop\.task-workspace-mode\s*\{[^}]*inset:\s*64px 0 0 242px/);
-  assert.match(styles, /\.drawer-backdrop\.task-workspace-mode \.task-drawer\s*\{[^}]*flex:/);
+  assert.match(styles, /--sidebar-width:\s*210px/);
+  assert.match(styles, /--topbar-height:\s*52px/);
+  assert.match(styles, /\.topbar\s*\{[^}]*height:\s*var\(--topbar-height\)/);
+  assert.match(styles, /\.sidebar\s*\{[^}]*width:\s*var\(--sidebar-width\)/);
+  assert.match(styles, /\.main\s*\{[^}]*margin-left:\s*var\(--sidebar-width\)/);
+  assert.match(styles, /\.drawer-backdrop\.task-workspace-mode\s*\{[^}]*inset:\s*var\(--topbar-height\) 0 0 var\(--sidebar-width\)/);
+  assert.match(styles, /\.drawer-backdrop\.task-workspace-mode \.task-drawer\s*\{[^}]*flex:\s*0 0 clamp\(404px,calc\(42% - 36px\),584px\)[^}]*padding:\s*14px/);
   assert.match(styles, /\.agent-workspace-empty\s*\{[^}]*align-items:\s*center[^}]*justify-content:\s*center/);
   assert.match(styles, /\.agent-workspace-close,\.mobile-agent-action\s*\{\s*display:\s*none/);
   assert.doesNotMatch(styles, /\.agent-workspace\s*\{[^}]*position:\s*fixed/);
   assert.match(script, /手动模式与诊断命令/);
 });
 
+test("Repository Init presents the Repository name with contextual help and no role badge", () => {
+  assert.match(script, /function taskDisplayTitle/);
+  assert.match(script, /task\.task_type !== "repository_init"/);
+  assert.match(script, /class="detail-title-row"/);
+  assert.match(script, /class="task-context-help"/);
+  assert.match(script, /role="tooltip"/);
+  assert.match(script, /display_title: displayTitle/);
+  assert.match(agent, /task\.display_title \|\| task\.title/);
+  const repository = script.match(/function detailRepository[\s\S]*?\n}/)?.[0] || "";
+  assert.doesNotMatch(repository, /mode-badge|repo\.mode|editable|reference/);
+  assert.match(styles, /\.task-context-help:hover > p[^}]*display:\s*block/);
+  assert.match(script, /contextHelp\?\.addEventListener\("mouseleave"/);
+  assert.match(script, /contextHelp\.removeAttribute\("open"\)/);
+  assert.match(styles, /\.detail-repo\s*\{[^}]*grid-template-columns:\s*minmax\(120px,1fr\) minmax\(160px,1\.2fr\)/);
+});
+
 test("Review is an assigned handoff with an optional reviewer Agent and a separate PR action", () => {
   assert.match(html, /id="review-dialog"[\s\S]*name="reviewer_user_id"[\s\S]*推送并分派/);
+  assert.match(html, /id="changes-requested-dialog"[\s\S]*name="feedback"[\s\S]*退回修改/);
   assert.match(script, /reviewer_user_id: reviewerUserId/);
   assert.match(script, /taskAssignedToCurrentUser/);
   assert.match(script, /data-review-decision="changes_requested"/);
   assert.match(script, /data-review-decision="approved"/);
   assert.match(script, /\/review\/decision/);
+  assert.match(script, /JSON\.stringify\(\{ decision, feedback \}\)/);
+  assert.match(script, /openChangesRequestedDialog\(task\)/);
   assert.match(script, /task\.status === "approved" && task\.pr_state === "none"/);
   assert.doesNotMatch(script, /审核通过并创建/);
   assert.match(html, /id="agent-workspace-agent"[\s\S]*Codex[\s\S]*Claude Code[\s\S]*Kimi CLI/);
@@ -144,14 +191,44 @@ test("Review is an assigned handoff with an optional reviewer Agent and a separa
   assert.match(script, /正在打开 Review 工作区/);
 });
 
-test("Review handoffs close the current workspace except for approved Repository Init", () => {
+test("a returned Repository Init always exposes explicit resumption and Review submission", () => {
+  const actions = script.match(/function initTaskActions[\s\S]*?\n}\n\nfunction taskLocalCommands/)?.[0] || "";
+  assert.match(actions, /task\.status === "draft"/);
+  assert.match(actions, /data-run-init>继续 Agent/);
+  assert.match(actions, /data-init-review>提交 Review/);
+  assert.doesNotMatch(actions, /manifest_status === "valid"/);
+  assert.match(html, /执行 ay validate 与 ay sync/);
+});
+
+test("every Review decision closes the reviewer workspace before the Author continues", () => {
   const submit = script.match(/async function submitReview[\s\S]*?\n}\n\nfunction openRepositoryDialog/)?.[0] || "";
   assert.match(submit, /replacePlatformTask\(updated\)[\s\S]*closeTaskDetail\(\)/);
   assert.doesNotMatch(submit, /openTaskDetail\(key\)/);
 
   const decision = script.match(/async function decideReview[\s\S]*?\n}\n\nasync function initWorkflowAction/)?.[0] || "";
-  assert.match(decision, /approved && updated\.task_type === "repository_init"[\s\S]*openTaskDetail\(task\.key\)/);
-  assert.match(decision, /else \{[\s\S]*closeTaskDetail\(\)/);
+  assert.match(decision, /Every Review decision ends the current actor's workspace/);
+  assert.match(decision, /closeTaskDetail\(\)/);
+  assert.doesNotMatch(decision, /openTaskDetail\(task\.key\)/);
+  const actions = script.match(/function initTaskActions[\s\S]*?\n}\n\nfunction taskLocalCommands/)?.[0] || "";
+  assert.match(actions, /task\.pr_state === "none" && taskBelongsToCurrentUser\(task\)/);
+  const createRequestRoute = routes.match(/app\.post\("\/api\/platform\/tasks\/:key\/pull-request"[\s\S]*?\n}\);/)?.[0] || "";
+  assert.match(createRequestRoute, /只有 Task 发起人可以创建合并请求/);
+});
+
+test("opening a Task confirms an open PR or MR once and reflects its remote state", () => {
+  assert.match(script, /change-request\/refresh/);
+  assert.match(script, /shouldRefreshChangeRequest/);
+  assert.match(script, /refreshTaskChangeRequest\(key, task\.pr_state\)/);
+  assert.match(script, /openTaskDetail\(selectedKey, \{ refreshChangeRequest: false \}\)/);
+  assert.match(script, /正在确认 \$\{requestLabel\} 状态/);
+});
+
+test("Task completion is a terminal state after approval", () => {
+  assert.match(script, /completed: "已完成"/);
+  assert.match(script, /task\.status === "approved" && taskBelongsToCurrentUser\(task\)[\s\S]*data-set-status="completed">标记完成/);
+  assert.match(script, /task\.completed_at \? `完成于/);
+  assert.match(styles, /\.status-completed/);
+  assert.match(routes, /只有 Task 发起人可以完成 Task/);
 });
 
 test("Task Review reuses the Switchyard file and diff viewer", () => {

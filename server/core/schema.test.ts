@@ -62,7 +62,7 @@ test("initSchema stores platform runtime and pull-request workflow state", () =>
   initSchema(db, opts(false));
   const columns = (db.prepare("PRAGMA table_info(platform_tasks)").all() as { name: string }[])
     .map((column) => column.name);
-  for (const field of ["owner_user_id", "current_assignee", "current_assignee_user_id", "runtime_task_id", "workflow_error", "pr_number", "pr_url", "pr_state", "merged_at"]) {
+  for (const field of ["owner_user_id", "current_assignee", "current_assignee_user_id", "runtime_task_id", "workflow_error", "pr_number", "pr_url", "pr_state", "merged_at", "completed_at"]) {
     assert.ok(columns.includes(field), `missing ${field}`);
   }
   const repositoryColumns = (db.prepare("PRAGMA table_info(platform_task_repositories)").all() as { name: string }[])
@@ -76,6 +76,8 @@ test("initSchema stores platform runtime and pull-request workflow state", () =>
     .map((column) => column.name);
   assert.ok(reviewColumns.includes("reviewer_user_id"));
   assert.ok(reviewColumns.includes("submitted_by_user_id"));
+  assert.ok(reviewColumns.includes("feedback"));
+  assert.ok(reviewColumns.includes("feedback_delivered_at"));
   db.prepare("INSERT INTO platform_tasks (task_key,title,owner) VALUES ('AY-1','Init','Phil')").run();
   assert.equal((db.prepare("SELECT pr_state FROM platform_tasks").get() as { pr_state: string }).pr_state, "none");
 });
@@ -183,14 +185,14 @@ test("initSchema on a fresh DB never creates a presets table", () => {
   assert.equal(presets, undefined);
 });
 
-test("initSchema collapses prototype platform Task statuses to draft, review, and approved", () => {
+test("initSchema collapses prototype platform Task statuses to the four collaboration states", () => {
   const db = new Database(":memory:");
   initSchema(db, opts(false));
   const insert = db.prepare(
     "INSERT INTO platform_tasks (task_key,title,owner,status) VALUES (?,?,?,?)",
   );
   for (const [index, status] of [
-    "draft", "active", "pushed", "in_review", "review", "approved", "merged", "closed", "unexpected",
+    "draft", "active", "pushed", "in_review", "review", "approved", "completed", "merged", "closed", "unexpected",
   ].entries()) {
     insert.run(`AY-${index}`, `Task ${index}`, "Phil", status);
   }
@@ -199,7 +201,7 @@ test("initSchema collapses prototype platform Task statuses to draft, review, an
   const statuses = (db.prepare("SELECT status FROM platform_tasks ORDER BY id").all() as { status: string }[])
     .map((row) => row.status);
   assert.deepEqual(statuses, [
-    "draft", "draft", "draft", "review", "review", "approved", "approved", "approved", "draft",
+    "draft", "draft", "draft", "review", "review", "approved", "completed", "completed", "approved", "draft",
   ]);
 });
 

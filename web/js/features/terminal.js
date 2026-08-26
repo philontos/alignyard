@@ -10,6 +10,7 @@
 import { $ } from "../core/dom.js";
 import { toast } from "../core/feedback.js";
 import { createCodexUserMarkerOverlay } from "./codex-terminal-markers.js";
+import { activateCanvasRenderer } from "../core/terminal-renderer.js";
 import { activateCodexUnicode } from "./terminal-unicode.js";
 import { connectPty } from "../core/pty-socket.js";
 
@@ -297,6 +298,9 @@ function createPane(id, query, agent) {
     // at the right edge is especially visible, so enable xterm's stable Unicode
     // 11 provider there. The proposed flag is required by xterm 5.5's API.
     allowProposedApi: agent === "codex",
+    // Keep system fallback glyphs (notably CJK under Menlo on macOS) inside
+    // their xterm cells instead of clipping their right edge.
+    rescaleOverlappingGlyphs: true,
     macOptionClickForcesSelection: true,   // mac: Option+拖拽 强制本地选区(绕开 TUI 鼠标模式)
     rightClickSelectsWord: true,
   });
@@ -310,6 +314,11 @@ function createPane(id, query, agent) {
     }
   }
   term.open(pane);
+  try {
+    if (!activateCanvasRenderer(term)) console.warn("xterm Canvas renderer unavailable; using DOM renderer");
+  } catch (e) {
+    console.warn("xterm Canvas renderer failed; using DOM renderer", e);
+  }
 
   // Self-healing geometry: the .xterm-screen box tracks the canvas exactly, so
   // any post-fit cell-size drift shows up here as a size change. Refit with the

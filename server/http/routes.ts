@@ -11,7 +11,7 @@ import QRCode from "qrcode";
 import { db, Repo, Task, Host, Provider } from "../core/db.js";
 import { renameTask } from "../task/tasks.js";
 import { removeWorktree } from "../repo/git.js";
-import { startSession, startShellSession, hasSession, killSession, listSessions, loadSessionDirectory } from "../session/tmux.js";
+import { startSession, startShellSession, hasSession, killSession, listSessions, loadSessionDirectory, pasteSubmit } from "../session/tmux.js";
 import { asAgentKind } from "../session/agent.js";
 import {
   isTranscriptReadRequest,
@@ -105,12 +105,14 @@ import {
 } from "../platform/catalog.js";
 import { refreshRepositoryProtocol } from "../platform/protocol.js";
 import { PlatformSyncError, syncPlatformTaskKnowledge } from "../platform/sync.js";
+import { runAy } from "../protocol/cli.js";
 import {
   createRepositoryInitializationPullRequest,
   decidePlatformTaskReviewWorkflow,
   deletePlatformTaskWithResources,
   mergeRepositoryInitializationPullRequest,
   PlatformWorkflowError,
+  refreshRepositoryInitializationChangeRequest,
   startRepositoryInitialization,
   startPlatformTaskReviewAgent,
   submitPlatformTaskForReview,
@@ -631,6 +633,15 @@ app.patch("/api/platform/tasks/:key", async (req, res) => {
     if (["review", "approved"].includes(req.body?.status)) {
       return res.status(409).json({ error: "请使用 Review 分派与审核结论操作流转 Task" });
     }
+    if (req.body?.status === "completed") {
+      const user = authenticatedUser(req);
+      const current = getPlatformTask(db, req.params.key);
+      if (!current) return res.status(404).json({ error: "Task 不存在" });
+      const isOwner = current.owner_user_id != null
+        ? current.owner_user_id === user.id
+        : current.owner === user.name;
+      if (!isOwner) return res.status(403).json({ error: "只有 Task 发起人可以完成 Task" });
+    }
     const task = updatePlatformTaskStatus(db, req.params.key, req.body?.status);
     if (!task) return res.status(404).json({ error: "Task 不存在" });
     res.json(await platformTaskPayload(task));
@@ -720,7 +731,9 @@ app.post("/api/platform/tasks/:key/review/decision", async (req, res) => {
     if (decision !== "approved" && decision !== "changes_requested") {
       return res.status(400).json({ error: "Review 结论无效" });
     }
-    const task = await decidePlatformTaskReviewWorkflow(platformWorkflowEnvFor(), req.params.key, decision);
+    const task = await decidePlatformTaskReviewWorkflow(
+      platformWorkflowEnvFor(), req.params.key, decision, req.body?.feedback,
+    );
     res.json(await platformTaskPayload(task));
   } catch (error: any) {
     if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
@@ -731,6 +744,13 @@ app.post("/api/platform/tasks/:key/review/decision", async (req, res) => {
 
 app.post("/api/platform/tasks/:key/pull-request", async (req, res) => {
   try {
+    const user = authenticatedUser(req);
+    const current = getPlatformTask(db, req.params.key);
+    if (!current) return res.status(404).json({ error: "Task 不存在" });
+    const isOwner = current.owner_user_id != null
+      ? current.owner_user_id === user.id
+      : current.owner === user.name;
+    if (!isOwner) return res.status(403).json({ error: "只有 Task 发起人可以创建合并请求" });
     const task = await createRepositoryInitializationPullRequest(platformWorkflowEnvFor(), req.params.key);
     res.json(await platformTaskPayload(task));
   } catch (error: any) {
@@ -743,6 +763,17 @@ app.post("/api/platform/tasks/:key/pull-request", async (req, res) => {
 app.post("/api/platform/tasks/:key/merge", async (req, res) => {
   try {
     const result = await mergeRepositoryInitializationPullRequest(platformWorkflowEnvFor(), req.params.key);
+    res.json({ ...result, task: await platformTaskPayload(result.task) });
+  } catch (error: any) {
+    if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
+    if (error instanceof PlatformValidationError) return res.status(409).json({ error: error.message });
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+app.post("/api/platform/tasks/:key/change-request/refresh", async (req, res) => {
+  try {
+    const result = await refreshRepositoryInitializationChangeRequest(platformWorkflowEnvFor(), req.params.key);
     res.json({ ...result, task: await platformTaskPayload(result.task) });
   } catch (error: any) {
     if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
@@ -866,6 +897,49 @@ async function resumePlatformRuntimeTask(taskId: number) {
   if (!result.ok) throw new PlatformWorkflowError(409, result.message || result.error);
 }
 
+async function validateAndSyncPlatformTask(task: PlatformTask, runtime: Task) {
+  if (!runtime.worktree_path) throw new PlatformWorkflowError(409, "Task worktree 不存在");
+  const repository = task.repositories.find((item) => item.mode === "editable");
+  if (!repository) throw new PlatformWorkflowError(409, "Task 缺少 editable Repository");
+  const errors: string[] = [];
+  const io = { out(_message: string) {}, err(message: string) { errors.push(message); } };
+  const validated = await runAy(["validate", runtime.worktree_path], io);
+  if (validated !== 0) {
+    throw new PlatformWorkflowError(409, `ay validate 未通过：${errors.join("；") || "请检查工程知识文件"}`);
+  }
+
+  errors.length = 0;
+  const args = [
+    "sync", runtime.worktree_path,
+    "--platform", "http://alignyard.internal",
+    "--task", task.key,
+    "--repository-id", String(repository.id),
+  ];
+  const baseCommit = runtime.base_commit || repository.base_commit;
+  if (baseCommit) args.push("--base-commit", baseCommit);
+  const synced = await runAy(args, io, {
+    fetch: (async (_input: any, init?: RequestInit) => {
+      try {
+        const body = JSON.parse(String(init?.body || "{}"));
+        const result = syncPlatformTaskKnowledge(db, task.key, body);
+        return new Response(JSON.stringify({ ok: true, ...result }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      } catch (error: any) {
+        const status = error instanceof PlatformSyncError ? error.status : 500;
+        return new Response(JSON.stringify({ error: String(error?.message || error) }), {
+          status,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }) as typeof fetch,
+  });
+  if (synced !== 0) {
+    throw new PlatformWorkflowError(409, `ay sync 未通过：${errors.join("；") || "请检查工程知识快照"}`);
+  }
+}
+
 function platformWorkflowEnvFor(): PlatformWorkflowEnv {
   return {
     db,
@@ -905,6 +979,15 @@ function platformWorkflowEnvFor(): PlatformWorkflowEnv {
       }, id);
       if (!result.ok) throw new PlatformWorkflowError(409, result.message || result.error);
     },
+    async resumeRuntimeTask(id) {
+      await resumePlatformRuntimeTask(id);
+    },
+    async sendRuntimeMessage(id, message) {
+      const runtime = getTask.get(id) as Task | undefined;
+      if (!runtime?.session) throw new PlatformWorkflowError(409, "Agent session 不存在");
+      await pasteSubmit(localRunner, runtime.session, message);
+    },
+    validateAndSyncTask: validateAndSyncPlatformTask,
     async refreshRepository(id) {
       const result = await refreshRepositoryProtocol(db, localRunner, id);
       if (!result.ok) throw new PlatformWorkflowError(result.reason === "not_found" ? 404 : 409, result.message);

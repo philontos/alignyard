@@ -74,6 +74,7 @@ const statusLabels = {
   draft: "草稿",
   review: "待审核",
   approved: "已通过",
+  completed: "已完成",
 };
 
 const protocolStateLabels = {
@@ -166,6 +167,17 @@ function statusPill(status) {
   return `<span class="status-pill status-${escapeHtml(status)}"><i></i>${escapeHtml(statusLabels[status] || status)}</span>`;
 }
 
+function taskDisplayTitle(task) {
+  if (task.task_type !== "repository_init") return task.title;
+  return task.repositories.find((repository) => repository.mode === "editable")?.name
+    || task.title.replace(/^Initialize Alignyard\s*·\s*/, "");
+}
+
+function taskContextHelp(task) {
+  if (task.task_type !== "repository_init" || !task.description) return "";
+  return `<details class="task-context-help"><summary aria-label="查看初始化说明">?</summary><p role="tooltip">${escapeHtml(task.description)}</p></details>`;
+}
+
 function repositoryChips(repositories) {
   if (!repositories?.length) return `<span class="repo-chip"><span>未关联</span></span>`;
   const visible = repositories.slice(0, 3).map((repo) => `<span class="repo-chip ${repo.mode === "reference" ? "reference" : ""}"><i></i><span>${escapeHtml(repo.name)}</span></span>`).join("");
@@ -174,7 +186,7 @@ function repositoryChips(repositories) {
 }
 
 function filteredTasks() {
-  const priorities = { review: 0, draft: 1, approved: 2 };
+  const priorities = { review: 0, draft: 1, approved: 2, completed: 3 };
   return state.tasks.filter((task) => {
     if (state.taskFilter === "mine" && !taskBelongsToCurrentUser(task)) return false;
     if (state.taskFilter === "review" && (task.status !== "review" || !taskAssignedToCurrentUser(task))) return false;
@@ -194,7 +206,7 @@ function renderTaskList() {
   target.classList.remove("is-empty");
   target.innerHTML = tasks.map((task) => `<article class="task-row">
     <button class="task-row-open" type="button" data-task-key="${escapeHtml(task.key)}">
-      <span class="task-main"><span class="task-key-line"><span class="task-key">${escapeHtml(task.key)}</span>${statusPill(task.status)}</span><strong class="task-title">${escapeHtml(task.title)}</strong></span>
+      <span class="task-main"><span class="task-key-line"><span class="task-key">${escapeHtml(task.key)}</span>${statusPill(task.status)}</span><strong class="task-title">${escapeHtml(taskDisplayTitle(task))}</strong></span>
       <span class="repo-chips">${repositoryChips(task.repositories)}</span>
       <span class="task-owner"><span class="mini-avatar">${escapeHtml(initial(task.current_assignee || task.owner))}</span>${escapeHtml(task.current_assignee || task.owner)}</span>
     </button>
@@ -230,7 +242,7 @@ function renderRepositories() {
   target.innerHTML = state.repositories.map((repo) => {
     const taskCount = state.tasks.filter((task) => task.repositories.some((item) => item.id === repo.id)).length;
     const initTask = state.tasks.find((task) =>
-      task.task_type === "repository_init" && task.status !== "approved" &&
+      task.task_type === "repository_init" && task.status !== "completed" &&
       task.repositories.some((item) => item.id === repo.id)
     );
     const protocolState = repositoryProtocolState(repo);
@@ -431,7 +443,7 @@ async function deletePlatformTask(task, button) {
     : "Repository 本身不会被删除。";
   const confirmed = await confirmDialog({
     title: "删除 Task？",
-    message: `确定要删除「${task.key} · ${task.title}」吗？`,
+    message: `确定要删除「${task.key} · ${taskDisplayTitle(task)}」吗？`,
     detail: `关联的 Agent session、worktree、本地 runtime Task 和工程知识快照都会清理。${remoteDetail}`,
     confirmText: "删除 Task",
   });
@@ -464,6 +476,15 @@ function closeTaskDialog() {
   $("#create-task-dialog").hidden = true;
 }
 function closeReviewDialog() { $("#review-dialog").hidden = true; }
+function closeChangesRequestedDialog() { $("#changes-requested-dialog").hidden = true; }
+function openChangesRequestedDialog(task) {
+  const form = $("#changes-requested-form");
+  form.reset();
+  form.elements.task_key.value = task.key;
+  $("#changes-requested-error").textContent = "";
+  $("#changes-requested-dialog").hidden = false;
+  setTimeout(() => form.elements.feedback.focus(), 0);
+}
 function openReviewDialog(task) {
   const form = $("#review-form");
   form.reset();
@@ -505,6 +526,19 @@ async function submitReview(event) {
     hideGlobalLoading();
     submit.disabled = false;
   }
+}
+
+async function submitChangesRequested(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const task = state.tasks.find((item) => item.key === form.elements.task_key.value);
+  const feedback = form.elements.feedback.value.trim();
+  if (!task || !feedback) {
+    $("#changes-requested-error").textContent = feedback ? "Task 不存在" : "请填写需要修改的内容";
+    return;
+  }
+  const submitted = await decideReview(task, "changes_requested", $("#changes-requested-submit"), feedback);
+  if (submitted) closeChangesRequestedDialog();
 }
 
 function openRepositoryDialog() {
@@ -671,7 +705,7 @@ function artifactKind(kind) {
 }
 
 function detailRepository(repo) {
-  return `<article class="detail-repo"><div><strong>${escapeHtml(repo.name)}</strong><small>${escapeHtml(repo.git_url)}</small></div><span class="mode-badge ${repo.mode === "reference" ? "reference" : ""}">${escapeHtml(repo.mode)}</span><div><strong>${escapeHtml(repo.base_branch)}</strong><small>${escapeHtml(repo.work_branch || "固定为只读上下文")}</small></div></article>`;
+  return `<article class="detail-repo"><div><strong>${escapeHtml(repo.name)}</strong><small>${escapeHtml(repo.git_url)}</small></div><div><strong>${escapeHtml(repo.base_branch)}</strong><small>${escapeHtml(repo.work_branch || "工作分支尚未创建")}</small></div></article>`;
 }
 
 function taskChangeRequestLabel(task) {
@@ -687,6 +721,7 @@ function taskNextAction(task) {
   if (task.task_type === "repository_init") return initTaskActions(task);
   if (task.status === "draft") return `<button class="button secondary" type="button" data-submit-review>提交 Review</button>`;
   if (task.status === "review") return `<button class="button secondary" type="button" data-review-decision="changes_requested">要求修改</button><button class="button primary" type="button" data-review-decision="approved">审核通过</button>`;
+  if (task.status === "approved" && taskBelongsToCurrentUser(task)) return `<button class="button primary" type="button" data-set-status="completed">标记完成</button>`;
   return "";
 }
 
@@ -742,19 +777,19 @@ function initTaskActions(task) {
     actions.push(`<button class="button secondary mobile-agent-action" type="button" data-open-agent>打开 Agent</button>`);
   }
   if (task.status === "draft" && (!task.runtime_task_id || !task.runtime_has_worktree)) {
-    actions.push(`<div class="task-agent-launch"><select data-author-agent aria-label="选择初始化 Agent"><option value="codex">Codex</option><option value="claude">Claude Code</option><option value="kimi">Kimi CLI</option></select><button class="button primary" type="button" data-run-init>启动 Agent</button></div>`);
-  } else if (task.status === "draft" && repository?.manifest_status === "valid") {
+    actions.push(`<div class="task-agent-launch"><div class="agent-picker" data-agent-picker><input type="hidden" data-author-agent value="codex"><button class="agent-picker-trigger" type="button" data-agent-picker-trigger aria-haspopup="listbox" aria-expanded="false"><span data-agent-picker-label>Codex</span><i aria-hidden="true"></i></button><div class="agent-picker-menu" data-agent-picker-menu role="listbox" aria-label="选择初始化 Agent" hidden><button class="selected" type="button" role="option" aria-selected="true" data-agent-value="codex"><span>Codex</span><i aria-hidden="true">✓</i></button><button type="button" role="option" aria-selected="false" data-agent-value="claude"><span>Claude Code</span><i aria-hidden="true">✓</i></button><button type="button" role="option" aria-selected="false" data-agent-value="kimi"><span>Kimi CLI</span><i aria-hidden="true">✓</i></button></div></div><button class="button primary" type="button" data-run-init>启动 Agent</button></div>`);
+  } else if (task.status === "draft") {
+    if (!task.runtime_alive) actions.push(`<button class="button secondary" type="button" data-run-init>继续 Agent</button>`);
     actions.push(`<button class="button primary" type="button" data-init-review>提交 Review</button>`);
-  } else if (task.status === "draft" && !task.runtime_alive) {
-    actions.push(`<button class="button primary" type="button" data-run-init>继续 Agent</button>`);
   } else if (task.status === "review") {
     actions.push(`<button class="button secondary" type="button" data-review-decision="changes_requested">要求修改</button>`);
     actions.push(`<button class="button primary" type="button" data-review-decision="approved">审核通过</button>`);
-  } else if (task.status === "approved" && task.pr_state === "none") {
+  } else if (task.status === "approved" && task.pr_state === "none" && taskBelongsToCurrentUser(task)) {
     actions.push(`<button class="button primary" type="button" data-init-pr ${pendingAction(task, "pull-request") ? "disabled" : ""}>${pendingAction(task, "pull-request") ? `正在创建 ${requestLabel}…` : `创建 ${requestLabel}`}</button>`);
-  } else if (task.status === "approved" && task.pr_state === "open") {
+  } else if (task.status === "approved" && task.pr_state === "open" && taskBelongsToCurrentUser(task)) {
     actions.push(`<a class="button secondary link" href="${escapeHtml(task.pr_url)}" target="_blank" rel="noreferrer">查看 ${requestLabel} #${task.pr_number}</a>`);
-    actions.push(`<button class="button primary" type="button" data-init-merge ${pendingAction(task, "merge") ? "disabled" : ""}>${pendingAction(task, "merge") ? `正在合并 ${requestLabel}…` : `合并 ${requestLabel}`}</button>`);
+    const confirming = pendingAction(task, "refresh-change-request");
+    actions.push(`<button class="button primary" type="button" data-init-merge ${pendingAction(task, "merge") || confirming ? "disabled" : ""}>${confirming ? `正在确认 ${requestLabel} 状态…` : pendingAction(task, "merge") ? `正在合并 ${requestLabel}…` : `合并 ${requestLabel}`}</button>`);
   } else if (task.status === "approved" && task.pr_state === "merged" && repository?.protocol_state !== "ready") {
     actions.push(`<a class="button secondary link" href="${escapeHtml(task.pr_url)}" target="_blank" rel="noreferrer">查看 ${requestLabel} #${task.pr_number}</a>`);
     actions.push(`<button class="button primary" type="button" data-init-merge>重试完成初始化</button>`);
@@ -762,6 +797,40 @@ function initTaskActions(task) {
     actions.push(`<a class="button secondary link" href="${escapeHtml(task.pr_url)}" target="_blank" rel="noreferrer">查看 ${requestLabel} #${task.pr_number}</a>`);
   }
   return actions.join("");
+}
+
+function closeAgentPicker(picker) {
+  const menu = $("[data-agent-picker-menu]", picker);
+  const trigger = $("[data-agent-picker-trigger]", picker);
+  if (menu) menu.hidden = true;
+  trigger?.setAttribute("aria-expanded", "false");
+}
+
+function wireAgentPicker(root) {
+  const picker = $("[data-agent-picker]", root);
+  if (!picker) return;
+  const trigger = $("[data-agent-picker-trigger]", picker);
+  const menu = $("[data-agent-picker-menu]", picker);
+  const input = $("[data-author-agent]", picker);
+  const label = $("[data-agent-picker-label]", picker);
+  trigger.addEventListener("click", () => {
+    const willOpen = menu.hidden;
+    $$('[data-agent-picker]').forEach((item) => closeAgentPicker(item));
+    menu.hidden = !willOpen;
+    trigger.setAttribute("aria-expanded", String(willOpen));
+    if (willOpen) $("[aria-selected='true']", menu)?.focus();
+  });
+  $$('[data-agent-value]', menu).forEach((option) => option.addEventListener("click", () => {
+    input.value = option.dataset.agentValue;
+    label.textContent = option.querySelector("span").textContent;
+    $$('[data-agent-value]', menu).forEach((item) => {
+      const selected = item === option;
+      item.classList.toggle("selected", selected);
+      item.setAttribute("aria-selected", String(selected));
+    });
+    closeAgentPicker(picker);
+    trigger.focus();
+  }));
 }
 
 function taskLocalCommands(task) {
@@ -778,37 +847,62 @@ function openTaskChanges(task, path = null) {
     toast("Task worktree 已清理，当前无法读取本地 diff", "error");
     return;
   }
-  openTaskCodeContext(task.runtime_task_id, `${task.key} ${task.title}`, {
+  openTaskCodeContext(task.runtime_task_id, `${task.key} ${taskDisplayTitle(task)}`, {
     tab: "changes",
     ...(path ? { path } : {}),
   });
 }
 
-function openTaskDetail(key) {
+function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
   const task = state.tasks.find((item) => item.key === key);
   if (!task) return;
+  const shouldRefreshChangeRequest = refreshChangeRequest == null
+    ? state.selectedTask?.key !== key || $("#task-drawer").hidden
+    : refreshChangeRequest;
+  if (shouldRefreshChangeRequest && task.pr_number && task.pr_state === "open") {
+    state.pendingActions.add(`${key}:refresh-change-request`);
+  }
   state.selectedTask = task;
   const commands = taskLocalCommands(task);
   const commandList = commands.map((command, index) => `<div class="detail-command"><span>${escapeHtml(command)}</span><button type="button" data-copy-command="${index}">复制</button></div>`).join("");
   const workflowNote = task.task_type === "repository_init"
     ? `${initWorkflowPanel(task)}<details class="manual-workflow"><summary>手动模式与诊断命令</summary><p>自动 Agent 无法完成时，才需要在保留的 worktree 中执行这些命令。</p>${commandList}</details>`
     : "";
-  const reviewHandoff = task.review ? `<section class="detail-workflow"><strong>Review · ${escapeHtml(task.review.reviewer)}</strong><p>由 ${escapeHtml(task.review.submitted_by)} 于 ${escapeHtml(formatDate(task.review.submitted_at))} 分派；当前状态：${escapeHtml(task.review.status)}。工作分支已推送到远端，reviewer 可在右侧选择 Agent 进入对应 worktree。</p></section>` : "";
+  const reviewFeedback = task.review?.feedback ? `<p><strong>Review 反馈：</strong>${escapeHtml(task.review.feedback)}</p>` : "";
+  const reviewSummary = task.review?.status === "changes_requested"
+    ? `Reviewer 已要求修改，Task 已退回 ${escapeHtml(task.owner)}。继续 Agent 时会恢复 Author 工作区并传入本轮反馈。`
+    : `由 ${escapeHtml(task.review?.submitted_by || "")} 于 ${escapeHtml(formatDate(task.review?.submitted_at))} 分派；当前状态：${escapeHtml(task.review?.status || "")}。工作分支已推送到远端，reviewer 可在右侧选择 Agent 进入对应 worktree。`;
+  const reviewHandoff = task.review ? `<section class="detail-workflow"><strong>Review · ${escapeHtml(task.review.reviewer)}</strong><p>${reviewSummary}</p>${reviewFeedback}</section>` : "";
   const canInspectChanges = !!task.runtime_task_id && !!task.runtime_has_worktree;
   const artifacts = task.artifacts?.length ? task.artifacts.map((artifact) => `<button class="artifact-row" type="button" data-artifact-path="${escapeHtml(artifact.path)}" ${canInspectChanges ? "" : "disabled"}><span class="artifact-kind ${artifactKind(artifact.kind)}">${escapeHtml(artifactKind(artifact.kind).slice(0, 4))}</span><span><strong>${escapeHtml(artifact.title || artifact.path)}</strong><small>${escapeHtml(artifact.path)}</small></span><span>${escapeHtml(artifact.review_status)} <i aria-hidden="true">›</i></span></button>`).join("") : `<div class="detail-empty">尚未收到 manifest 结果。成员在本地执行 <code>ay sync</code> 后，这里会显示 docs、specs 和 ADR 的差异。</div>`;
-  $("#task-detail").innerHTML = `<div class="detail-top"><span class="task-key">${escapeHtml(task.key)}</span><h1>${escapeHtml(task.title)}</h1><p>${escapeHtml(task.description || "尚未填写需求说明")}</p></div>
-    <div class="detail-meta">${statusPill(task.status)}<span>负责人：${escapeHtml(task.owner)}</span><span>当前处理人：${escapeHtml(task.current_assignee || task.owner)}</span><span>创建于 ${escapeHtml(formatDate(task.created_at))}</span></div>
+  const displayTitle = taskDisplayTitle(task);
+  const description = task.task_type === "repository_init"
+    ? ""
+    : `<p>${escapeHtml(task.description || "尚未填写需求说明")}</p>`;
+  const workspaceTask = { ...task, display_title: displayTitle };
+  $("#task-detail").innerHTML = `<div class="detail-top"><div class="detail-title-row"><button class="drawer-close" id="drawer-close" type="button" aria-label="返回 Task 列表">返回</button><span class="task-key">${escapeHtml(task.key)}</span><h1>${escapeHtml(displayTitle)}</h1>${taskContextHelp(task)}</div>${description}</div>
+    <div class="detail-meta">${statusPill(task.status)}<span>负责人：${escapeHtml(task.owner)}</span><span>当前处理人：${escapeHtml(task.current_assignee || task.owner)}</span><span>${task.completed_at ? `完成于 ${escapeHtml(formatDate(task.completed_at))}` : `创建于 ${escapeHtml(formatDate(task.created_at))}`}</span></div>
     ${workflowNote}${reviewHandoff}${task.task_type === "repository_init" ? "" : commandList}
     <section class="detail-section"><div class="detail-section-head"><h2>Repositories · ${task.repositories.length}</h2><span class="protocol-badge">peer worktrees</span></div><div class="detail-repos">${task.repositories.map(detailRepository).join("")}</div></section>
     <section class="detail-section"><div class="detail-section-head"><h2>工程知识 · ${task.artifacts?.length || 0}</h2>${canInspectChanges ? `<button class="text-button review-changes" type="button" data-open-task-changes>查看全部变更</button>` : `<span class="protocol-badge">manifest snapshot</span>`}</div><div class="artifact-list">${artifacts}</div></section>
     <div class="detail-actions">${taskNextAction(task)}</div>`;
   $("#task-drawer").hidden = false;
+  $("#drawer-close").addEventListener("click", closeTaskDetail);
+  const contextHelp = $(".task-context-help", $("#task-detail"));
+  contextHelp?.addEventListener("mouseleave", () => {
+    contextHelp.removeAttribute("open");
+    $("summary", contextHelp)?.blur();
+  });
+  wireAgentPicker($("#task-detail"));
   $$('[data-copy-command]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => copyCommand(commands[Number(button.dataset.copyCommand)])));
   $$('[data-set-status]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => setTaskStatus(task.key, button.dataset.setStatus)));
   $$('[data-submit-review]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => openReviewDialog(task)));
-  $$('[data-review-decision]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => decideReview(task, button.dataset.reviewDecision, button)));
+  $$('[data-review-decision]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => {
+    if (button.dataset.reviewDecision === "changes_requested") openChangesRequestedDialog(task);
+    else decideReview(task, button.dataset.reviewDecision, button);
+  }));
   $('[data-run-init]', $("#task-detail"))?.addEventListener("click", (event) => runInitTask(task.key, event.currentTarget));
-  $('[data-open-agent]', $("#task-detail"))?.addEventListener("click", () => openPlatformAgentWorkspace(task));
+  $('[data-open-agent]', $("#task-detail"))?.addEventListener("click", () => openPlatformAgentWorkspace(workspaceTask));
   $('[data-open-task-changes]', $("#task-detail"))?.addEventListener("click", () => openTaskChanges(task));
   $$('[data-artifact-path]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => openTaskChanges(task, button.dataset.artifactPath)));
   $('[data-init-review]', $("#task-detail"))?.addEventListener("click", () => openReviewDialog(task));
@@ -816,7 +910,10 @@ function openTaskDetail(key) {
   $('[data-init-pr]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "pull-request", event.currentTarget, `${requestLabel} 已创建`));
   $('[data-init-merge]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "merge", event.currentTarget, `${requestLabel} 已合并，Repository 已就绪`));
   if (!matchMedia("(max-width: 760px)").matches || platformAgentWorkspaceIsOpen()) {
-    openPlatformAgentWorkspace(task);
+    openPlatformAgentWorkspace(workspaceTask);
+  }
+  if (shouldRefreshChangeRequest && task.pr_number && task.pr_state === "open") {
+    void refreshTaskChangeRequest(key, task.pr_state);
   }
 }
 
@@ -830,6 +927,39 @@ function replacePlatformTask(updated) {
   const index = state.tasks.findIndex((task) => task.key === updated.key);
   if (index >= 0) state.tasks[index] = updated;
   else state.tasks.unshift(updated);
+}
+
+async function refreshTaskChangeRequest(key, previousState) {
+  const operationKey = `${key}:refresh-change-request`;
+  let result = null;
+  try {
+    result = await api(`/api/platform/tasks/${encodeURIComponent(key)}/change-request/refresh`, {
+      method: "POST",
+      body: "{}",
+    });
+    replacePlatformTask(result.task);
+    if (result.repository) {
+      const repositoryIndex = state.repositories.findIndex((item) => item.id === result.repository.id);
+      if (repositoryIndex >= 0) state.repositories[repositoryIndex] = result.repository;
+    }
+  } catch (error) {
+    // Opening a Task must remain usable when gh/glab or the forge is briefly
+    // unavailable. The explicit merge action stays available for a retry.
+    console.warn(`无法确认 ${key} 的远端合并请求状态`, error);
+  } finally {
+    state.pendingActions.delete(operationKey);
+    renderAll();
+    if (state.selectedTask?.key === key && !$("#task-drawer").hidden) {
+      openTaskDetail(key, { refreshChangeRequest: false });
+    }
+  }
+  if (result?.task?.pr_state && result.task.pr_state !== previousState) {
+    const requestLabel = taskChangeRequestLabel(result.task);
+    const message = result.task.pr_state === "merged"
+      ? `${requestLabel} 已在远端合并，平台状态已同步`
+      : `${requestLabel} 已在远端关闭，平台状态已同步`;
+    toast(message);
+  }
 }
 
 async function runInitTask(key, button) {
@@ -870,7 +1000,7 @@ async function startReviewAgent(task, agent) {
   }
 }
 
-async function decideReview(task, decision, button) {
+async function decideReview(task, decision, button, feedback = null) {
   button.disabled = true;
   const approved = decision === "approved";
   showGlobalLoading(approved ? "正在确认 Review…" : "正在退回修改…", approved
@@ -879,25 +1009,20 @@ async function decideReview(task, decision, button) {
   try {
     const updated = await api(`/api/platform/tasks/${encodeURIComponent(task.key)}/review/decision`, {
       method: "POST",
-      body: JSON.stringify({ decision }),
+      body: JSON.stringify({ decision, feedback }),
     });
     replacePlatformTask(updated);
     renderAll();
-    if (approved && updated.task_type === "repository_init") {
-      // Repository Init is the only deliberately continuous workflow: after
-      // approval the same page advances to the explicit PR creation action.
-      openTaskDetail(task.key);
-      toast("Review 已通过，可以创建合并请求");
-    } else {
-      // A normal collaboration handoff ends the current actor's workspace.
-      // The next assignee re-enters from their own Task list instead of the UI
-      // pretending that one person is walking through every workflow stage.
-      closeTaskDetail();
-      toast(approved ? "Review 已通过，Task 已交还发起人" : "已要求修改，Task 已交还发起人");
-    }
+    // Every Review decision ends the current actor's workspace. Creating a
+    // PR/MR is a separate Author action after they reopen the approved Task.
+    closeTaskDetail();
+    toast(approved ? "Review 已通过，Task 已交还发起人" : "已要求修改，Task 已交还发起人");
+    return true;
   } catch (error) {
-    toast(error.message, "error");
+    if (!approved && !$("#changes-requested-dialog").hidden) $("#changes-requested-error").textContent = error.message;
+    else toast(error.message, "error");
     await loadData({ silent: true });
+    return false;
   } finally {
     hideGlobalLoading();
     if (button.isConnected) button.disabled = false;
@@ -967,7 +1092,7 @@ async function loadData({ silent = false } = {}) {
     renderAll();
     const selectedKey = state.selectedTask?.key;
     if (selectedKey && !$("#task-drawer").hidden && state.tasks.some((task) => task.key === selectedKey)) {
-      openTaskDetail(selectedKey);
+      openTaskDetail(selectedKey, { refreshChangeRequest: false });
     }
   } catch (error) {
     if (!silent) {
@@ -1102,20 +1227,22 @@ function bindEvents() {
   $("#create-task-form").addEventListener("submit", submitTask);
   $("#add-repository-form").addEventListener("submit", submitRepository);
   $("#review-form").addEventListener("submit", submitReview);
+  $("#changes-requested-form").addEventListener("submit", submitChangesRequested);
   $$('[data-close-dialog]').forEach((button) => button.addEventListener("click", closeTaskDialog));
   $$('[data-close-repo-dialog]').forEach((button) => button.addEventListener("click", closeRepositoryDialog));
   $("#repository-detail-close").addEventListener("click", closeRepositoryDetails);
   $$('[data-close-repository-detail]').forEach((button) => button.addEventListener("click", closeRepositoryDetails));
   $$('[data-close-review-dialog]').forEach((button) => button.addEventListener("click", closeReviewDialog));
+  $$('[data-close-changes-requested]').forEach((button) => button.addEventListener("click", closeChangesRequestedDialog));
   $("#create-task-dialog").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeTaskDialog(); });
   $("#add-repository-dialog").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeRepositoryDialog(); });
   $("#repository-detail-dialog").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeRepositoryDetails(); });
   $("#review-dialog").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeReviewDialog(); });
+  $("#changes-requested-dialog").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeChangesRequestedDialog(); });
   $("#confirm-dialog-cancel").addEventListener("click", () => closeConfirmDialog(false));
   $("#confirm-dialog-submit").addEventListener("click", () => closeConfirmDialog(true));
   $("#confirm-dialog").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeConfirmDialog(false); });
   $("#task-drawer").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeTaskDetail(); });
-  $("#drawer-close").addEventListener("click", closeTaskDetail);
   $("#top-user").addEventListener("click", () => {
     const menu = $("#account-menu");
     menu.hidden = !menu.hidden;
@@ -1123,17 +1250,24 @@ function bindEvents() {
   });
   $("#logout-button").addEventListener("click", logout);
   document.addEventListener("click", (event) => {
-    if (event.target.closest(".account-control")) return;
-    $("#account-menu").hidden = true;
-    $("#top-user").setAttribute("aria-expanded", "false");
+    if (!event.target.closest(".account-control")) {
+      $("#account-menu").hidden = true;
+      $("#top-user").setAttribute("aria-expanded", "false");
+    }
+    $$('[data-agent-picker]').forEach((picker) => {
+      if (!picker.contains(event.target)) closeAgentPicker(picker);
+    });
   });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    if (isCodeViewOpen()) closeCodeView();
+    const openAgentPicker = $("[data-agent-picker-menu]:not([hidden])")?.closest("[data-agent-picker]");
+    if (openAgentPicker) closeAgentPicker(openAgentPicker);
+    else if (isCodeViewOpen()) closeCodeView();
     else if (platformAgentWorkspaceIsOpen() && matchMedia("(max-width: 760px)").matches) closePlatformAgentWorkspace();
     else if (!$("#confirm-dialog").hidden) closeConfirmDialog(false);
     else if (!$("#repository-detail-dialog").hidden) closeRepositoryDetails();
     else if (!$("#add-repository-dialog").hidden) closeRepositoryDialog();
+    else if (!$("#changes-requested-dialog").hidden) closeChangesRequestedDialog();
     else if (!$("#review-dialog").hidden) closeReviewDialog();
     else if (!$("#create-task-dialog").hidden) closeTaskDialog();
     else if (!$("#task-drawer").hidden) closeTaskDetail();

@@ -157,6 +157,7 @@ CREATE TABLE IF NOT EXISTS platform_tasks (
   pr_url TEXT,
   pr_state TEXT NOT NULL DEFAULT 'none',
   merged_at TEXT,
+  completed_at TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -192,6 +193,8 @@ CREATE TABLE IF NOT EXISTS platform_task_reviews (
   submitted_by TEXT NOT NULL,
   submitted_by_user_id INTEGER,
   status TEXT NOT NULL DEFAULT 'pending',
+  feedback TEXT,
+  feedback_delivered_at TEXT,
   submitted_at TEXT DEFAULT (datetime('now')),
   started_at TEXT,
   decided_at TEXT,
@@ -324,9 +327,12 @@ function reconcileColumns(db: DB) {
   addColumn(db, "platform_tasks", "pr_url", "TEXT");
   addColumn(db, "platform_tasks", "pr_state", "TEXT NOT NULL DEFAULT 'none'");
   addColumn(db, "platform_tasks", "merged_at", "TEXT");
+  addColumn(db, "platform_tasks", "completed_at", "TEXT");
   addColumn(db, "platform_task_repositories", "remote_pushed_at", "TEXT");
   addColumn(db, "platform_task_reviews", "reviewer_user_id", "INTEGER");
   addColumn(db, "platform_task_reviews", "submitted_by_user_id", "INTEGER");
+  addColumn(db, "platform_task_reviews", "feedback", "TEXT");
+  addColumn(db, "platform_task_reviews", "feedback_delivered_at", "TEXT");
   addColumn(db, "platform_artifacts", "document_id", "TEXT");
   addColumn(db, "platform_artifacts", "scope", "TEXT");
   addColumn(db, "platform_artifacts", "owners", "TEXT NOT NULL DEFAULT '[]'");
@@ -379,7 +385,7 @@ function normalizePlatformProtocolWorkflow(db: DB) {
 
 /**
  * Collapse the prototype's implementation-oriented Task states into the
- * product's three collaboration states. This is intentionally idempotent so
+ * product's four collaboration states. This is intentionally idempotent so
  * old databases are normalized on the first boot after upgrading while fresh
  * databases and subsequent boots remain no-ops.
  */
@@ -389,10 +395,24 @@ function normalizePlatformTaskStatuses(db: DB) {
     SET status = CASE
       WHEN status IN ('draft', 'active', 'pushed') THEN 'draft'
       WHEN status IN ('review', 'in_review') THEN 'review'
-      WHEN status IN ('approved', 'merged', 'closed') THEN 'approved'
+      WHEN status IN ('approved', 'closed') THEN 'approved'
+      WHEN status IN ('completed', 'merged') THEN 'completed'
       ELSE 'draft'
     END
-    WHERE status NOT IN ('draft', 'review', 'approved')
+    WHERE status NOT IN ('draft', 'review', 'approved', 'completed');
+
+    UPDATE platform_tasks
+    SET status='completed',completed_at=COALESCE(completed_at,merged_at,updated_at)
+    WHERE status='approved' AND task_type='repository_init' AND pr_state='merged'
+      AND EXISTS (
+        SELECT 1 FROM platform_task_repositories ptr
+        JOIN platform_repositories pr ON pr.id=ptr.repository_id
+        WHERE ptr.task_id=platform_tasks.id AND ptr.mode='editable' AND pr.protocol_state='ready'
+      );
+
+    UPDATE platform_tasks
+    SET completed_at=COALESCE(completed_at,merged_at,updated_at)
+    WHERE status='completed' AND completed_at IS NULL
   `);
 }
 

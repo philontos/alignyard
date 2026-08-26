@@ -8,6 +8,7 @@ export const PLATFORM_TASK_STATUSES = [
   "draft",
   "review",
   "approved",
+  "completed",
 ] as const;
 
 export type PlatformTaskStatus = typeof PLATFORM_TASK_STATUSES[number];
@@ -70,6 +71,8 @@ export interface PlatformTaskReview {
   submitted_by: string;
   submitted_by_user_id: number | null;
   status: PlatformReviewStatus;
+  feedback: string | null;
+  feedback_delivered_at: string | null;
   submitted_at: string;
   started_at: string | null;
   decided_at: string | null;
@@ -125,6 +128,7 @@ export interface PlatformTask {
   pr_url: string | null;
   pr_state: "none" | "open" | "merged" | "closed";
   merged_at: string | null;
+  completed_at: string | null;
   created_at: string;
   updated_at: string;
   repositories: PlatformTaskRepository[];
@@ -245,7 +249,7 @@ function repositoriesForTask(db: DB, taskId: number): PlatformTaskRepository[] {
 
 function reviewForTask(db: DB, taskId: number): PlatformTaskReview | null {
   return (db.prepare(
-    "SELECT id,reviewer,reviewer_user_id,submitted_by,submitted_by_user_id,status," +
+    "SELECT id,reviewer,reviewer_user_id,submitted_by,submitted_by_user_id,status,feedback,feedback_delivered_at," +
       "submitted_at,started_at,decided_at,updated_at " +
       "FROM platform_task_reviews WHERE task_id=? ORDER BY id DESC LIMIT 1",
   ).get(taskId) as PlatformTaskReview | undefined) || null;
@@ -281,6 +285,7 @@ function shapeTask(db: DB, row: TaskRow): PlatformTask {
     pr_url: row.pr_url,
     pr_state: row.pr_state,
     merged_at: row.merged_at,
+    completed_at: row.completed_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
     repositories: repositoriesForTask(db, row.id),
@@ -296,7 +301,7 @@ export function listPlatformTasks(db: DB): PlatformTask[] {
       "pt.current_assignee,pt.current_assignee_user_id,pt.task_type,pt.status," +
       "pt.runtime_task_id,rt.status AS runtime_status,rt.error AS runtime_error," +
       "rt.worktree_path AS runtime_worktree,rt.session AS runtime_session,rt.agent AS runtime_agent," +
-      "pt.workflow_error,pt.pr_number,pt.pr_url,pt.pr_state,pt.merged_at,pt.created_at,pt.updated_at " +
+      "pt.workflow_error,pt.pr_number,pt.pr_url,pt.pr_state,pt.merged_at,pt.completed_at,pt.created_at,pt.updated_at " +
       "FROM platform_tasks pt LEFT JOIN tasks rt ON rt.id=pt.runtime_task_id " +
       "ORDER BY pt.updated_at DESC,pt.id DESC",
   ).all() as TaskRow[];
@@ -309,7 +314,7 @@ export function getPlatformTask(db: DB, key: string): PlatformTask | undefined {
       "pt.current_assignee,pt.current_assignee_user_id,pt.task_type,pt.status," +
       "pt.runtime_task_id,rt.status AS runtime_status,rt.error AS runtime_error," +
       "rt.worktree_path AS runtime_worktree,rt.session AS runtime_session,rt.agent AS runtime_agent," +
-      "pt.workflow_error,pt.pr_number,pt.pr_url,pt.pr_state,pt.merged_at,pt.created_at,pt.updated_at " +
+      "pt.workflow_error,pt.pr_number,pt.pr_url,pt.pr_state,pt.merged_at,pt.completed_at,pt.created_at,pt.updated_at " +
       "FROM platform_tasks pt LEFT JOIN tasks rt ON rt.id=pt.runtime_task_id WHERE pt.task_key=?",
   ).get(key.toUpperCase()) as TaskRow | undefined;
   return row ? shapeTask(db, row) : undefined;
@@ -423,13 +428,19 @@ export function decidePlatformTaskReview(
   db: DB,
   key: string,
   decision: "approved" | "changes_requested",
+  feedback?: unknown,
 ): PlatformTask | undefined {
   const task = getPlatformTask(db, key);
   if (!task?.review) return task;
+  const reviewFeedback = typeof feedback === "string" && feedback.trim() ? feedback.trim() : null;
+  if (decision === "changes_requested" && !reviewFeedback) {
+    throw new PlatformValidationError("请填写需要修改的内容");
+  }
   db.transaction(() => {
     db.prepare(
-      "UPDATE platform_task_reviews SET status=?,decided_at=datetime('now'),updated_at=datetime('now') WHERE id=?",
-    ).run(decision, task.review!.id);
+      "UPDATE platform_task_reviews SET status=?,feedback=?,feedback_delivered_at=NULL," +
+        "decided_at=datetime('now'),updated_at=datetime('now') WHERE id=?",
+    ).run(decision, reviewFeedback, task.review!.id);
     db.prepare(
       "UPDATE platform_tasks SET status=?,current_assignee=?,current_assignee_user_id=?," +
         "updated_at=datetime('now') WHERE id=?",
@@ -440,6 +451,29 @@ export function decidePlatformTaskReview(
       ).run(task.id);
     }
   })();
+  return getPlatformTask(db, key);
+}
+
+export function restoreLatestPlatformAuthorRuntime(db: DB, key: string): PlatformTask | undefined {
+  const task = getPlatformTask(db, key);
+  if (!task) return undefined;
+  const execution = db.prepare(
+    "SELECT runtime_task_id FROM platform_task_executions " +
+      "WHERE task_id=? AND role='author' ORDER BY id DESC LIMIT 1",
+  ).get(task.id) as { runtime_task_id: number } | undefined;
+  if (!execution) return task;
+  db.prepare(
+    "UPDATE platform_tasks SET runtime_task_id=?,workflow_error=NULL,updated_at=datetime('now') WHERE id=?",
+  ).run(execution.runtime_task_id, task.id);
+  return getPlatformTask(db, key);
+}
+
+export function markPlatformReviewFeedbackDelivered(db: DB, key: string): PlatformTask | undefined {
+  const task = getPlatformTask(db, key);
+  if (!task?.review) return task;
+  db.prepare(
+    "UPDATE platform_task_reviews SET feedback_delivered_at=datetime('now'),updated_at=datetime('now') WHERE id=?",
+  ).run(task.review.id);
   return getPlatformTask(db, key);
 }
 
@@ -603,7 +637,7 @@ export function createRepositoryInitializationTask(
     "SELECT t.task_key FROM platform_tasks t " +
       "JOIN platform_task_repositories tr ON tr.task_id=t.id " +
       "WHERE tr.repository_id=? AND t.task_type='repository_init' " +
-      "AND t.status IN ('draft','review') ORDER BY t.id DESC LIMIT 1",
+      "AND t.status IN ('draft','review','approved') ORDER BY t.id DESC LIMIT 1",
   ).get(repositoryId) as { task_key: string } | undefined;
   if (existing) {
     const task = getPlatformTask(db, existing.task_key);
@@ -685,17 +719,26 @@ export function updatePlatformTaskStatus(db: DB, key: string, status: unknown): 
     }
   }
 
+  if (status === "completed" && task.task_type === "repository_init") {
+    const editable = task.repositories.find((repository) => repository.mode === "editable");
+    if (task.pr_state !== "merged" || editable?.protocol_state !== "ready") {
+      throw new PlatformValidationError("初始化 Task 只有在合并请求已合入且 Repository 就绪后才能完成");
+    }
+  }
+
   const transitions: Record<PlatformTaskStatus, readonly PlatformTaskStatus[]> = {
     draft: ["review"],
     review: ["draft", "approved"],
-    approved: task.task_type === "repository_init" && task.pr_state === "open" ? ["draft"] : [],
+    approved: task.task_type === "repository_init" && task.pr_state === "open" ? ["draft", "completed"] : ["completed"],
+    completed: [],
   };
   if (!transitions[task.status].includes(status as PlatformTaskStatus)) {
     throw new PlatformValidationError(`Task 不能从 ${task.status} 变为 ${status}`);
   }
   const changed = db.prepare(
-    "UPDATE platform_tasks SET status=?,updated_at=datetime('now') WHERE task_key=?",
-  ).run(status, key.toUpperCase()).changes;
+    "UPDATE platform_tasks SET status=?,completed_at=CASE WHEN ?='completed' THEN COALESCE(completed_at,datetime('now')) ELSE completed_at END," +
+      "updated_at=datetime('now') WHERE task_key=?",
+  ).run(status, status, key.toUpperCase()).changes;
   if (changed && task.task_type === "repository_init" && status === "draft") {
     db.prepare(
       "UPDATE platform_task_repositories SET manifest_status='waiting' WHERE task_id=? AND mode='editable'",

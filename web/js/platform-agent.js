@@ -1,4 +1,5 @@
 import { connectPty, sendPtyResize } from "./core/pty-socket.js";
+import { activateCanvasRenderer } from "./core/terminal-renderer.js";
 import { activateCodexUnicode } from "./core/terminal-unicode.js";
 
 let active = null;
@@ -72,7 +73,7 @@ export function openPlatformAgentWorkspace(task) {
   const controls = workspace.querySelector(".agent-workspace-controls");
   const launch = element("agent-workspace-launch");
   element("agent-workspace-key").textContent = task.key;
-  element("agent-workspace-title").textContent = task.title;
+  element("agent-workspace-title").textContent = task.display_title || task.title;
   workspace.hidden = false;
   element("task-drawer").classList.add("task-workspace-mode");
   document.body.classList.add("agent-workspace-open");
@@ -120,6 +121,11 @@ export function openPlatformAgentWorkspace(task) {
     fontFamily: "Menlo, Monaco, Consolas, monospace",
     cursorBlink: true,
     allowProposedApi: agent === "codex",
+    // Menlo falls back to the system CJK font for Chinese. On macOS that
+    // fallback can paint slightly beyond xterm's two-cell box; the DOM renderer
+    // otherwise clips the final radical at the right edge even though its
+    // Unicode buffer is correct.
+    rescaleOverlappingGlyphs: true,
     macOptionClickForcesSelection: true,
     rightClickSelectsWord: true,
     theme: {
@@ -134,6 +140,11 @@ export function openPlatformAgentWorkspace(task) {
     try { activateCodexUnicode(term, agent); } catch {}
   }
   term.open(host);
+  try {
+    if (!activateCanvasRenderer(term)) console.warn("xterm Canvas renderer unavailable; using DOM renderer");
+  } catch (error) {
+    console.warn("xterm Canvas renderer failed; using DOM renderer", error);
+  }
 
   // Keep the same IME guard as Switchyard's mature terminal path. On macOS,
   // CapsLock commonly switches Pinyin to English while composition is active.

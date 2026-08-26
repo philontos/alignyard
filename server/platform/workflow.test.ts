@@ -18,7 +18,9 @@ import {
   deletePlatformTaskWithResources,
   mergeRepositoryInitializationPullRequest,
   PlatformWorkflowError,
+  refreshRepositoryInitializationChangeRequest,
   repositoryInitializationPrompt,
+  taskReviewPrompt,
   startRepositoryInitialization,
   startPlatformTaskReviewAgent,
   submitPlatformTaskForReview,
@@ -134,9 +136,16 @@ function setup(options: { gitUrl?: string } = {}) {
     getRuntimeTask(id) {
       return db.prepare("SELECT * FROM tasks WHERE id=?").get(id) as Task | undefined;
     },
-    async stopRuntimeTask(id) { db.prepare("UPDATE tasks SET status='cleaned' WHERE id=?").run(id); },
-    async cleanupRuntimeTask(id) { db.prepare("UPDATE tasks SET status='cleaned' WHERE id=?").run(id); },
-    async deleteRuntimeTask(id) { db.prepare("DELETE FROM tasks WHERE id=?").run(id); },
+    async stopRuntimeTask(id) { calls.push(`stop:${id}`); db.prepare("UPDATE tasks SET status='cleaned' WHERE id=?").run(id); },
+    async cleanupRuntimeTask(id) { calls.push(`cleanup:${id}`); db.prepare("UPDATE tasks SET status='cleaned' WHERE id=?").run(id); },
+    async deleteRuntimeTask(id) { calls.push(`delete:${id}`); db.prepare("DELETE FROM tasks WHERE id=?").run(id); },
+    async resumeRuntimeTask(id) { db.prepare("UPDATE tasks SET status='running' WHERE id=?").run(id); },
+    async sendRuntimeMessage(_id, message) { calls.push(`message:${message}`); },
+    async validateAndSyncTask(platformTask) {
+      db.prepare(
+        "UPDATE platform_task_repositories SET manifest_status='valid',head_commit=? WHERE task_id=? AND mode='editable'",
+      ).run(HEAD, platformTask.id);
+    },
     async refreshRepository(id) {
       const updated = setPlatformRepositoryProtocolState(db, id, "ready");
       if (!updated) throw new Error("missing repository");
@@ -177,6 +186,18 @@ test("Repository Init prompt makes agent execution automatic but keeps push and 
   assert.match(prompt, /不要创建或合并 PR/);
 });
 
+test("Review prompt keeps the human reviewer in control and makes the Agent an on-demand assistant", () => {
+  const { task } = setup();
+  const prompt = taskReviewPrompt(task);
+  assert.match(prompt, /人工 Review 工作区/);
+  assert.match(prompt, /辅助 Agent，不是 Review 决策者/);
+  assert.match(prompt, /等待 reviewer 提问或下达具体指令/);
+  assert.match(prompt, /不要自行展开完整审查/);
+  assert.match(prompt, /没有明确指令时修改或 push/);
+  assert.match(prompt, /支持 reviewer 进行多轮判断/);
+  assert.doesNotMatch(prompt, /再检查实现正确性、边界条件、测试、文档与安全风险/);
+});
+
 test("Repository Init closes runtime, Review, PR, merge, cleanup, and ready state", async () => {
   const { db, env, repository, task, calls } = setup();
   const started = await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
@@ -208,8 +229,11 @@ test("Repository Init closes runtime, Review, PR, merge, cleanup, and ready stat
   assert.match(withPr.pr_url || "", /pull\/42/);
 
   const merged = await mergeRepositoryInitializationPullRequest(env, task.key);
+  assert.equal(merged.task.status, "completed");
   assert.equal(merged.task.pr_state, "merged");
   assert.equal(merged.repository.protocol_state, "ready");
+  assert.ok(calls.includes(`cleanup:${started.runtime.id}`));
+  assert.ok(calls.includes(`cleanup:${reviewer.runtime.id}`));
   assert.ok(calls.some((call) => call.startsWith("git push --set-upstream origin change/ay-001/phil")));
   assert.ok(calls.some((call) => call === "gh pr merge 42 --merge"));
 });
@@ -231,6 +255,25 @@ test("GitLab Repository Init uses local glab for MR creation and merge", async (
   assert.ok(calls.some((call) => call.startsWith("glab mr create --source-branch change/ay-001/phil --target-branch main")));
   assert.ok(calls.some((call) => call === "glab mr merge 42 --auto-merge=false --yes"));
   assert.equal(calls.some((call) => call.startsWith("gh pr")), false);
+});
+
+test("opening a Task reconciles a GitLab MR merged outside Alignyard without merging it again", async () => {
+  const { db, env, repository, task, calls } = setup({ gitUrl: "git@gitlab.com:example/service.git" });
+  const started = await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
+  seedSyncedOverview(db, task.key, repository.id);
+  await submitPlatformTaskForReview(env, task.key, { reviewer: "Alice", submitted_by: "Phil" });
+  await decidePlatformTaskReviewWorkflow(env, task.key, "approved");
+  await createRepositoryInitializationPullRequest(env, task.key);
+
+  // Simulate the Author merging directly in GitLab before reopening the Task.
+  await env.runner.exec("glab", ["mr", "merge", "42", "--auto-merge=false", "--yes"], { cwd: "/tmp" });
+  const reconciled = await refreshRepositoryInitializationChangeRequest(env, task.key);
+
+  assert.equal(reconciled.task.pr_state, "merged");
+  assert.equal(reconciled.task.status, "completed");
+  assert.equal(reconciled.repository?.protocol_state, "ready");
+  assert.ok(calls.includes(`cleanup:${started.runtime.id}`));
+  assert.equal(calls.filter((call) => call === "glab mr merge 42 --auto-merge=false --yes").length, 1);
 });
 
 test("Repository Init start is idempotent while its runtime worktree exists", async () => {
@@ -300,15 +343,23 @@ test("concurrent PR confirmations share one local forge operation", async () => 
 
 test("Repository Init changes requested returns to author and pushes a revised Review", async () => {
   const { db, env, repository, task, calls } = setup();
-  await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
+  const author = await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
   seedSyncedOverview(db, task.key, repository.id);
   await submitPlatformTaskForReview(env, task.key, { reviewer: "Alice", submitted_by: "Phil" });
-  const draft = await decidePlatformTaskReviewWorkflow(env, task.key, "changes_requested");
+  const reviewer = await startPlatformTaskReviewAgent(env, task.key, "claude");
+  assert.match(reviewer.runtime.work_branch, /^review\/ay-001\//);
+  assert.equal((env.getRuntimeTask(author.runtime.id) as Task).worktree_path, author.runtime.worktree_path);
+  const draft = await decidePlatformTaskReviewWorkflow(env, task.key, "changes_requested", "请补充 CLI 维护流程");
   assert.equal(draft.status, "draft");
-  await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
-  db.prepare(
-    "UPDATE platform_task_repositories SET manifest_status='valid',head_commit=? WHERE task_id=? AND repository_id=?",
-  ).run(HEAD, task.id, repository.id);
+  assert.ok(calls.includes(`cleanup:${reviewer.runtime.id}`));
+  assert.ok(!calls.includes(`cleanup:${author.runtime.id}`));
+  assert.equal(draft.runtime_task_id, author.runtime.id);
+  assert.equal(draft.review?.feedback, "请补充 CLI 维护流程");
+  const resumed = await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
+  assert.equal(resumed.created, false);
+  assert.equal(resumed.runtime.id, author.runtime.id);
+  assert.ok(calls.some((call) => call.includes("message:") && call.includes("请补充 CLI 维护流程")));
+  assert.ok(resumed.task.review?.feedback_delivered_at);
   await submitPlatformTaskForReview(env, task.key, { reviewer: "Alice", submitted_by: "Phil" });
   const approved = await decidePlatformTaskReviewWorkflow(env, task.key, "approved");
   const withPr = await createRepositoryInitializationPullRequest(env, task.key);
@@ -317,6 +368,23 @@ test("Repository Init changes requested returns to author and pushes a revised R
   assert.equal(withPr.pr_number, 42);
   assert.equal(calls.filter((call) => call.startsWith("gh pr create ")).length, 1);
   assert.equal(calls.filter((call) => call.startsWith("git push --set-upstream origin ")).length, 2);
+});
+
+test("requesting changes without feedback leaves Review state and reviewer resources untouched", async () => {
+  const { db, env, repository, task, calls } = setup();
+  await startRepositoryInitialization(env, task.key, "http://localhost:14580", "codex");
+  seedSyncedOverview(db, task.key, repository.id);
+  await submitPlatformTaskForReview(env, task.key, { reviewer: "Alice", submitted_by: "Phil" });
+  const reviewer = await startPlatformTaskReviewAgent(env, task.key, "claude");
+
+  await assert.rejects(
+    () => decidePlatformTaskReviewWorkflow(env, task.key, "changes_requested", ""),
+    /请填写需要修改的内容/,
+  );
+  const unchanged = getPlatformTask(db, task.key)!;
+  assert.equal(unchanged.status, "review");
+  assert.equal(unchanged.runtime_task_id, reviewer.runtime.id);
+  assert.ok(!calls.includes(`cleanup:${reviewer.runtime.id}`));
 });
 
 test("deleting Repository Init closes its PR and removes runtime plus platform state", async () => {

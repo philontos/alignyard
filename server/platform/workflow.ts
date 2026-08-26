@@ -9,14 +9,17 @@ import {
   deletePlatformTask,
   getPlatformTask,
   linkPlatformTaskRuntime,
+  markPlatformReviewFeedbackDelivered,
   markPlatformTaskReviewStarted,
   markPlatformPullRequestMerged,
   recordPlatformPullRequest,
   recordPlatformTaskPush,
+  restoreLatestPlatformAuthorRuntime,
   setPlatformTaskWorkflowError,
   submitPlatformTaskReview,
   updatePlatformTaskCommits,
   updatePlatformTaskExecutionStatus,
+  updatePlatformTaskStatus,
   type PlatformRepository,
   type PlatformTask,
 } from "./catalog.js";
@@ -24,6 +27,7 @@ import {
   changeRequestLabel,
   closeChangeRequest,
   createChangeRequest,
+  findChangeRequest,
   mergeChangeRequest,
   resolveForge,
   type ChangeRequestInput,
@@ -52,11 +56,19 @@ export interface PlatformWorkflowEnv {
   stopRuntimeTask(id: number): Promise<void>;
   cleanupRuntimeTask(id: number): Promise<void>;
   deleteRuntimeTask(id: number): Promise<void>;
+  resumeRuntimeTask(id: number): Promise<void>;
+  sendRuntimeMessage(id: number, message: string): Promise<void>;
+  validateAndSyncTask(task: PlatformTask, runtime: Task): Promise<void>;
   refreshRepository(id: number): Promise<PlatformRepository>;
 }
 
 type InitializationStartResult = { task: PlatformTask; runtime: Task; created: boolean };
 type InitializationMergeResult = { task: PlatformTask; repository: PlatformRepository; cleanup_warning?: string };
+type InitializationChangeRequestRefreshResult = {
+  task: PlatformTask;
+  repository?: PlatformRepository;
+  cleanup_warning?: string;
+};
 const initializationStarts = new WeakMap<object, Map<string, Promise<InitializationStartResult>>>();
 const changeRequestStarts = new WeakMap<object, Map<string, Promise<PlatformTask>>>();
 const changeRequestMerges = new WeakMap<object, Map<string, Promise<InitializationMergeResult>>>();
@@ -111,13 +123,36 @@ export function repositoryInitializationPrompt(input: {
 
 export function taskReviewPrompt(task: PlatformTask): string {
   const repository = editableRepository(task);
-  return `你正在 Alignyard 中 Review Task ${task.key}：${task.title}。
+  return `你正在 Alignyard 的人工 Review 工作区中，辅助 reviewer 审核 Task ${task.key}：${task.title}。
 
-当前分支是提交人已经推送的 ${repository.work_branch}，对比基线是 ${repository.base_branch}（${repository.base_commit || "以平台记录为准"}）。
+当前工作分支：${repository.work_branch}
+对比基线：${repository.base_branch}（${repository.base_commit || "以平台记录为准"}）
 
-请先阅读 Task 描述、工程知识和完整 diff，再检查实现正确性、边界条件、测试、文档与安全风险。你可以按需要直接修改当前 worktree、提交并 push 到同一个工作分支；GitHub/GitLab 权限是唯一权限边界，Alignyard 不限制 reviewer 修改分支。
+你是 reviewer 的辅助 Agent，不是 Review 决策者。请先了解 Task、工程知识和当前 diff，然后等待 reviewer 提问或下达具体指令，不要自行展开完整审查。
 
-如果做了修改，请在结束前确保 git status --short 为空，并将提交 push 到 origin/${repository.work_branch}。不要替人点击“要求修改”“审核通过”、创建或合并 PR/MR；这些决定由 reviewer 在 Alignyard 页面人工确认。最后清晰总结发现、修改、验证结果和仍需人工判断的问题。`;
+你可以按需：
+- 解释 Docs、Specs、ADRs 的内容及变更原因；
+- 查找仓库证据，核对文档与实际工程是否一致；
+- 展示和解释 diff、文件关系与潜在问题；
+- 按 reviewer 要求运行检查；
+- 在 reviewer 明确要求后修改、提交并 push 当前工作分支。
+
+不要自行给出“审核通过”结论，不要替人操作 Review、PR/MR 或合并，也不要在没有明确指令时修改或 push。
+
+如果 reviewer 明确要求你修改，请在结束前确保 git status --short 为空，并使用 git push origin HEAD:${repository.work_branch} 将提交推送到原工作分支。回答时优先提供可核验的文件、diff 和代码证据，支持 reviewer 进行多轮判断。`;
+}
+
+export function repositoryRevisionPrompt(task: PlatformTask): string {
+  const repository = editableRepository(task);
+  const feedback = task.review?.feedback || "请根据 reviewer 的要求继续完善当前工程知识。";
+  return `Alignyard Task ${task.key} 已被 reviewer 要求修改。
+
+Review 反馈：
+${feedback}
+
+请基于当前工作分支 ${repository.work_branch || "已有工作分支"} 和现有 .alignyard/ 继续处理，不要重新执行 ay init，也不要重复首次初始化流程。
+
+请检查反馈涉及的 Docs、Specs、ADRs 和仓库证据，完成必要修改并提交。不要自行 push、提交 Review、创建或合并 PR/MR；这些操作由用户在 Alignyard 页面确认。完成后总结修改内容和验证结果，然后等待用户主动提交 Review。`;
 }
 
 async function performRepositoryInitializationStart(
@@ -134,6 +169,18 @@ async function performRepositoryInitializationStart(
     if (task.runtime_task_id) {
       const existing = env.getRuntimeTask(task.runtime_task_id);
       if (existing?.worktree_path && await env.runner.exists(existing.worktree_path).catch(() => false)) {
+        const execution = task.executions.find((item) => item.runtime_task_id === existing.id);
+        const revision = task.review?.status === "changes_requested";
+        if (revision && repository.work_branch) {
+          await env.runner.exec("git", ["fetch", "origin", repository.work_branch], { cwd: existing.worktree_path });
+          await env.runner.exec("git", ["merge", "--ff-only", `origin/${repository.work_branch}`], { cwd: existing.worktree_path });
+        }
+        await env.resumeRuntimeTask(existing.id);
+        if (execution?.role === "author") updatePlatformTaskExecutionStatus(env.db, key, existing.id, "active");
+        if (revision && task.review && !task.review.feedback_delivered_at) {
+          await env.sendRuntimeMessage(existing.id, repositoryRevisionPrompt(task));
+          task = markPlatformReviewFeedbackDelivered(env.db, key) || task;
+        }
         return { task, runtime: existing, created: false };
       }
     }
@@ -143,7 +190,10 @@ async function performRepositoryInitializationStart(
       throw new PlatformWorkflowError(409, "本机 Repository 尚未就绪，无法创建初始化 worktree");
     }
 
-    const prompt = repositoryInitializationPrompt({ root: env.root, task, platformUrl });
+    const revision = task.review?.status === "changes_requested";
+    const prompt = revision
+      ? repositoryRevisionPrompt(task)
+      : repositoryInitializationPrompt({ root: env.root, task, platformUrl });
     const result = await createRepoTask(
       env.runtimeEnv,
       { id: local.id, name: local.name, mirror_path: local.mirror_path },
@@ -152,7 +202,7 @@ async function performRepositoryInitializationStart(
           ? repository.work_branch
           : repository.base_branch,
         workBranch: repository.work_branch,
-        title: `[${task.key}] Initialize ${repository.name}`,
+        title: revision ? `[${task.key}] Revise ${repository.name}` : `[${task.key}] Initialize ${repository.name}`,
         prompt,
         agent,
         automated: true,
@@ -185,6 +235,7 @@ async function performRepositoryInitializationStart(
         role: "author",
         agent: runtime.agent,
       }) || task;
+      if (revision) task = markPlatformReviewFeedbackDelivered(env.db, key) || task;
     }
     if (!result.ok || !runtime) {
       const message = result.ok ? "runtime Task 创建后未找到" : result.message;
@@ -227,7 +278,7 @@ export async function startRepositoryInitialization(
   }
 }
 
-async function repositoryHead(env: PlatformWorkflowEnv, task: PlatformTask): Promise<{
+async function repositoryHead(env: PlatformWorkflowEnv, task: PlatformTask, requireSynced = true): Promise<{
   runtime: Task;
   repository: ReturnType<typeof editableRepository>;
   head: string;
@@ -244,7 +295,7 @@ async function repositoryHead(env: PlatformWorkflowEnv, task: PlatformTask): Pro
   if (dirty) throw new PlatformWorkflowError(409, "worktree 仍有未提交变更，请让 Agent 完成提交和 sync");
   const head = (await env.runner.exec("git", ["rev-parse", "HEAD"], { cwd: runtime.worktree_path })).trim();
   if (!head || head === runtime.base_commit) throw new PlatformWorkflowError(409, "Task 尚未产生可评审的提交");
-  if (repository.head_commit !== head) {
+  if (requireSynced && repository.head_commit !== head) {
     throw new PlatformWorkflowError(409, "最新提交尚未 sync，请让 Agent 重新执行 ay sync");
   }
   return { runtime, repository, head };
@@ -267,9 +318,13 @@ export async function submitPlatformTaskForReview(
   const submittedBy = typeof input.submitted_by === "string" ? input.submitted_by.trim() : "";
   if (!reviewer || !submittedBy) throw new PlatformWorkflowError(400, "Reviewer 和提交人不能为空");
   try {
-    if (task.task_type === "repository_init") {
-      const editable = editableRepository(task);
-      const hasSharedOverview = task.artifacts.some(
+    const prepared = await repositoryHead(env, task, false);
+    await env.validateAndSyncTask(task, prepared.runtime);
+    const syncedTask = getPlatformTask(env.db, key);
+    if (!syncedTask) throw new PlatformWorkflowError(404, "Task 不存在");
+    if (syncedTask.task_type === "repository_init") {
+      const editable = editableRepository(syncedTask);
+      const hasSharedOverview = syncedTask.artifacts.some(
         (artifact) => artifact.kind === "doc" && artifact.path === ".alignyard/docs/shared/overview.md",
       );
       if (editable.manifest_status !== "valid" || !hasSharedOverview) {
@@ -279,8 +334,8 @@ export async function submitPlatformTaskForReview(
         );
       }
     }
-    const { runtime, head } = await repositoryHead(env, task);
-    const headBranch = task.repositories.find((item) => item.mode === "editable")?.work_branch || runtime.work_branch;
+    const { runtime, head } = await repositoryHead(env, syncedTask);
+    const headBranch = syncedTask.repositories.find((item) => item.mode === "editable")?.work_branch || runtime.work_branch;
     if (!headBranch) throw new PlatformWorkflowError(409, "Task 工作分支不存在");
     await env.runner.exec("git", ["push", "--set-upstream", "origin", headBranch], {
       cwd: runtime.worktree_path!,
@@ -329,7 +384,7 @@ async function performReviewAgentStart(
 
   setPlatformTaskWorkflowError(env.db, key, null);
   try {
-    if (current) {
+    if (current && currentExecution?.role === "reviewer") {
       await env.cleanupRuntimeTask(current.id);
       updatePlatformTaskExecutionStatus(env.db, key, current.id, "cleaned");
     }
@@ -342,7 +397,7 @@ async function performReviewAgentStart(
       { id: local.id, name: local.name, mirror_path: local.mirror_path },
       {
         baseBranch: repository.work_branch,
-        workBranch: repository.work_branch,
+        workBranch: `review/${task.key.toLowerCase()}/${task.review.id}`,
         title: `[${task.key}] Review ${repository.name}`,
         prompt: taskReviewPrompt(task),
         agent,
@@ -406,13 +461,18 @@ export async function decidePlatformTaskReviewWorkflow(
   env: PlatformWorkflowEnv,
   key: string,
   decision: "approved" | "changes_requested",
+  feedback?: unknown,
 ): Promise<PlatformTask> {
   const task = getPlatformTask(env.db, key);
   if (!task) throw new PlatformWorkflowError(404, "Task 不存在");
   if (task.status !== "review" || !task.review) throw new PlatformWorkflowError(409, "Task 当前不在 Review");
+  if (decision === "changes_requested" && !(typeof feedback === "string" && feedback.trim())) {
+    throw new PlatformWorkflowError(400, "请填写需要修改的内容");
+  }
   const runtime = task.runtime_task_id ? env.getRuntimeTask(task.runtime_task_id) : undefined;
+  const runtimeExecution = task.executions.find((item) => item.runtime_task_id === task.runtime_task_id);
   try {
-    if (runtime) {
+    if (runtime && runtimeExecution?.role === "reviewer") {
       if (decision === "approved") {
         await env.stopRuntimeTask(runtime.id);
         updatePlatformTaskExecutionStatus(env.db, key, runtime.id, "stopped");
@@ -421,8 +481,11 @@ export async function decidePlatformTaskReviewWorkflow(
         updatePlatformTaskExecutionStatus(env.db, key, runtime.id, "cleaned");
       }
     }
-    const updated = decidePlatformTaskReview(env.db, key, decision);
+    let updated = decidePlatformTaskReview(env.db, key, decision, feedback);
     if (!updated) throw new PlatformWorkflowError(404, "Task 不存在");
+    if (decision === "changes_requested") {
+      updated = restoreLatestPlatformAuthorRuntime(env.db, key) || updated;
+    }
     setPlatformTaskWorkflowError(env.db, key, null);
     return getPlatformTask(env.db, key) || updated;
   } catch (error) {
@@ -548,18 +611,32 @@ async function performMergeRepositoryInitializationPullRequest(
     if (refreshed.protocol_state !== "ready") {
       throw new PlatformWorkflowError(409, refreshed.protocol_error || `${requestLabel} 已合并，但默认分支尚未通过初始化检查`);
     }
+    task = updatePlatformTaskStatus(env.db, key, "completed") || task;
     setPlatformTaskWorkflowError(env.db, key, null);
 
-    let cleanupWarning: string | undefined;
+    const cleanupWarnings: string[] = [];
     if (runtime?.worktree_path && await env.runner.exists(runtime.worktree_path).catch(() => false)) {
       await env.runner.exec("git", ["push", "origin", "--delete", repository.work_branch || runtime.work_branch], {
         cwd: runtime.worktree_path,
         env: { GIT_TERMINAL_PROMPT: "0" },
       }).catch(() => {});
-      try { await env.cleanupRuntimeTask(runtime.id); } catch (error: any) {
-        cleanupWarning = errorMessage(error);
-        setPlatformTaskWorkflowError(env.db, key, `${requestLabel} 已合并，但清理 worktree 失败：${cleanupWarning}`);
+    }
+    const runtimeIds = [...new Set([
+      ...task.executions.map((execution) => execution.runtime_task_id),
+      ...(task.runtime_task_id ? [task.runtime_task_id] : []),
+    ])];
+    for (const runtimeId of runtimeIds) {
+      if (!env.getRuntimeTask(runtimeId)) continue;
+      try {
+        await env.cleanupRuntimeTask(runtimeId);
+        updatePlatformTaskExecutionStatus(env.db, key, runtimeId, "cleaned");
+      } catch (error: any) {
+        cleanupWarnings.push(errorMessage(error));
       }
+    }
+    const cleanupWarning = cleanupWarnings.length ? cleanupWarnings.join("；") : undefined;
+    if (cleanupWarning) {
+      setPlatformTaskWorkflowError(env.db, key, `${requestLabel} 已合并，但清理 worktree 失败：${cleanupWarning}`);
     }
     return { task: getPlatformTask(env.db, key) || task, repository: refreshed, cleanup_warning: cleanupWarning };
   } catch (error: any) {
@@ -591,6 +668,51 @@ export async function mergeRepositoryInitializationPullRequest(
     return await operation;
   } finally {
     if (operations.get(normalizedKey) === operation) operations.delete(normalizedKey);
+  }
+}
+
+/** Read the forge-side PR/MR state without performing a merge. This is used
+ * when an Author reopens a Task after merging on GitHub or GitLab itself. A
+ * remotely merged request continues through the same repository refresh and
+ * runtime cleanup path as the platform merge action. */
+export async function refreshRepositoryInitializationChangeRequest(
+  env: PlatformWorkflowEnv,
+  key: string,
+): Promise<InitializationChangeRequestRefreshResult> {
+  let task = initTask(env, key);
+  if (!task.pr_number) return { task };
+  if (task.status === "completed") return { task };
+  if (task.pr_state === "merged") return performMergeRepositoryInitializationPullRequest(env, task.key);
+
+  const repository = editableRepository(task);
+  const runtime = task.runtime_task_id ? env.getRuntimeTask(task.runtime_task_id) : undefined;
+  const local = env.getLocalRepository(repository.git_url);
+  const cwd = runtime?.worktree_path && await env.runner.exists(runtime.worktree_path)
+    ? runtime.worktree_path
+    : local?.mirror_path && await env.runner.exists(local.mirror_path) ? local.mirror_path : null;
+  if (!cwd) throw new PlatformWorkflowError(409, "本机 Repository 不存在，无法确认合并请求状态");
+
+  try {
+    const forge = await resolveForge({ runner: env.runner, cwd, gitUrl: repository.git_url });
+    const changeRequest = await findChangeRequest(forge, {
+      runner: env.runner,
+      cwd,
+      gitUrl: repository.git_url,
+      baseBranch: repository.base_branch,
+      headBranch: repository.work_branch || runtime?.work_branch || "",
+    }, task.pr_number);
+    if (!changeRequest) {
+      throw new PlatformWorkflowError(502, `暂时无法确认 ${changeRequestLabel(forge)} #${task.pr_number} 的远端状态`);
+    }
+    recordPlatformPullRequest(env.db, task.key, changeRequest);
+    task = getPlatformTask(env.db, task.key) || task;
+    if (changeRequest.state !== "merged") return { task };
+
+    markPlatformPullRequestMerged(env.db, task.key);
+    return performMergeRepositoryInitializationPullRequest(env, task.key);
+  } catch (error: any) {
+    if (error instanceof PlatformWorkflowError) throw error;
+    throw new PlatformWorkflowError(502, `确认合并请求状态失败：${errorMessage(error)}`);
   }
 }
 

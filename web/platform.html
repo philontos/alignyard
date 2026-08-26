@@ -152,12 +152,26 @@
         <div><p class="eyebrow">HAND OFF FOR REVIEW</p><h2>提交 Review</h2></div>
         <button class="close-button" type="button" data-close-review-dialog aria-label="关闭">×</button>
       </div>
-      <p class="dialog-intro">平台会先确认 worktree 已提交并同步，再把工作分支推送到远端，然后将 Task 分派给 reviewer。</p>
+      <p class="dialog-intro">平台会检查 worktree 提交，执行 ay validate 与 ay sync，再推送工作分支并将 Task 分派给 reviewer。</p>
       <label class="field"><span>Reviewer</span><select name="reviewer_user_id" required></select></label>
       <input name="task_key" type="hidden" />
       <p class="form-hint">Reviewer 来自已登录过 Alignyard 的用户；GitHub / GitLab 仍决定其是否能拉取、修改和推送该分支。</p>
       <p class="form-error" id="review-form-error"></p>
       <div class="dialog-actions"><button class="button secondary" type="button" data-close-review-dialog>取消</button><button class="button primary" id="review-submit" type="submit">推送并分派</button></div>
+    </form>
+  </div>
+
+  <div class="dialog-backdrop" id="changes-requested-dialog" hidden>
+    <form class="dialog-card review-dialog" id="changes-requested-form">
+      <div class="dialog-head">
+        <div><p class="eyebrow">REQUEST CHANGES</p><h2>要求修改</h2></div>
+        <button class="close-button" type="button" data-close-changes-requested aria-label="关闭">×</button>
+      </div>
+      <p class="dialog-intro">说明需要修改的内容。Task 退回后，平台会恢复 Author 工作区，并把这段反馈交给 Agent。</p>
+      <label class="field"><span>Review 反馈</span><textarea name="feedback" rows="5" required placeholder="说明问题、相关文件和期望结果"></textarea></label>
+      <input name="task_key" type="hidden" />
+      <p class="form-error" id="changes-requested-error"></p>
+      <div class="dialog-actions"><button class="button secondary" type="button" data-close-changes-requested>取消</button><button class="button primary" id="changes-requested-submit" type="submit">退回修改</button></div>
     </form>
   </div>
 
@@ -181,7 +195,6 @@
 
   <div class="drawer-backdrop" id="task-drawer" hidden>
     <aside class="task-drawer" aria-label="Task 详情">
-      <button class="drawer-close" id="drawer-close" type="button" aria-label="关闭">×</button>
       <div id="task-detail"></div>
     </aside>
     <section class="agent-workspace" id="agent-workspace" aria-label="Agent 工作区" hidden>
@@ -251,6 +264,7 @@
   <script src="/i18n.js"></script>
   <script>I18N.init(); I18N.applyStatic();</script>
   <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/addon-canvas.js"></script>
   <script src="/vendor/addon-unicode11.js"></script>
   <script type="module" src="/js/platform.js"></script>
 </body>

@@ -114,6 +114,10 @@ test("platform Task requires at least one editable repository and validates stat
   assert.equal(updatePlatformTaskStatus(db, task.key, "review")?.status, "review");
   assert.equal(updatePlatformTaskStatus(db, task.key, "approved")?.status, "approved");
   assert.throws(() => updatePlatformTaskStatus(db, task.key, "draft"), PlatformValidationError);
+  const completed = updatePlatformTaskStatus(db, task.key, "completed");
+  assert.equal(completed?.status, "completed");
+  assert.ok(completed?.completed_at);
+  assert.throws(() => updatePlatformTaskStatus(db, task.key, "approved"), PlatformValidationError);
   assert.throws(() => updatePlatformTaskStatus(db, task.key, "in_review"), PlatformValidationError);
   assert.throws(() => updatePlatformTaskStatus(db, task.key, "unknown"), PlatformValidationError);
 });
@@ -187,6 +191,24 @@ test("an approved Repository Init with an open change request can return to draf
   assert.equal(draft?.pr_state, "open");
   assert.equal(draft?.pr_number, 42);
   assert.equal(draft?.repositories[0].manifest_status, "waiting");
+});
+
+test("Repository Init completes only after its change request is merged and Repository is ready", () => {
+  const db = memoryDb();
+  const repository = createPlatformRepository(db, {
+    name: "new-service", git_url: "git@example/new-service", created_by: "Phil",
+  });
+  const task = createRepositoryInitializationTask(db, repository.id, "Phil");
+  db.prepare("UPDATE platform_tasks SET status='approved' WHERE id=?").run(task.id);
+
+  assert.throws(() => updatePlatformTaskStatus(db, task.key, "completed"), /合并请求已合入/);
+  markPlatformPullRequestMerged(db, task.key);
+  assert.throws(() => updatePlatformTaskStatus(db, task.key, "completed"), /Repository 就绪/);
+  setPlatformRepositoryProtocolState(db, repository.id, "ready");
+
+  const completed = updatePlatformTaskStatus(db, task.key, "completed");
+  assert.equal(completed?.status, "completed");
+  assert.ok(completed?.completed_at);
 });
 
 test("platform Task records its runtime, commits, workflow error, and pull request", () => {
