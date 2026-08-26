@@ -1,6 +1,6 @@
-// Schema setup for the dispatcher DB: create tables, reconcile columns onto
+// Schema setup for the Alignyard DB: create tables, reconcile columns onto
 // DBs created by older schemas (SQLite has no ADD COLUMN IF NOT EXISTS), and run
-// the one-time ./data -> ~/.task-dispatcher path rewrite. Pulled out of db.ts so
+// the one-time project-local data path rewrite. Pulled out of db.ts so
 // it can run against ANY sqlite handle (incl. an in-memory test DB) without
 // opening the real database file.
 import type Database from "better-sqlite3";
@@ -43,8 +43,44 @@ CREATE INDEX IF NOT EXISTS platform_sessions_user_id
 CREATE INDEX IF NOT EXISTS platform_sessions_expires_at
   ON platform_sessions(expires_at);
 
+-- A Runner is a user-owned execution node. It keeps Git credentials, mirrors,
+-- worktrees, tmux sessions and Agent logins on the developer's machine and only
+-- maintains an outbound authenticated connection to the shared platform.
+CREATE TABLE IF NOT EXISTS platform_runners (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  os TEXT NOT NULL,
+  arch TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  protocol_version INTEGER NOT NULL DEFAULT 1,
+  capabilities TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'offline',
+  last_seen_at TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS platform_runners_user_id
+  ON platform_runners(user_id, updated_at DESC);
+
+-- Pairing codes are deliberately short lived and single use. The browser
+-- creates one for the authenticated user; a newly installed Runner exchanges
+-- it for its long-lived device credential without receiving a browser session.
+CREATE TABLE IF NOT EXISTS platform_runner_pairings (
+  code_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  expires_at TEXT NOT NULL,
+  claimed_at TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS platform_runner_pairings_expires_at
+  ON platform_runner_pairings(expires_at);
+
 CREATE TABLE IF NOT EXISTS repos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  host_id INTEGER,
   name TEXT NOT NULL,
   git_url TEXT NOT NULL,
   token TEXT,
@@ -67,6 +103,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   session TEXT NOT NULL,
   status TEXT DEFAULT 'running', -- running | done | error | cleaned
   error TEXT,
+  kind TEXT DEFAULT 'repo',
+  host_id INTEGER,
+  cwd TEXT,
   agent TEXT DEFAULT 'claude',   -- which coding-agent CLI runs the task: claude | codex | kimi
   agent_model TEXT,              -- non-Claude: the -m model; NULL == the node's default model
   created_at TEXT DEFAULT (datetime('now'))
@@ -87,37 +126,16 @@ CREATE TABLE IF NOT EXISTS task_references (
   PRIMARY KEY (task_id, alias)
 );
 
--- registered machines reachable over ssh/mosh. Business operations are sent to
--- the target's Switchyard command surface; paths/tasks/repos stay in its own DB.
+-- Runner-local ownership anchor. Extra columns from older databases are ignored.
 CREATE TABLE IF NOT EXISTS hosts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   target TEXT NOT NULL,           -- ssh target, e.g. user@host
-  kind TEXT DEFAULT 'ssh',        -- ssh | mosh
+  kind TEXT DEFAULT 'local',
+  data_dir TEXT,
+  status TEXT DEFAULT 'unknown',
+  node_id TEXT,
   created_at TEXT DEFAULT (datetime('now'))
-);
-
--- alternate model backends for claude. A task with provider_id set launches
--- claude with these as ANTHROPIC_* env vars (base_url/auth_token/model/…), so
--- the same Claude Code TUI drives e.g. GLM via its Anthropic-compatible
--- endpoint. provider_id NULL on a task == the machine's default claude login.
-CREATE TABLE IF NOT EXISTS providers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,             -- display name, e.g. "GLM-4.6"
-  base_url TEXT,                  -- ANTHROPIC_BASE_URL (the compatible endpoint)
-  auth_token TEXT,                -- ANTHROPIC_AUTH_TOKEN (the provider's key)
-  model TEXT,                     -- ANTHROPIC_MODEL
-  small_fast_model TEXT,          -- ANTHROPIC_SMALL_FAST_MODEL (background/title model)
-  created_at TEXT DEFAULT (datetime('now'))
-);
-
--- Evidence produced by onboarding checks. This stores facts such as the last
--- successful mobile Safari check-in, never credentials or a cached "completed"
--- flag; current readiness is always re-derived from live system state.
-CREATE TABLE IF NOT EXISTS onboarding_events (
-  kind TEXT PRIMARY KEY,
-  detail TEXT,
-  occurred_at TEXT DEFAULT (datetime('now'))
 );
 
 -- Alignyard's shared control-plane catalog. These rows only identify a Git
@@ -223,6 +241,59 @@ CREATE TABLE IF NOT EXISTS platform_task_executions (
 CREATE INDEX IF NOT EXISTS platform_task_executions_task_id
   ON platform_task_executions(task_id, id DESC);
 
+-- Connected Runner executions use a platform UUID instead of treating the
+-- Runner's local integer Task id as globally unique. The legacy execution table
+-- remains for local all-in-one development mode while production uses this one.
+CREATE TABLE IF NOT EXISTS platform_runner_executions (
+  id TEXT PRIMARY KEY,
+  task_id INTEGER NOT NULL,
+  runner_id TEXT NOT NULL,
+  runner_task_id INTEGER,
+  actor TEXT NOT NULL,
+  actor_user_id INTEGER,
+  role TEXT NOT NULL,
+  agent TEXT,
+  status TEXT NOT NULL DEFAULT 'queued',
+  session TEXT,
+  work_branch TEXT,
+  base_commit TEXT,
+  head_commit TEXT,
+  error TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS platform_runner_executions_task_id
+  ON platform_runner_executions(task_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS platform_runner_executions_runner_id
+  ON platform_runner_executions(runner_id, created_at DESC);
+
+-- Short-lived credentials passed to an Agent are scoped to one execution and
+-- one Task sync endpoint. Runner device credentials are never exposed to it.
+CREATE TABLE IF NOT EXISTS platform_execution_tokens (
+  token_hash TEXT PRIMARY KEY,
+  execution_id TEXT NOT NULL,
+  task_key TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS platform_execution_tokens_execution_id
+  ON platform_execution_tokens(execution_id);
+
+-- Owner-local idempotency/recovery map. A Platform retry or a reinstalled
+-- Runner can adopt the runtime Task already created for the same execution
+-- instead of creating a second worktree and Agent session.
+CREATE TABLE IF NOT EXISTS runner_execution_bindings (
+  execution_id TEXT PRIMARY KEY,
+  runner_task_id INTEGER NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS runner_execution_bindings_task_id
+  ON runner_execution_bindings(runner_task_id);
+
 -- Normalized manifest output reported by a local ay sync. The platform can
 -- link and review these artifacts without ever reading the private checkout.
 CREATE TABLE IF NOT EXISTS platform_artifacts (
@@ -283,30 +354,15 @@ function reconcileColumns(db: DB) {
   addColumn(db, "repos", "mirror_path", "TEXT");
   addColumn(db, "tasks", "worktree_path", "TEXT NOT NULL DEFAULT ''");
   addColumn(db, "tasks", "base_commit", "TEXT");              // exact dispatch baseline for read-only diffs
-  // machine model (the hosts table doubles as "machines")
-  addColumn(db, "hosts", "data_dir", "TEXT");                  // the machine's ~/.task-dispatcher
-  addColumn(db, "hosts", "status", "TEXT DEFAULT 'unknown'");  // online | offline | unknown
-  addColumn(db, "hosts", "last_checked", "TEXT");
-  addColumn(db, "hosts", "tdsp_bin", "TEXT");                  // absolute path to the node's tdsp wrapper (bootstrapped); null = not yet
-  // Stable peer identity + Tailscale-managed SSH transport. These fields are
-  // metadata only: repos/tasks/worktrees remain in the target node's own DB.
-  addColumn(db, "hosts", "node_id", "TEXT");                   // target Switchyard instance id (stable across network changes)
-  addColumn(db, "hosts", "tailscale_id", "TEXT");              // current Tailscale node id
-  addColumn(db, "hosts", "tailscale_dns", "TEXT");
-  addColumn(db, "hosts", "tailscale_ip", "TEXT");
-  addColumn(db, "hosts", "tailscale_user", "TEXT");
-  addColumn(db, "hosts", "ssh_port", "INTEGER DEFAULT 22");
-  addColumn(db, "hosts", "ssh_ready", "INTEGER");              // null=pending/unknown, 0=unavailable, 1=ready
-  addColumn(db, "hosts", "managed_ssh", "INTEGER DEFAULT 0");  // use this instance's dedicated peer key
-  addColumn(db, "hosts", "connection_source", "TEXT");         // manual | tailscale
-  addColumn(db, "repos", "host_id", "INTEGER");                // which machine this repo lives on
+  addColumn(db, "hosts", "data_dir", "TEXT");
+  addColumn(db, "hosts", "status", "TEXT DEFAULT 'unknown'");
+  addColumn(db, "hosts", "node_id", "TEXT");
+  addColumn(db, "repos", "host_id", "INTEGER");
   // repo-less local quick tasks (kind='local'): no mirror/worktree, repo_id=0,
   // branch/worktree columns are "" — they carry their own host_id and cwd.
   addColumn(db, "tasks", "kind", "TEXT DEFAULT 'repo'");       // 'repo' | 'local'
   addColumn(db, "tasks", "host_id", "INTEGER");                // local tasks: which machine
   addColumn(db, "tasks", "cwd", "TEXT");                       // local tasks: working dir
-  addColumn(db, "tasks", "claude_session", "TEXT");           // Claude session id, captured by the SessionStart hook
-  addColumn(db, "tasks", "provider_id", "INTEGER");           // alternate model backend; NULL == default claude login
   // the agent axis: which coding-agent CLI runs the task (claude default | codex
   // | kimi), plus an optional non-Claude -m model. Backfills to 'claude'.
   addColumn(db, "tasks", "agent", "TEXT DEFAULT 'claude'");
@@ -322,6 +378,7 @@ function reconcileColumns(db: DB) {
   addColumn(db, "platform_tasks", "current_assignee", "TEXT");
   addColumn(db, "platform_tasks", "current_assignee_user_id", "INTEGER");
   addColumn(db, "platform_tasks", "runtime_task_id", "INTEGER");
+  addColumn(db, "platform_tasks", "runner_execution_id", "TEXT");
   addColumn(db, "platform_tasks", "workflow_error", "TEXT");
   addColumn(db, "platform_tasks", "pr_number", "INTEGER");
   addColumn(db, "platform_tasks", "pr_url", "TEXT");

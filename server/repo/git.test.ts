@@ -4,8 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fetchBranch, fetchMirror, readRemoteBranchFile, addDetachedWorktreeFromBranch, addWorktreeFromBranch } from "./git.ts";
-import { localRunner } from "../fleet/runner.ts";
-import type { Runner } from "../fleet/runner.ts";
+import { localExecutor } from "../core/local-executor.ts";
+import type { LocalExecutor } from "../core/local-executor.ts";
 
 // --- unit: pin the refspecs (the whole fix is "write the tracking ref, never the
 // local head", so the refspec target is the contract worth guarding) ----------
@@ -17,7 +17,7 @@ function fakeRunner() {
     exec: async (file: string, args: string[]) => { calls.push({ file, args }); return ""; },
     async mkdirp() {}, async exists() { return false; }, async rmrf() {},
     async putDir() {}, async putFile() {},
-  } as unknown as Runner;
+  } as unknown as LocalExecutor;
   return { runner, calls };
 }
 
@@ -65,7 +65,7 @@ test("readRemoteBranchFile fetches then reads a file without creating a worktree
     },
     async mkdirp() {}, async exists() { return false; }, async readText() { return null; }, async rmrf() {},
     async putDir() {}, async putFile() {},
-  } as unknown as Runner;
+  } as unknown as LocalExecutor;
   assert.equal(await readRemoteBranchFile(runner, "/m.git", "main", ".alignyard/repository.yaml"), "version: 1\n");
   assert.deepEqual(calls.map((call) => call.args[0]), ["fetch", "show"]);
   assert.equal(calls[1].args[1], "refs/remotes/origin/main:.alignyard/repository.yaml");
@@ -75,7 +75,7 @@ test("readRemoteBranchFile fetches then reads a file without creating a worktree
 
 // run a real git command in a real repo; identity via env so no global config needed
 async function git(cwd: string, ...args: string[]): Promise<string> {
-  return localRunner.exec("git", args, {
+  return localExecutor.exec("git", args, {
     cwd,
     env: {
       GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
@@ -120,7 +120,7 @@ test("can create a task whose base branch is already checked out in another work
 
     // new task off that same, currently-checked-out branch — must NOT throw
     const wtNew = path.join(root, "wt-new");
-    await addWorktreeFromBranch(localRunner, mirror, wtNew, "feat/99-new", "feat/base");
+    await addWorktreeFromBranch(localExecutor, mirror, wtNew, "feat/99-new", "feat/base");
 
     assert.ok(fs.existsSync(wtNew), "new worktree was created");
     assert.equal(await headOf(wtNew), "feat/99-new", "new worktree is on its own work branch");
@@ -141,7 +141,7 @@ test("falls back to the local head when the base branch is not on origin (unpush
     await git(mirror, "worktree", "add", wtLocal, "feat/local-only");
 
     const wtNew = path.join(root, "wt-new2");
-    await addWorktreeFromBranch(localRunner, mirror, wtNew, "feat/100-x", "feat/local-only");
+    await addWorktreeFromBranch(localExecutor, mirror, wtNew, "feat/100-x", "feat/local-only");
 
     assert.ok(fs.existsSync(wtNew), "new worktree was created from the local head");
     assert.equal(await headOf(wtNew), "feat/100-x");
@@ -157,7 +157,7 @@ test("reference worktrees are detached and remain pinned to the resolved commit"
     const expected = (await git(seed, "rev-parse", "feat/base")).trim();
     const wtReference = path.join(root, "refs", "api");
 
-    const resolved = await addDetachedWorktreeFromBranch(localRunner, mirror, wtReference, "feat/base");
+    const resolved = await addDetachedWorktreeFromBranch(localExecutor, mirror, wtReference, "feat/base");
     assert.equal(resolved, expected);
     assert.equal(await headOf(wtReference), "HEAD", "a reference does not claim a branch");
     assert.equal((await git(wtReference, "rev-parse", "HEAD")).trim(), expected);

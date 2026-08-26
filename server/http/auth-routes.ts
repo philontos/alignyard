@@ -36,7 +36,7 @@ export function registerAuthRoutes(app: Express, db: DB, env: NodeJS.ProcessEnv 
       const clientId = googleClientId(env);
       const configurationError = googleConfigurationError(env);
       if (configurationError) return res.status(503).json({ error: configurationError });
-      res.json({ mode, google_client_id: mode === "google" ? clientId : null });
+      res.json({ mode, execution_mode: "runner", google_client_id: mode === "google" ? clientId : null });
     } catch (error: any) {
       res.status(503).json({ error: String(error?.message || error) });
     }

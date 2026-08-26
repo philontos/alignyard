@@ -61,12 +61,14 @@ test("ay sync validates and posts the bounded knowledge snapshot", async () => {
   try {
     await runAy(["init", root], result.io);
     await runAy(["new", "doc", "overview", "--scope", "shared", "--repository", root], result.io);
+    const tokenFile = path.join(root, "execution-token");
+    fs.writeFileSync(tokenFile, "secret\n", { mode: 0o600 });
     const code = await runAy(["sync", root], result.io, {
       env: {
         AY_PLATFORM_URL: "http://127.0.0.1:14599",
         AY_TASK_KEY: "AY-007",
         AY_REPOSITORY_ID: "12",
-        AY_SESSION_TOKEN: "secret",
+        AY_PLATFORM_TOKEN_FILE: tokenFile,
       },
       fetch: async (input, init) => {
         requestUrl = String(input);

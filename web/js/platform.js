@@ -4,13 +4,8 @@ import {
   openPlatformAgentWorkspace,
   platformAgentWorkspaceIsOpen,
 } from "./platform-agent.js";
-import {
-  closeCodeView,
-  initCodeView,
-  isCodeViewOpen,
-  openTaskCodeContext,
-} from "./features/codeview.js";
 import { displayGitUrl, formatRepoDate } from "./core/repo-details.js";
+import { createRunnerOnboarding } from "./features/runner-onboarding.js";
 
 const state = {
   view: "tasks",
@@ -109,6 +104,13 @@ function toast(message, kind = "success") {
   $("#toast-region").append(element);
   setTimeout(() => element.remove(), 2800);
 }
+
+const runnerOnboarding = createRunnerOnboarding({
+  api,
+  authConfig: () => state.authConfig,
+  currentUser: () => state.currentUser,
+  toast,
+});
 
 function showGlobalLoading(title, detail = "") {
   $("#global-loading-title").textContent = title;
@@ -354,6 +356,18 @@ function taskRepositoryOptions(preselectId) {
   }).join("");
   $$('.repo-option input[type="checkbox"]', target).forEach((checkbox) => checkbox.addEventListener("change", () => {
     const row = checkbox.closest(".repo-option");
+    if (checkbox.checked && runnerOnboarding.enabled()) {
+      $$('.repo-option input[type="checkbox"]', target).forEach((candidate) => {
+        if (candidate === checkbox || !candidate.checked) return;
+        candidate.checked = false;
+        candidate.closest(".repo-option").classList.remove("selected");
+        const previous = state.repositories.find((item) => item.id === Number(candidate.value));
+        if (previous) {
+          taskBranchRequests.get(previous.id)?.abort();
+          taskBranchRequests.delete(previous.id);
+        }
+      });
+    }
     row.classList.toggle("selected", checkbox.checked);
     const repository = state.repositories.find((item) => item.id === Number(checkbox.value));
     if (!repository) return;
@@ -595,6 +609,10 @@ async function submitTask(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const selectedRows = $$(".repo-option", form).filter((row) => $('input[type="checkbox"]', row).checked);
+  if (runnerOnboarding.enabled() && selectedRows.length !== 1) {
+    $("#task-form-error").textContent = "请选择一个 Repository";
+    return;
+  }
   if (selectedRows.some((row) => $('[data-repository-branch]', row).dataset.state === "loading")) {
     $("#task-form-error").textContent = "正在加载分支，请稍候";
     return;
@@ -641,24 +659,23 @@ async function submitRepository(event) {
     name: String(values.name || "").trim(),
     git_url: String(values.git_url || "").trim(),
     default_branch: String(values.default_branch || "").trim(),
-    token: String(values.token || "").trim() || null,
   };
   const submit = $("#add-repository-submit");
   submit.disabled = true;
   submit.textContent = "添加中…";
   $("#repo-form-error").textContent = "";
   try {
-    const localResult = await api("/api/repos", { method: "POST", body: JSON.stringify(localPayload) });
-    const localRepositories = await api("/api/repos");
-    const localRepository = localRepositories.find((item) => item.id === localResult.id);
-    if (!localRepository) throw new Error("本地 Repository 添加后未找到");
-    localPayload.default_branch = localRepository.default_branch;
+    if (!localPayload.default_branch) localPayload.default_branch = "main";
     let repository;
+    if (!runnerOnboarding.enabled()) {
+      const localResult = await api("/api/repos", { method: "POST", body: JSON.stringify(localPayload) });
+      const localRepositories = await api("/api/repos");
+      const localRepository = localRepositories.find((item) => item.id === localResult.id);
+      if (!localRepository) throw new Error("本地 Repository 添加后未找到");
+      localPayload.default_branch = localRepository.default_branch;
+    }
     try {
-      repository = await api("/api/platform/repositories", {
-        method: "POST",
-        body: JSON.stringify({ ...localPayload, token: undefined }),
-      });
+      repository = await api("/api/platform/repositories", { method: "POST", body: JSON.stringify(localPayload) });
     } catch (error) {
       const repositories = await api("/api/platform/repositories");
       const normalize = (value) => String(value || "").trim().replace(/\/+$/, "").replace(/\.git$/i, "");
@@ -718,11 +735,7 @@ function pendingAction(task, action) {
 }
 
 function taskNextAction(task) {
-  if (task.task_type === "repository_init") return initTaskActions(task);
-  if (task.status === "draft") return `<button class="button secondary" type="button" data-submit-review>提交 Review</button>`;
-  if (task.status === "review") return `<button class="button secondary" type="button" data-review-decision="changes_requested">要求修改</button><button class="button primary" type="button" data-review-decision="approved">审核通过</button>`;
-  if (task.status === "approved" && taskBelongsToCurrentUser(task)) return `<button class="button primary" type="button" data-set-status="completed">标记完成</button>`;
-  return "";
+  return initTaskActions(task);
 }
 
 function initWorkflowStage(task) {
@@ -842,17 +855,6 @@ function taskLocalCommands(task) {
     : ["ay validate .", sync];
 }
 
-function openTaskChanges(task, path = null) {
-  if (!task.runtime_task_id || !task.runtime_has_worktree) {
-    toast("Task worktree 已清理，当前无法读取本地 diff", "error");
-    return;
-  }
-  openTaskCodeContext(task.runtime_task_id, `${task.key} ${taskDisplayTitle(task)}`, {
-    tab: "changes",
-    ...(path ? { path } : {}),
-  });
-}
-
 function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
   const task = state.tasks.find((item) => item.key === key);
   if (!task) return;
@@ -873,8 +875,7 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
     ? `Reviewer 已要求修改，Task 已退回 ${escapeHtml(task.owner)}。继续 Agent 时会恢复 Author 工作区并传入本轮反馈。`
     : `由 ${escapeHtml(task.review?.submitted_by || "")} 于 ${escapeHtml(formatDate(task.review?.submitted_at))} 分派；当前状态：${escapeHtml(task.review?.status || "")}。工作分支已推送到远端，reviewer 可在右侧选择 Agent 进入对应 worktree。`;
   const reviewHandoff = task.review ? `<section class="detail-workflow"><strong>Review · ${escapeHtml(task.review.reviewer)}</strong><p>${reviewSummary}</p>${reviewFeedback}</section>` : "";
-  const canInspectChanges = !!task.runtime_task_id && !!task.runtime_has_worktree;
-  const artifacts = task.artifacts?.length ? task.artifacts.map((artifact) => `<button class="artifact-row" type="button" data-artifact-path="${escapeHtml(artifact.path)}" ${canInspectChanges ? "" : "disabled"}><span class="artifact-kind ${artifactKind(artifact.kind)}">${escapeHtml(artifactKind(artifact.kind).slice(0, 4))}</span><span><strong>${escapeHtml(artifact.title || artifact.path)}</strong><small>${escapeHtml(artifact.path)}</small></span><span>${escapeHtml(artifact.review_status)} <i aria-hidden="true">›</i></span></button>`).join("") : `<div class="detail-empty">尚未收到 manifest 结果。成员在本地执行 <code>ay sync</code> 后，这里会显示 docs、specs 和 ADR 的差异。</div>`;
+  const artifacts = task.artifacts?.length ? task.artifacts.map((artifact) => `<div class="artifact-row"><span class="artifact-kind ${artifactKind(artifact.kind)}">${escapeHtml(artifactKind(artifact.kind).slice(0, 4))}</span><span><strong>${escapeHtml(artifact.title || artifact.path)}</strong><small>${escapeHtml(artifact.path)}</small></span><span>${escapeHtml(artifact.review_status)}</span></div>`).join("") : `<div class="detail-empty">尚未收到 manifest 结果。成员在本地执行 <code>ay sync</code> 后，这里会显示 docs、specs 和 ADR 的同步快照。</div>`;
   const displayTitle = taskDisplayTitle(task);
   const description = task.task_type === "repository_init"
     ? ""
@@ -884,7 +885,7 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
     <div class="detail-meta">${statusPill(task.status)}<span>负责人：${escapeHtml(task.owner)}</span><span>当前处理人：${escapeHtml(task.current_assignee || task.owner)}</span><span>${task.completed_at ? `完成于 ${escapeHtml(formatDate(task.completed_at))}` : `创建于 ${escapeHtml(formatDate(task.created_at))}`}</span></div>
     ${workflowNote}${reviewHandoff}${task.task_type === "repository_init" ? "" : commandList}
     <section class="detail-section"><div class="detail-section-head"><h2>Repositories · ${task.repositories.length}</h2><span class="protocol-badge">peer worktrees</span></div><div class="detail-repos">${task.repositories.map(detailRepository).join("")}</div></section>
-    <section class="detail-section"><div class="detail-section-head"><h2>工程知识 · ${task.artifacts?.length || 0}</h2>${canInspectChanges ? `<button class="text-button review-changes" type="button" data-open-task-changes>查看全部变更</button>` : `<span class="protocol-badge">manifest snapshot</span>`}</div><div class="artifact-list">${artifacts}</div></section>
+    <section class="detail-section"><div class="detail-section-head"><h2>工程知识 · ${task.artifacts?.length || 0}</h2><span class="protocol-badge">同步快照</span></div><div class="artifact-list">${artifacts}</div></section>
     <div class="detail-actions">${taskNextAction(task)}</div>`;
   $("#task-drawer").hidden = false;
   $("#drawer-close").addEventListener("click", closeTaskDetail);
@@ -903,8 +904,6 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
   }));
   $('[data-run-init]', $("#task-detail"))?.addEventListener("click", (event) => runInitTask(task.key, event.currentTarget));
   $('[data-open-agent]', $("#task-detail"))?.addEventListener("click", () => openPlatformAgentWorkspace(workspaceTask));
-  $('[data-open-task-changes]', $("#task-detail"))?.addEventListener("click", () => openTaskChanges(task));
-  $$('[data-artifact-path]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => openTaskChanges(task, button.dataset.artifactPath)));
   $('[data-init-review]', $("#task-detail"))?.addEventListener("click", () => openReviewDialog(task));
   const requestLabel = taskChangeRequestLabel(task);
   $('[data-init-pr]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "pull-request", event.currentTarget, `${requestLabel} 已创建`));
@@ -1081,15 +1080,17 @@ async function loadData({ silent = false } = {}) {
   if (state.loading) return;
   state.loading = true;
   try {
-    const [repositories, tasks, members] = await Promise.all([
+    const [repositories, tasks, members, runners] = await Promise.all([
       api("/api/platform/repositories"),
       api("/api/platform/tasks"),
       api("/api/platform/members"),
+      runnerOnboarding.enabled() ? api("/api/runners") : Promise.resolve([]),
     ]);
     state.repositories = repositories;
     state.tasks = tasks;
     state.members = members;
     renderAll();
+    runnerOnboarding.setRunners(runners);
     const selectedKey = state.selectedTask?.key;
     if (selectedKey && !$("#task-drawer").hidden && state.tasks.some((task) => task.key === selectedKey)) {
       openTaskDetail(selectedKey, { refreshChangeRequest: false });
@@ -1226,6 +1227,7 @@ function bindEvents() {
   }));
   $("#create-task-form").addEventListener("submit", submitTask);
   $("#add-repository-form").addEventListener("submit", submitRepository);
+  runnerOnboarding.bind();
   $("#review-form").addEventListener("submit", submitReview);
   $("#changes-requested-form").addEventListener("submit", submitChangesRequested);
   $$('[data-close-dialog]').forEach((button) => button.addEventListener("click", closeTaskDialog));
@@ -1262,7 +1264,6 @@ function bindEvents() {
     if (event.key !== "Escape") return;
     const openAgentPicker = $("[data-agent-picker-menu]:not([hidden])")?.closest("[data-agent-picker]");
     if (openAgentPicker) closeAgentPicker(openAgentPicker);
-    else if (isCodeViewOpen()) closeCodeView();
     else if (platformAgentWorkspaceIsOpen() && matchMedia("(max-width: 760px)").matches) closePlatformAgentWorkspace();
     else if (!$("#confirm-dialog").hidden) closeConfirmDialog(false);
     else if (!$("#repository-detail-dialog").hidden) closeRepositoryDetails();
@@ -1273,7 +1274,6 @@ function bindEvents() {
     else if (!$("#task-drawer").hidden) closeTaskDetail();
   });
   wireDynamicButtons();
-  initCodeView();
   initPlatformAgentWorkspace({
     onError: (message) => toast(message, "error"),
     onStartReview: startReviewAgent,
@@ -1284,6 +1284,7 @@ bindEvents();
 setView(location.hash.slice(1) || "tasks", { updateHash: false });
 if (await initializeAuthentication()) await loadData();
 setInterval(() => {
+  if (runnerOnboarding.enabled()) void runnerOnboarding.refresh();
   if (state.currentUser && state.tasks.some((task) => task.task_type === "repository_init" && task.pr_state !== "merged")) {
     loadData({ silent: true });
   }

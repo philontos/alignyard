@@ -8,54 +8,54 @@ relations:
   - doc.shared.architecture
   - doc.shared.development
   - doc.server.http-api
+  - doc.server.runner-protocol
+  - adr.shared.platform-runner-separation
 ---
 
 # 概述
 
-`web/` 是由 Express 直接提供的无构建浏览器代码。当前存在两个页面入口：`platform.html` 是根路径 `/` 的 Alignyard 协作界面；`index.html` 是保留的 Switchyard 节点控制界面。两者共享 vendored xterm、部分 `web/js/core/` 能力和同一个后端进程，但页面状态与产品流程不同。
+`web/` 是由 Platform 直接提供的唯一浏览器应用，使用原生 HTML/CSS/ES modules，无 bundler。入口为 `web/platform.html`；不存在第二套本地控制台。
 
-## Alignyard 页面
+## 能力
 
-`web/platform.html` 引入 `web/css/platform.css`、xterm 资源与 `web/js/platform.js`。主要流程包括：
+- Google 登录、退出和成员选择。
+- 无凭据 Repository 登记、协议 refresh 与 Repository Init。
+- change / repository_init Task 创建、筛选、详情和清理。
+- Author → Review → changes requested/approved → PR/MR → merge 闭环。
+- 显式同步的工程知识 artifact 展示。
+- 当前用户 Runner 状态、macOS 安装与重新连接引导。
+- 通过 execution ID 打开的本地 Agent 终端。
 
-- Repository 列表、登记、删除、协议 refresh 与 Initialize。
-- Task 列表、筛选、创建、详情、状态、run、Review、PR/MR、Merge 和删除。
-- 工程知识 artifact 展示和任务关联 Repository 信息。
-- `web/js/platform-agent.js` 在 Task drawer 内打开 runtime Agent 终端，通过共享 `core/pty-socket.js` 连接 `/pty`。
+Web 不浏览 Runner 源码树，不接收 Repository token、设备 token、本机路径或本地 Task ID。页面展示的工程知识来自 Platform 已验证快照，不代表云端能读取 Runner 文件系统。
 
-`platform.js` 在内存 `state` 中保存 repositories、tasks、当前 view 和筛选；初始加载并行请求 `/api/platform/repositories` 与 `/api/platform/tasks`。新增 Repository 时先调用本地 `/api/repos` 准备 owner-local mirror，再登记平台 Repository 并 refresh 协议状态。
+## Runner 安装引导
 
-## Switchyard 页面
+`web/js/features/runner-onboarding.js` 管理 Runner indicator、设备列表、pairing code 和安装 dialog；样式位于 `web/css/features/runner-onboarding.css`。
 
-`web/index.html` 与 `web/js/main.js` 组成原有节点控制台。`main.js` 负责启动基础 DOM、主题、语言、移动导航和全局桥接，再由 `web/js/features/` 分别加载：
+浏览器不能静默安装本机 daemon。页面生成包含当前 origin 和短期 pairing code 的命令，用户复制到 Terminal 明确执行。LaunchAgent 启动 Runner 后，页面轮询在线状态并自动结束引导。
 
-- `repos.js`、`tasks.js`：本地/远端 Repository 与 Task 派发。
-- `hosts.js`、`onboarding.js`：节点、Tailscale、SSH 配对、更新和设备就绪状态。
-- `terminal.js`、`reading.js`、`codeview.js`：实时终端、会话阅读与代码检查。
-- `providers.js`、`runtime-references.js`、`mobile.js`：Provider、引用 Repository 和移动交互。
+安装文案必须说明：包内包含 Node runtime；git、tmux、Codex、Claude、Kimi、gh、glab 由用户自行准备。不得把 pairing code 写入日志、localStorage 或工程知识。
 
-该页面仍可通过显式 `/index.html` 获取，但不能假设它是 `/`。
+## Task 与终端
 
-## 前端模块约定
+`web/js/platform-agent.js` 必须取得 `runner_execution_id`，并通过 `core/pty-socket.js` 连接 `/pty?execution=<id>`。没有 execution 时只展示不可用状态，不回退到 session/Host 参数。
 
-- 使用浏览器原生 ES modules，没有 React/Vue、bundler 或编译步骤。模块路径和全局脚本加载顺序由 HTML 直接决定。
-- `web/js/core/` 放 API、DOM、dialog、state、PTY、代码视图和可复用状态机；`web/js/features/` 放 Switchyard 页面领域交互。
-- `web/js/platform.js` 当前较集中，平台终端拆到 `platform-agent.js`；共享终端帧格式必须继续通过 `core/pty-socket.js`。
-- `web/i18n.js` 与 `web/theme.js` 是经典脚本并向页面暴露全局能力。Alignyard 当前叙述固定使用中文，Switchyard 支持中英文切换。
-- `web/vendor/` 保存 xterm 及 addons，Highlight.js 由固定 npm 依赖经服务端窄路径提供；不要临时改用外部 CDN。
-- `web/assets/` 是产品图形资源，`docs/screenshots/` 是 README 截图脚本输出，不属于运行页面源码。
+终端断开只关闭浏览器 attach，tmux 继续运行。终端实现保留 resize、IME、断线和 xterm renderer fallback；错误必须明确区分未登录、Runner 离线、execution 不属于当前用户和 session 不存在。
 
-## 终端交互
+## 模块约定
 
-浏览器把键盘数据直接发给 `/pty`；resize 使用 `\0resize:<cols>x<rows>`，批量提交文本使用 `\0submit:<json>`。Alignyard 与 Switchyard 终端均处理移动尺寸和中文 IME；Codex 额外启用 Unicode 适配。断开只关闭当前 attach，后台 tmux 任务继续运行。
+- `platform.js` 管理页面级导航与共享 state；完整新交互应拆成可独立初始化的 feature。
+- `platform-agent.js` 只管理终端视图，不拥有 Task 工作流。
+- `core/pty-socket.js` 只生成 execution-scoped WebSocket 和连接事件。
+- `core/repo-details.js` 只格式化无凭据 Repository 摘要。
+- `features/runner-onboarding.js` 只负责安装/设备引导。
+- vendored xterm 文件固定在 `web/vendor/`，不从 CDN 动态加载。
 
-## 测试与修改检查
+当前 `web/js/platform.js` 仍较大，后续优先按 Repository surface、Task list、Task workspace 三个闭环拆分；拆分时保持一个 action 的状态、请求、错误和渲染在同一 feature 内。
 
-前端测试与模块相邻，命名为 `*.test.mjs`，由 `npm test` 在 Node.js 中执行。现有覆盖包括 dialog、PTY socket、Task 生命周期、Repository 详情、host follow、阅读定位、codeview、移动导航、终端 Unicode 和 Alignyard platform Task 行为。
+## 验证
 
-修改页面时至少检查：
-
-1. `platform.html` 与 `index.html` 是否仍加载各自需要的脚本和样式。
-2. 新 HTTP 调用是否处理非 2xx、错误正文和 loading/重复点击状态。
-3. 终端改动是否保持 resize、IME、断线和 tmux 持久性语义。
-4. 桌面与移动交互是否有对应定向测试；影响 README 展示时再运行截图流程。
+- 前端测试使用 `*.test.mjs`。
+- `web/platform.tasks.test.mjs` 覆盖产品入口、流程动作和云端边界。
+- 修改终端协议时同步运行 `pty-socket` 与 renderer 测试。
+- 页面只允许引用实际存在的静态文件和 API，不保留已删除功能的隐藏按钮、CSS 或兼容 fallback。

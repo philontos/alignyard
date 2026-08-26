@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import type { Task } from "../core/db.js";
-import type { Runner } from "../fleet/runner.js";
+import type { LocalExecutor } from "../core/local-executor.js";
 import { getOwnedRepo, localHostId } from "../core/ownership.js";
 import { findRepoByGitUrl } from "./catalog.js";
 import { fetchMirror, initMirror, listBranches, mirrorPath, removeWorktree } from "./git.js";
@@ -23,7 +23,7 @@ export type OwnedRepoFailure = Extract<OwnedRepoResult, { ok: false }>;
 
 export interface OwnedRepoEnv {
   db: DB;
-  runner: Runner;
+  runner: LocalExecutor;
   syncRepos(): void;
   removeTaskManifest(id: number): void;
   killSession(session: string): Promise<void>;

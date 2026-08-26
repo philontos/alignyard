@@ -1,14 +1,10 @@
-// Shared browser transport for every owner-local Agent terminal. Every product
-// surface attaches to the same validated /pty relay; no surface should grow a
-// separate websocket protocol for the same tmux session.
-export function ptyWebSocketUrl(query, lang, locationLike = location) {
+export function executionWebSocketUrl(executionId, locationLike = location) {
   const protocol = locationLike.protocol === "https:" ? "wss" : "ws";
-  const suffix = query ? `${query}&` : "";
-  return `${protocol}://${locationLike.host}/pty?${suffix}lang=${encodeURIComponent(lang || "en")}`;
+  return `${protocol}://${locationLike.host}/pty?execution=${encodeURIComponent(executionId)}`;
 }
 
-export function connectPty(query, { lang, onOpen, onData, onClose } = {}) {
-  const socket = new WebSocket(ptyWebSocketUrl(query, lang));
+export function connectExecutionPty(executionId, { onOpen, onData, onClose } = {}) {
+  const socket = new WebSocket(executionWebSocketUrl(executionId));
   socket.onopen = () => onOpen?.(socket);
   socket.onmessage = (event) => {
     if (typeof event.data === "string") onData?.(event.data, socket);

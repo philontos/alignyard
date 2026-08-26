@@ -7,16 +7,15 @@ import {
   pasteSubmit,
   killSession,
   startSession,
-  startShellSession,
   hasSession,
   loadSessionDirectory,
   reloadSession,
 } from "./tmux.ts";
-import type { Runner } from "../fleet/runner.ts";
+import type { CommandRunner } from "../core/command-runner.ts";
 
 // Minimal Runner double that records every exec() call. The other interface
 // methods are never hit by the code under test, so they're inert stubs.
-function fakeRunner(exec?: Runner["exec"]) {
+function fakeRunner(exec?: CommandRunner["exec"]) {
   const calls: { file: string; args: string[] }[] = [];
   const runner = {
     kind: "local",
@@ -32,7 +31,7 @@ function fakeRunner(exec?: Runner["exec"]) {
     async exists() { return false; },
     async rmrf() {},
     async putDir() {},
-  } as unknown as Runner;
+  } as unknown as CommandRunner;
   return { runner, calls };
 }
 
@@ -40,7 +39,6 @@ test("session creation refuses a remote command runner", async () => {
   const { runner, calls } = fakeRunner();
   (runner as any).kind = "ssh";
   await assert.rejects(() => startSession(runner, "tdsp-1-x", "/wt"), /node that owns/);
-  await assert.rejects(() => startShellSession(runner, "tdsp-2-shell", "/tmp"), /node that owns/);
   assert.deepEqual(calls, []);
 });
 
@@ -72,17 +70,17 @@ test("pasteText bracketed-pastes via a named buffer (no trailing newline -> no s
   const { runner, calls } = fakeRunner();
   await pasteText(runner, "tdsp-1-x", "/wt/.claude/pasted/paste-1.png");
   assert.equal(calls.length, 2);
-  assert.deepEqual(calls[0], { file: "tmux", args: ["set-buffer", "-b", "tdsp-paste", "--", "/wt/.claude/pasted/paste-1.png"] });
+  assert.deepEqual(calls[0], { file: "tmux", args: ["set-buffer", "-b", "alignyard-paste", "--", "/wt/.claude/pasted/paste-1.png"] });
   // -p = bracketed paste (so claude attaches it as an image), -d removes the buffer after
-  assert.deepEqual(calls[1], { file: "tmux", args: ["paste-buffer", "-t", "tdsp-1-x", "-b", "tdsp-paste", "-p", "-d"] });
+  assert.deepEqual(calls[1], { file: "tmux", args: ["paste-buffer", "-t", "tdsp-1-x", "-b", "alignyard-paste", "-p", "-d"] });
 });
 
 test("pasteSubmit bracketed-pastes text, then sends a real Enter", async () => {
   const { runner, calls } = fakeRunner();
   await pasteSubmit(runner, "tdsp-1-x", "hello\nworld");
   assert.equal(calls.length, 3);
-  assert.deepEqual(calls[0], { file: "tmux", args: ["set-buffer", "-b", "tdsp-paste", "--", "hello\nworld"] });
-  assert.deepEqual(calls[1], { file: "tmux", args: ["paste-buffer", "-t", "tdsp-1-x", "-b", "tdsp-paste", "-p", "-d"] });
+  assert.deepEqual(calls[0], { file: "tmux", args: ["set-buffer", "-b", "alignyard-paste", "--", "hello\nworld"] });
+  assert.deepEqual(calls[1], { file: "tmux", args: ["paste-buffer", "-t", "tdsp-1-x", "-b", "alignyard-paste", "-p", "-d"] });
   assert.deepEqual(calls[2], { file: "tmux", args: ["send-keys", "-t", "tdsp-1-x", "Enter"] });
 });
 
@@ -245,8 +243,8 @@ test("startSession(agent='kimi') launches Kimi TUI, then submits the prompt", as
   const paste = calls.findIndex((call) => call.args[0] === "set-buffer");
   assert.ok(ready > calls.indexOf(launch) && ready < paste, "the opening waits for Kimi's TUI before it is pasted");
   assert.deepEqual(calls.slice(-3), [
-    { file: "tmux", args: ["set-buffer", "-b", "tdsp-paste", "--", "do it"] },
-    { file: "tmux", args: ["paste-buffer", "-t", "tdsp-1-x", "-b", "tdsp-paste", "-p", "-d"] },
+    { file: "tmux", args: ["set-buffer", "-b", "alignyard-paste", "--", "do it"] },
+    { file: "tmux", args: ["paste-buffer", "-t", "tdsp-1-x", "-b", "alignyard-paste", "-p", "-d"] },
     { file: "tmux", args: ["send-keys", "-t", "tdsp-1-x", "Enter"] },
   ]);
 });
@@ -271,7 +269,7 @@ test("startSession(agent='kimi') keeps polling until the TUI is ready", async ()
     async exists() { return false; },
     async rmrf() {},
     async putDir() {},
-  } as unknown as Runner;
+  } as unknown as CommandRunner;
 
   await startSession(runner, "tdsp-1-x", "/wt", "do it", { agent: "kimi" });
 
@@ -316,7 +314,7 @@ test("startSession(agent='kimi') falls back to ~/.kimi-code/bin/kimi when kimi i
     async exists() { return false; },
     async rmrf() {},
     async putDir() {},
-  } as unknown as Runner;
+  } as unknown as CommandRunner;
   await startSession(runner, "tdsp-1-x", "/wt", null, { agent: "kimi" });
   assert.deepEqual(calls.find((call) => call.args[0] === "new-session"), { file: "tmux", args: [
     "new-session", "-d", "-s", "tdsp-1-x", "-c", "/wt",
@@ -336,8 +334,8 @@ test("loadSessionDirectory uses Claude's native /add-dir without restarting its 
   assert.equal(mode, "in-place");
   assert.deepEqual(calls, [
     { file: "tmux", args: ["has-session", "-t", "=tdsp-1-x"] },
-    { file: "tmux", args: ["set-buffer", "-b", "tdsp-paste", "--", "/add-dir \"/data with spaces/refs/web\""] },
-    { file: "tmux", args: ["paste-buffer", "-t", "tdsp-1-x", "-b", "tdsp-paste", "-p", "-d"] },
+    { file: "tmux", args: ["set-buffer", "-b", "alignyard-paste", "--", "/add-dir \"/data with spaces/refs/web\""] },
+    { file: "tmux", args: ["paste-buffer", "-t", "tdsp-1-x", "-b", "alignyard-paste", "-p", "-d"] },
     { file: "tmux", args: ["send-keys", "-t", "tdsp-1-x", "Enter"] },
   ]);
 });

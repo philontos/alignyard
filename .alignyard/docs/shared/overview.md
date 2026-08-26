@@ -10,47 +10,51 @@ relations:
   - doc.server.overview
   - doc.server.cli-configuration
   - doc.server.http-api
+  - doc.server.runner-protocol
   - doc.server.knowledge-protocol
   - doc.web.overview
   - adr.shared.node-local-ownership
+  - adr.shared.platform-runner-separation
 ---
 
 # 概述
 
-本仓库是 Alignyard 的单体 npm 工程，同时保留其节点本地执行底座 Switchyard。当前 HTTP 根路径由 `server/http/app.ts` 固定返回 `web/platform.html`，用于管理 Repository、Task、工程知识快照以及 Review/PR/MR/Merge 流程；任务真正执行时仍复用 Switchyard 的 Git mirror、隔离 worktree、tmux、PTY、Agent 和多节点能力。
+本仓库是单一 Alignyard 产品的 npm 工程。云端 Platform 提供 Web、登录、Repository/Task/Review、工程知识与流程状态；用户本地 Runner 调用已有 Git、tmux、Agent 和 forge CLI 完成执行。仓库不再包含另一套本地控制台、Host fleet、Network、Provider 或源码浏览产品。
 
-`package.json` 中的包名仍为 `task-dispatcher`，README 主要介绍 Switchyard 的部署与远程节点能力。理解当前产品入口时以 `server/http/app.ts` 和 `web/platform.html` 为准，理解底层执行与运维时以 README、`server/task/`、`server/session/`、`server/fleet/` 和 `server/network/` 为准。
+## 源码边界
 
-## 系统边界
-
-| scope | 负责内容 | 主要入口 |
+| 目录 | 职责 | 约束 |
 |---|---|---|
-| `shared` | 跨前后端架构、数据流、开发和长期决策 | `package.json`、`README.md`、`README.zh-CN.md` |
-| `server` | Express/HTTP、WebSocket、SQLite、Repository/Task 生命周期、平台工作流、CLI 与工程知识协议 | `server/index.ts`、`server/tdsp.ts`、`server/ay.ts` |
-| `web` | 无构建步骤的浏览器界面、终端接入和交互状态 | `web/platform.html`、`web/js/platform.js`、`web/index.html`、`web/js/main.js` |
+| `server/platform/` | 协作模型、工作流、Prompt、工程知识同步和云端组合根 | 不 import 本机 Git/worktree/tmux 实现 |
+| `server/runner/` | 设备配对、连接、RPC 调度和本机 operations | 只执行协议 allowlist |
+| `server/http/` | HTTP/WS 鉴权、参数与响应适配 | 不承载工作流状态机 |
+| `server/repo/`、`task/`、`session/` | Runner 使用的 Git/worktree/tmux 执行内核 | 不依赖 Express 或 Platform 用户模型 |
+| `server/protocol/` | `ay` 工程知识协议与 CLI | Repository 内可独立校验 |
+| `server/core/` | SQLite、路径和小型基础抽象 | 不放产品流程 |
+| `web/` | 唯一浏览器应用、Runner 安装引导与 execution 终端 | 不接收设备 token 或本机路径 |
+| `scripts/` | 通用部署、Runner 构建和包内 launcher | 不包含特定云项目配置 |
 
-`server/` 内的领域目录和 `web/js/core/`、`web/js/features/` 是模块边界，不各自建立 scope；它们共同组成上述两个可独立理解的源码边界。
+## 唯一入口
 
-## 快速导航
+- `npm start` / `server/platform/main.ts`：Platform。
+- `npm run runner` / `server/runner/main.ts`：源码方式运行 Runner。
+- `alignyard-runner`：正式 macOS Runner 管理命令。
+- `ay` / `server/ay.ts`：Repository 工程知识命令。
+- `web/platform.html`：唯一 Web 页面。
 
-- [架构与数据流](architecture.md)：平台 Task、节点 runtime、持久化、远端调用和安全边界。
-- [开发、测试与运维](development.md)：环境要求、常用命令、测试、安装、更新和目录规范。
-- [后端服务概览](../server/overview.md)：后端组合根、启动顺序和领域模块职责。
-- [CLI 与配置契约](../server/cli-configuration.md)：`tdsp`、`ay`、环境变量、profile 和机器间 JSON 协议。
-- [HTTP 与 WebSocket 契约](../server/http-api.md)：浏览器与服务端、节点终端之间的接口分组。
-- [Alignyard 工程知识协议](../server/knowledge-protocol.md)：`.alignyard/`、文档语义、校验与同步规则。
-- [浏览器应用概览](../web/overview.md)：当前 Alignyard 界面、保留的 Switchyard 界面和前端约定。
-- [节点本地归属](../../adrs/shared/node-local-ownership.md)：Repository、凭据、worktree、tmux 与 Agent 的长期归属决策。
+不存在 `tdsp`、本地一体化服务、旧 `index.html` 或按 Host/SSH/Tailscale 操作其他节点的入口。SQLite 中可能仍有历史兼容列，用于已有数据无损升级；它们不构成公开能力。
 
-## 关键事实来源
+## 文档导航
 
-- 产品能力和人工安装路径：`README.md`、`README.zh-CN.md`、`scripts/setup.sh`。
-- 可执行命令和依赖：`package.json`、`server/task/cli.ts`、`server/protocol/cli.ts`。
-- 运行时组合与 API：`server/index.ts`、`server/http/app.ts`、`server/http/routes.ts`、`server/http/ws.ts`。
-- 数据模型和平台流程：`server/core/schema.ts`、`server/platform/catalog.ts`、`server/platform/workflow.ts`、`server/platform/sync.ts`。
-- 前端入口与交互：`web/platform.html`、`web/js/platform.js`、`web/js/platform-agent.js`、`web/index.html`、`web/js/main.js`。
-- 行为回归证据：`server/**/*.test.ts` 和 `web/**/*.test.mjs`。
+- [架构与数据流](architecture.md)
+- [开发、测试与运维](development.md)
+- [后端服务概览](../server/overview.md)
+- [CLI 与配置](../server/cli-configuration.md)
+- [HTTP 与 WebSocket](../server/http-api.md)
+- [Runner 安装与协议](../server/runner-protocol.md)
+- [工程知识协议](../server/knowledge-protocol.md)
+- [浏览器应用](../web/overview.md)
 
-## 已知命名边界
+## 信息边界
 
-源码同时使用 Alignyard、Switchyard 与历史标识 `task-dispatcher`/`tdsp`。这些名称分别对应当前协作界面、节点执行产品和兼容命令/数据路径；维护时不要仅为统一名称而改写稳定标识。README 中个别能力说明可能落后于当前实现，例如根页面已切换到 Alignyard，因此行为判断应以当前代码和测试为最终证据。
+`.alignyard/` 只保存可提交的通用工程知识，不保存运行实例数据。禁止写入真实用户身份、邮箱白名单、Google client ID、Platform session、Runner/device/execution token、pairing code、已登记 Repository/Task/Review 内容、本机绝对路径、云项目 ID、域名或部署密钥。示例必须使用占位值。

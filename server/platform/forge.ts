@@ -1,4 +1,4 @@
-import type { CommandRunner } from "../fleet/runner.js";
+import type { CommandRunner } from "../core/command-runner.js";
 
 export type ForgeKind = "github" | "gitlab";
 export type RepositoryForgeKind = ForgeKind | "unknown";

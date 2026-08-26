@@ -1,0 +1,42 @@
+.runner-indicator {
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+  margin-right: 14px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  color: var(--muted);
+  background: var(--soft);
+  font-size: 10px;
+}
+.runner-indicator[hidden] { display: none; }
+.runner-indicator i { width: 7px; height: 7px; border-radius: 50%; background: var(--subtle); }
+.runner-indicator strong { font-size: inherit; }
+.runner-indicator.online { color: var(--success); background: var(--success-soft); }
+.runner-indicator.online i { background: var(--success); box-shadow: 0 0 0 3px #5f8a3e18; }
+.account-menu #manage-runner-button { color: var(--ink); }
+
+.runner-dialog { width: min(600px, 100%); }
+.runner-state { display: grid; gap: 8px; margin-bottom: 18px; }
+.runner-device { display: flex; align-items: center; gap: 11px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--soft); }
+.runner-device > i { width: 9px; height: 9px; border-radius: 50%; background: var(--subtle); }
+.runner-device.online > i { background: var(--success); box-shadow: 0 0 0 4px #5f8a3e16; }
+.runner-device strong, .runner-device small { display: block; }
+.runner-device strong { font-size: 12px; }
+.runner-device small { margin-top: 2px; color: var(--muted); font-size: 10px; }
+.runner-empty { padding: 16px; border: 1px dashed var(--line-strong); border-radius: 7px; background: var(--canvas); }
+.runner-empty strong { font-size: 13px; }
+.runner-empty p { margin: 5px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.runner-install ol { display: grid; gap: 6px; margin: 0 0 14px; padding-left: 21px; color: var(--muted); font-size: 11px; }
+.runner-command { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; margin-top: 12px; padding: 10px 11px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--ink); }
+.runner-command[hidden] { display: none; }
+.runner-command code { overflow: hidden; color: #f0e8db; font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
+.runner-command button { border: 0; color: #fff; background: transparent; font-size: 10px; font-weight: 700; }
+.runner-hint { height: auto; margin: 8px 0 0; padding: 0; border: 0; background: transparent; }
+
+@media (max-width: 760px) {
+  .runner-indicator > span { display: none; }
+}

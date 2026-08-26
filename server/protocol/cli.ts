@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import {
   KNOWLEDGE_KINDS,
@@ -48,7 +49,8 @@ Commands:
   sync       Validate and publish the current knowledge snapshot to a Task
 
 Sync environment:
-  AY_PLATFORM_URL, AY_TASK_KEY, AY_REPOSITORY_ID, AY_BASE_COMMIT, AY_SESSION_TOKEN`;
+  AY_PLATFORM_URL, AY_TASK_KEY, AY_REPOSITORY_ID, AY_BASE_COMMIT,
+  AY_PLATFORM_TOKEN, AY_PLATFORM_TOKEN_FILE, AY_SESSION_TOKEN`;
 
 interface ParsedArguments {
   positionals: string[];
@@ -171,7 +173,9 @@ async function runSync(
   const documents = syncDocuments(root, indexed.documents, baseCommit);
   const endpoint = new URL(`/api/platform/tasks/${encodeURIComponent(taskKey)}/sync`, platform.endsWith("/") ? platform : `${platform}/`);
   const headers: Record<string, string> = { "content-type": "application/json" };
-  const token = env.AY_PLATFORM_TOKEN?.trim() || env.AY_SESSION_TOKEN?.trim();
+  const tokenFile = env.AY_PLATFORM_TOKEN_FILE?.trim();
+  const fileToken = tokenFile ? fs.readFileSync(tokenFile, "utf8").trim() : "";
+  const token = env.AY_PLATFORM_TOKEN?.trim() || fileToken || env.AY_SESSION_TOKEN?.trim();
   if (token) headers.authorization = `Bearer ${token}`;
   const request = dependencies.fetch || globalThis.fetch;
   const response = await request(endpoint, {

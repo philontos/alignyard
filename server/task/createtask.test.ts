@@ -7,10 +7,8 @@ import Database from "better-sqlite3";
 import { initSchema } from "../core/schema.ts";
 import { writeTaskManifestFromDb } from "./taskmanifest.ts";
 import {
-  createLocalTask,
   createRepoTask,
   stopTask,
-  type LocalTaskEnv,
   type RepoTaskEnv,
   type RepoRef,
 } from "./createtask.ts";
@@ -31,104 +29,6 @@ function insertTask(db: Database.Database, title: string) {
     .run(`feat/x-${title}`, title, `tdsp-1-r-${title}`);
   return db.prepare("SELECT * FROM tasks WHERE id=?").get(Number(info.lastInsertRowid)) as { id: number; session: string };
 }
-
-function makeEnv(overrides: Partial<LocalTaskEnv> = {}) {
-  const db = new Database(":memory:");
-  initSchema(db, opts);
-  db.prepare("INSERT INTO hosts (id,name,target,kind,status) VALUES (1,'local','','local','online')").run();
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tdsp-ct-"));
-  const started: { session: string; cwd: string }[] = [];
-  const env: LocalTaskEnv = {
-    db,
-    home: "/Users/phil",
-    ns: "abcd1234",
-    dataDir: dir,
-    cwdExists: async () => true,
-    startShell: async (session, cwd) => {
-      started.push({ session, cwd });
-    },
-    ...overrides,
-  };
-  return { env, started, dir, db };
-}
-
-test("createLocalTask inserts a running local task, starts a shell, and writes its manifest", async () => {
-  const { env, started, dir, db } = makeEnv();
-  try {
-    const r = await createLocalTask(env, { cwd: "~/work", title: "debug B" });
-    assert.equal(r.ok, true);
-    if (!r.ok) return;
-
-    const row = db.prepare("SELECT * FROM tasks WHERE id=?").get(r.id) as any;
-    assert.equal(row.kind, "local");
-    assert.equal(row.status, "running");
-    assert.equal(row.cwd, "/Users/phil/work", "~ expands against the machine's home");
-    assert.equal(row.title, "debug B");
-
-    assert.equal(started.length, 1, "the shell session is started exactly once");
-    assert.equal(started[0].cwd, "/Users/phil/work");
-    assert.match(started[0].session, /^tdsp-abcd1234-\d+-local-/, "session carries this node's ns");
-
-    // the manifest IS the edge-resident truth — written on the machine it runs on
-    const m = JSON.parse(fs.readFileSync(path.join(dir, "tasks", String(r.id), "task.json"), "utf8"));
-    assert.equal(m.task.title, "debug B");
-    assert.equal(m.task.session, started[0].session);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("createLocalTask defaults a blank title to 'Local task #<id>'", async () => {
-  const { env, dir, db } = makeEnv();
-  try {
-    const r = await createLocalTask(env, { cwd: "/tmp", title: "" });
-    assert.equal(r.ok, true);
-    if (!r.ok) return;
-    const title = (db.prepare("SELECT title FROM tasks WHERE id=?").get(r.id) as { title: string }).title;
-    assert.equal(title, `Local task #${r.id}`);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("createLocalTask rejects a missing cwd and leaves no row behind", async () => {
-  const { env, started, dir, db } = makeEnv({ cwdExists: async () => false });
-  try {
-    const r = await createLocalTask(env, { cwd: "/nope" });
-    assert.equal(r.ok, false);
-    if (r.ok) return;
-    assert.equal(r.error, "cwdMissing");
-    assert.equal((db.prepare("SELECT count(*) c FROM tasks").get() as { c: number }).c, 0);
-    assert.equal(started.length, 0, "no shell is started for a rejected task");
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("createLocalTask marks the task errored (and manifests it) when the shell fails to start", async () => {
-  const { env, dir, db } = makeEnv({
-    startShell: async () => {
-      throw new Error("tmux: boom");
-    },
-  });
-  try {
-    const r = await createLocalTask(env, { cwd: "/tmp", title: "willfail" });
-    assert.equal(r.ok, false);
-    if (r.ok) return;
-    assert.equal(r.error, "startFailed");
-    const row = db.prepare("SELECT status, error FROM tasks WHERE title='willfail'").get() as {
-      status: string;
-      error: string;
-    };
-    assert.equal(row.status, "error");
-    assert.match(row.error, /boom/);
-    // a failed task still gets a manifest so the node owns the record of the failure
-    const id = (db.prepare("SELECT id FROM tasks WHERE title='willfail'").get() as { id: number }).id;
-    assert.ok(fs.existsSync(path.join(dir, "tasks", String(id), "task.json")));
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 // ---------- stopTask ----------
 // A node stops one of its own tasks: kill the tmux session, mark it cleaned, and
@@ -226,7 +126,7 @@ test("createRepoTask inserts a running task, prepares the worktree, starts the s
     assert.equal(row.base_commit, "a".repeat(40));
     assert.equal(row.work_branch, `feat/${r.id}-fix-login`);
     assert.equal(r.workBranch, `feat/${r.id}-fix-login`);
-    assert.equal(row.session, `tdsp-abcd1234-${r.id}-switchyard-fix-login`);
+    assert.equal(row.session, `ay-abcd1234-${r.id}-switchyard-fix-login`);
 
     assert.deepEqual(calls, ["setup", "start:go"]);
     const s = getSetup();

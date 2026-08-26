@@ -1,4 +1,5 @@
 node_modules/
+dist/runner/
 data/
 *.log
 .DS_Store

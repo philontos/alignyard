@@ -6,64 +6,70 @@ scope: server
 owners: []
 relations:
   - doc.shared.architecture
-  - doc.server.cli-configuration
   - doc.server.http-api
+  - doc.server.cli-configuration
+  - doc.server.runner-protocol
   - doc.server.knowledge-protocol
   - adr.shared.node-local-ownership
+  - adr.shared.platform-runner-separation
 ---
 
 # 概述
 
-`server/` 是一个进程内后端，不是多个可独立部署的服务。它同时承担 Alignyard 协作目录、Switchyard 节点运行时、HTTP/WebSocket、SQLite 持久化、Git/tmux/Agent 编排和 CLI。`server/index.ts` 是 HTTP 服务组合根；`server/tdsp.ts` 与 `server/ay.ts` 是两个 CLI 入口。
+后端由一个 Platform 服务和一个用户本地 Runner 进程组成。`server/platform/main.ts` 是云端唯一入口；`server/runner/main.ts` 是本地唯一入口。两者共享少量类型与执行内核，但不存在可切换的 local execution mode。
 
-## 启动过程
+## 启动与装配
 
-`server/index.ts` 在启动时完成以下步骤：
+Platform 启动顺序：
 
-1. 把常见 Homebrew 与 `/usr/local/bin` 路径补入子进程 PATH，并注册未捕获异常日志，避免单个 PTY 连接直接结束服务。
-2. 打开 `dispatcher.db`、执行幂等 schema 对齐；必要时迁移旧 `./data` 并修复 worktree 链接。
-3. 同步 `repos.json`，从磁盘 Task manifest 收养数据库缺失记录，并为本节点 Task 回填 manifest。
-4. 创建 Express app、HTTP server 和 `/pty` WebSocket bridge；所有请求的 host 都成功监听后，才启动远端节点 liveness loop 与 keep-awake 恢复。
+1. `core/db.ts` 打开 SQLite、启用 WAL 并幂等升级 schema。
+2. `platform/app.ts` 装配健康检查、静态 Web、认证、Runner 路由和 Platform 路由。
+3. `platform/main.ts` 创建 HTTP server，并由 `http/platform-ws.ts` 接管 `/runner` 与 `/pty?execution=...` upgrade。
 
-默认监听 `127.0.0.1:4500`。一个进程可按 `HOSTS` 绑定多个选定地址；任一 bind 失败会关闭已建立的 listener 并让 `tdsp serve` 失败，不会留下宣称 ready 的生命周期记录。
+Runner 启动顺序：
 
-## 领域目录
+1. `runner/main.ts` 进入 `runner/cli.ts`。
+2. `runner/client.ts` 读取权限受限的设备配置并建立出站 WebSocket。
+3. 完成 `runner.hello` 后，`runner/operations.ts` 才处理 allowlist RPC。
+4. Repository、Task、tmux 与 forge 操作委托给执行内核。
 
-| 目录 | 职责 |
+## 模块职责
+
+| 目录或文件 | 职责 |
 |---|---|
-| `core/` | 数据路径、SQLite/schema/migration、归属过滤、i18n、serve 生命周期 |
-| `platform/` | Platform Repository/Task/artifact catalog、初始化工作流、知识同步、GitHub/GitLab PR/MR 适配 |
-| `protocol/` | `.alignyard/` manifest、文档创建/校验/索引与 `ay` 参数解析 |
-| `repo/` | owner-local Git mirror、分支、worktree、Repository catalog 和环境构造 |
-| `task/` | runtime Task 创建、引用、生命周期、manifest、图片粘贴与 `tdsp` 命令契约 |
-| `session/` | Agent 参数、tmux、PTY、会话记录和 Claude hook |
-| `fleet/` | 本地/SSH runner、远端 node client、安装/bootstrap、节点聚合与存活探测 |
-| `network/` | Tailscale Serve/诊断/Peer Relay、节点配对和 profile 所有的 SSH identity |
-| `onboarding/` | 网络、手机、供电/保持唤醒的实时状态 |
-| `http/` | Express 组合、JSON 路由、静态文件和 WebSocket 终端桥接 |
-| `provider/` | Anthropic 兼容 Provider 的检查、保存和安全投影 |
-| `codeview/` | owner-local Repository/worktree 的只读 diff、树和文件检查 |
+| `auth/` | Google identity、Platform session、service/execution token 认证 |
+| `platform/catalog.ts` | Platform Repository/Task/Review/execution 持久化规则 |
+| `platform/runner-workflow.ts` | Author、Review、PR/MR、merge 的跨 Runner 状态机 |
+| `platform/sync.ts` | 接收并验证 Task-scoped 工程知识快照 |
+| `platform/prompts.ts` | Author/Reviewer Prompt 组合 |
+| `runner/registry.ts` | pairing、设备 token、execution token 与归属查询 |
+| `runner/gateway.ts` | Runner 在线状态、RPC correlation/timeout、终端通道 |
+| `runner/operations.ts` | allowlist RPC 到本机执行内核的适配与幂等 binding |
+| `repo/` | mirror、fetch、worktree 和 Runner-local Repository catalog |
+| `task/` | runtime Task、引用 worktree、manifest 与 lifecycle |
+| `session/` | Agent 参数、tmux、PTY 和输入安全处理 |
+| `protocol/` | `.alignyard/` schema、校验、生成与 `ay sync` |
+| `http/` | Express/WS 边界适配 |
 
-## 组合约定
+## 关键不变量
 
-- `http/routes.ts` 负责校验 HTTP 输入、选择本地或远端 runner、调用领域模块并映射状态码；新业务规则应优先进入相应领域模块。
-- `tdsp.ts` 为 `runCli` 注入真实数据库、runner、tmux、Repository、Task、Provider 与网络操作；`task/cli.ts` 保持可注入、可测试。
-- 节点间不会传递任意路径来代替 Repository ID。目标节点先从自身 catalog 解析对象，再执行 Git、tmux 或文件操作。
-- 长任务运行状态不只看数据库：tmux session、worktree 是否存在和 Claude waiting marker 都由拥有节点实时探测。
-- 跨节点 DTO 必须经过安全投影；本地路径、token、prompt、Provider ID 和底层 Git 错误不应出现在控制节点 UI。
+- Platform Repository 不含 token、mirror 路径或 worktree 路径。
+- 只有兼容 hello 的连接计为在线；数据面消息在 hello 前被忽略。
+- 一个当前 Task execution 使用一个稳定 execution ID；重试不创建第二个 worktree。
+- Author execution 与 Reviewer execution 分开记录；Review 结束后恢复原 Author 指针。
+- Review approve 前确认 Reviewer 当前 HEAD 等于 Platform 已同步 HEAD。
+- Task 只有远端 PR/MR 为 `merged` 后才能完成。
+- 所有 Task/Repository 变更都校验 owner 或当前 reviewer；设备只能由其用户撤销。
+- `runner/operations.ts` 只接受环境变量 allowlist，execution token 落入 `0600` 文件。
 
-## 主要持久化对象
+## 结构化拆分方向
 
-`server/core/schema.ts` 同时维护两组关联但语义不同的表：
+当前已删除旧产品的大型路由和 UI，Platform/Runner 依赖图不再包含 Host、Network、Provider 或 Codeview。仍需渐进拆分的高密度文件：
 
-- `repos`、`tasks`、`task_references`、`hosts`、`providers`、`onboarding_events` 描述某个 Switchyard 节点的实际运行资源。
-- `platform_repositories`、`platform_tasks`、`platform_task_repositories`、`platform_artifacts` 描述 Alignyard 的协作对象、状态、提交与版本化工程知识快照。
+- `platform/catalog.ts`：按 Repository、Task、Review/execution 查询模块拆分，但保留共享事务边界。
+- `platform/runner-workflow.ts`：按 Author、Review、change request 子流程拆分，状态转换集中定义。
+- `web/js/platform.js`：按 Repository 与 Task workspace 交互闭环拆分。
+- `core/schema.ts`：当前同时初始化 Platform 与 Runner 表。两边数据目录独立，行为正确，但后续应拆成 Platform schema、Runner schema 与显式共享迁移，不能通过删列破坏已有数据库。
+- `platform/forge.ts`：实际由 Runner 调用；待执行内核包边界稳定后迁到 Runner/forge 适配目录。
 
-Platform Task 可通过 `runtime_task_id` 链接到一个本地 runtime Task，但两者不能混同：前者是需求/评审生命周期，后者是一次具体 worktree/tmux 执行。
-
-## 进一步阅读
-
-- 命令、环境变量和机器协议见 [CLI 与配置契约](cli-configuration.md)。
-- 浏览器和节点接口见 [HTTP 与 WebSocket 契约](http-api.md)。
-- `.alignyard/` 规则见 [Alignyard 工程知识协议](knowledge-protocol.md)。
-- 端到端流程与持久化布局见 [架构与数据流](../shared/architecture.md)。
+拆分必须降低职责数量和依赖扇出；不要仅为减少行数增加转发层。

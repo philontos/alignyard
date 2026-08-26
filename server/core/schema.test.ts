@@ -116,14 +116,14 @@ test("initSchema stores synchronized knowledge content without adding it to repo
   }
 });
 
-test("initSchema adds stable peer identity and managed SSH state to hosts", () => {
+test("initSchema keeps only the Runner-local ownership anchor on fresh databases", () => {
   const db = new Database(":memory:");
   initSchema(db, opts(false));
   const cols = (db.prepare("PRAGMA table_info(hosts)").all() as { name: string }[]).map((c) => c.name);
-  for (const c of [
-    "node_id", "tailscale_id", "tailscale_dns", "tailscale_ip", "tailscale_user",
-    "ssh_port", "ssh_ready", "managed_ssh", "connection_source",
-  ]) assert.ok(cols.includes(c), `missing hosts.${c}`);
+  for (const c of ["node_id", "data_dir", "status"]) assert.ok(cols.includes(c), `missing hosts.${c}`);
+  for (const c of ["tdsp_bin", "tailscale_id", "ssh_ready", "managed_ssh"]) {
+    assert.ok(!cols.includes(c), `fresh schema must not create hosts.${c}`);
+  }
 });
 
 // The agent axis: every task records which coding-agent CLI it runs (claude by
@@ -205,15 +205,11 @@ test("initSchema collapses prototype platform Task statuses to the four collabor
   ]);
 });
 
-test("initSchema creates onboarding evidence storage without a completion flag", () => {
+test("initSchema does not recreate removed onboarding storage", () => {
   const db = new Database(":memory:");
   initSchema(db, opts(false));
-  const table = db.prepare(
-    "SELECT name FROM sqlite_master WHERE type='table' AND name='onboarding_events'",
-  ).get() as { name: string } | undefined;
-  assert.equal(table?.name, "onboarding_events");
-  const cols = (db.prepare("PRAGMA table_info(onboarding_events)").all() as { name: string }[]).map((c) => c.name);
-  assert.deepEqual(cols, ["kind", "detail", "occurred_at"]);
+  const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='onboarding_events'").get();
+  assert.equal(table, undefined);
 });
 
 test("path migration runs only when didMigrate is true", () => {

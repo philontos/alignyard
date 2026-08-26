@@ -52,6 +52,25 @@ test("platform repository catalog stores locators without credentials or checkou
   assert.ok(!columns.includes("mirror_path"));
 });
 
+test("platform repository catalog rejects credentials embedded in Git URLs", () => {
+  const db = memoryDb();
+  assert.throws(() => createPlatformRepository(db, {
+    name: "secret-http",
+    git_url: "https://user:token@example.com/team/repo.git",
+    created_by: "张三",
+  }), /不能包含用户名、密码或 token/);
+  assert.throws(() => createPlatformRepository(db, {
+    name: "secret-query",
+    git_url: "https://example.com/team/repo.git?access_token=secret",
+    created_by: "张三",
+  }), /不能包含用户名、密码或 token/);
+  assert.equal(createPlatformRepository(db, {
+    name: "ssh-repo",
+    git_url: "ssh://git@example.com/team/repo.git",
+    created_by: "张三",
+  }).git_url, "ssh://git@example.com/team/repo.git");
+});
+
 test("platform Task supports several editable and reference repositories", () => {
   const db = memoryDb();
   const app = createPlatformRepository(db, {
@@ -114,6 +133,12 @@ test("platform Task requires at least one editable repository and validates stat
   assert.equal(updatePlatformTaskStatus(db, task.key, "review")?.status, "review");
   assert.equal(updatePlatformTaskStatus(db, task.key, "approved")?.status, "approved");
   assert.throws(() => updatePlatformTaskStatus(db, task.key, "draft"), PlatformValidationError);
+  assert.throws(() => updatePlatformTaskStatus(db, task.key, "completed"), PlatformValidationError);
+  recordPlatformPullRequest(db, task.key, {
+    number: 42,
+    url: "https://example.com/team/docs/pull/42",
+    state: "merged",
+  });
   const completed = updatePlatformTaskStatus(db, task.key, "completed");
   assert.equal(completed?.status, "completed");
   assert.ok(completed?.completed_at);
@@ -318,6 +343,14 @@ test("deleting an unfinished Repository Init removes its snapshot and releases t
   db.prepare(
     "INSERT INTO platform_artifacts (task_id,repository_id,kind,path,title) VALUES (?,?, 'doc',?,?)",
   ).run(task.id, repository.id, ".alignyard/docs/shared/overview.md", "仓库概览");
+  db.prepare(
+    "INSERT INTO platform_runner_executions " +
+      "(id,task_id,runner_id,actor,actor_user_id,role,agent) VALUES ('execution-1',?,'runner-1','Phil',1,'author','codex')",
+  ).run(task.id);
+  db.prepare(
+    "INSERT INTO platform_execution_tokens (token_hash,execution_id,task_key,expires_at) " +
+      "VALUES ('token-hash','execution-1',?,datetime('now','+1 day'))",
+  ).run(task.key);
 
   const deleted = deletePlatformTask(db, task.key);
 
@@ -325,6 +358,8 @@ test("deleting an unfinished Repository Init removes its snapshot and releases t
   assert.equal(getPlatformTask(db, task.key), undefined);
   assert.equal(platformRepositoryTaskCount(db, repository.id), 0);
   assert.equal((db.prepare("SELECT COUNT(*) AS count FROM platform_artifacts").get() as { count: number }).count, 0);
+  assert.equal((db.prepare("SELECT COUNT(*) AS count FROM platform_runner_executions").get() as { count: number }).count, 0);
+  assert.equal((db.prepare("SELECT COUNT(*) AS count FROM platform_execution_tokens").get() as { count: number }).count, 0);
   assert.equal(getPlatformRepository(db, repository.id)?.protocol_state, "uninitialized");
 });
 

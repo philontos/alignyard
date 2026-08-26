@@ -7,76 +7,79 @@ owners: []
 relations:
   - doc.shared.architecture
   - doc.server.overview
-  - doc.server.cli-configuration
+  - doc.server.runner-protocol
   - doc.server.knowledge-protocol
   - doc.web.overview
 ---
 
 # 概述
 
-`server/http/app.ts` 在一个 Express app 中提供静态文件与 JSON API，`server/http/routes.ts` 注册领域路由，`server/http/ws.ts` 只接受 `/pty` upgrade。该接口主要服务仓库内浏览器应用和已登记节点，不是面向不可信公网的公共 API；当前没有应用层多用户认证。
+`server/platform/app.ts` 组合唯一公开服务：静态 Web、身份认证、Platform API、Runner 配对/管理、Runner 制品下载和两个 WebSocket endpoint。不存在另一套本机 API。
 
-## 页面与通用约定
+## 页面、健康检查与下载
 
-- `GET /` 返回 `web/platform.html`，即当前 Alignyard 入口。
-- `web/` 以静态文件方式提供，但关闭默认目录 index；保留的 Switchyard 页面可显式访问 `/index.html`。
-- `/vendor/highlight` 只暴露安装依赖 `@highlightjs/cdn-assets` 的固定目录，代码预览不依赖公共 CDN。
-- 默认 JSON body 上限为 `10mb`。图片粘贴路由另用 raw body，限制 `25mb`。
-- 旧 Switchyard 路由根据 `X-Lang` 返回本地化错误；平台路由使用中文语义错误。调用方必须处理非 2xx 状态与 JSON `error`。
+- `GET /` 返回 `web/platform.html`；静态资源来自 `web/`。
+- `GET /healthz` 执行 SQLite `SELECT 1` 并返回 `{ ok: true }`。
+- `GET /downloads/runner/...` 从 `ALIGNYARD_RUNNER_ARTIFACT_DIR` 或 `dist/runner` 提供 bootstrap、archive、SHA-256 和 manifest。
+- JSON body 上限为 `10mb`，用于显式同步工程知识快照。
 
-## Alignyard 平台接口
+## 认证
 
-| 路由 | 语义 |
+- `GET /api/auth/config` 返回 auth mode、固定的 `runner` execution mode 和公开 Google client ID。
+- 浏览器使用 Google credential 换取 HttpOnly Platform session；本地开发可以使用 local auth mode。
+- 可选 service token 只用于受信自动化，不允许打开浏览器终端。
+- execution token 只允许向自身 Task 的 `sync` endpoint 上传工程知识，且 execution 必须仍是 Task 当前活动 execution。
+
+## Runner 管理
+
+| 路由 | 认证 | 语义 |
+|---|---|---|
+| `POST /api/runner/claim` | pairing code | 单次换取 Runner ID 和设备 token |
+| `GET /api/runners` | Platform session | 列出当前用户设备、能力与在线状态 |
+| `POST /api/runners/pairings` | Platform session | 创建十分钟 pairing code |
+| `DELETE /api/runners/:id` | Platform session | 撤销当前用户自己的设备 |
+
+## Platform API
+
+| 路由组 | 语义 |
 |---|---|
-| `GET/POST /api/platform/repositories` | 列出或登记平台 Repository；`git_url` 必须由调用方保证不含凭据 |
-| `DELETE /api/platform/repositories/:id` | 仅在没有 Platform Task 引用时删除；同时清理匹配的本地 Repository |
-| `POST /api/platform/repositories/:id/initialize` | 创建初始化 Task 并启动或复用本地 runtime |
-| `POST /api/platform/repositories/:id/refresh` | 从默认分支读取必需 `.alignyard/` 文件并更新协议状态 |
-| `GET/POST /api/platform/tasks` | 列出或创建 Platform Task |
-| `GET/PATCH/DELETE /api/platform/tasks/:key` | 读取、更新普通 Task 状态或安全删除 Task 及其资源 |
-| `POST /api/platform/tasks/:key/run` | 启动初始化 runtime；已有 worktree 但 session 不在线时执行 Resume |
-| `POST /api/platform/tasks/:key/review` | 校验 clean worktree 和已同步 HEAD，停止 runtime 并进入 Review |
-| `POST /api/platform/tasks/:key/pull-request` | 人工批准后 push 分支并通过 `gh`/`glab` 创建或复用 PR/MR |
-| `POST /api/platform/tasks/:key/merge` | 合并 PR/MR，刷新默认分支协议状态并尝试清理 runtime |
-| `POST /api/platform/tasks/:key/sync` | 接收 `ay sync` 的 manifest 与完整文档快照 |
-| `GET /api/platform/artifacts` | 列出已同步的工程知识 artifact |
+| `GET/POST /api/platform/repositories` | 查询或登记无凭据 Repository 元数据 |
+| `DELETE /api/platform/repositories/:id` | 无 Task 引用时由创建者删除 |
+| `GET /api/platform/repositories/:id/branches` | 经当前用户在线 Runner 查询分支 |
+| `POST /api/platform/repositories/:id/initialize` | 创建 Repository Init Task |
+| `POST /api/platform/repositories/:id/refresh` | 经 Runner 读取默认分支必需工程知识 |
+| `GET/POST /api/platform/tasks` | 查询或创建 Task；当前只允许一个 editable Repository |
+| `GET/PATCH/DELETE /api/platform/tasks/:key` | 查询、允许的状态变更或清理 |
+| `POST /api/platform/tasks/:key/run` | 启动/恢复 Author execution |
+| `POST /api/platform/tasks/:key/review` | 校验、push、停止 Author 并创建 Review |
+| `POST /api/platform/tasks/:key/review/run` | 在 Reviewer 自己的 Runner 启动 Review execution |
+| `POST /api/platform/tasks/:key/review/decision` | approve 或 changes requested |
+| `POST /api/platform/tasks/:key/pull-request` | 经 Author Runner 创建/刷新 PR/MR |
+| `POST /api/platform/tasks/:key/merge` | 经 Author Runner 合并并刷新协议状态 |
+| `POST /api/platform/tasks/:key/sync` | 接收并验证 `ay sync` 快照 |
+| `GET /api/platform/artifacts` | 查询已同步工程知识 |
 
-初始化 Task 不允许用通用 PATCH 跳过 Review、PR/MR 和 Merge 操作。平台 workflow 对同一 Task 的并发启动、创建合并请求和合并操作做进程内折叠；外部 Git forge 操作失败后会先查询远端实际状态，再决定是否报错。
+Repository、Task 和 Review 变更必须通过当前登录用户的 owner/reviewer 校验。路由层只映射输入和状态码，状态机由 `platform/runner-workflow.ts` 与 catalog 承担。
 
-Platform Repository 的 credential-free 性质目前是接口契约，不是服务端已强制的输入不变量。`POST /api/platform/repositories` 只检查 `git_url` 非空，并会由读取接口原样返回；调用方不得传入 `https://user:token@host/...` 一类带内嵌凭据的 URL。Repository token 应只通过 owner-local `/api/repos` 流程保存。在服务端增加 URL 清洗或拒绝逻辑前，反向代理认证也不能替代这项输入约束。
+## `/runner` WebSocket
 
-## 节点运行时接口
+Runner 使用 `Authorization: Bearer <device-token>` 建立出站连接。同一设备的新连接替换旧连接。只有收到版本兼容的 `runner.hello` 后，gateway 才允许 RPC 与 terminal 数据面。连接断开会立即令待处理 RPC 失败并关闭关联终端。
 
-路由按资源分为以下稳定组：
+## `/pty` WebSocket
 
-- `/api/repos`、`/api/repos/:id/fetch|branches`：本节点 Repository catalog；token 和 mirror 路径不会返回浏览器。
-- `/api/tasks`、`/api/tasks/local`、`/api/tasks/:id/*`：创建、引用、改名、archive、resume、cleanup、删除、transcript 和图片粘贴。
-- `/api/nodes/:hostId/repos|tasks|providers/*`：通过目标节点 `tdsp` 执行同构远端操作；目标节点 capabilities 不足时返回明确冲突或升级提示。
-- `/api/fleet`、`/api/hosts`、`/api/sessions`：聚合节点视图、登记/bootstrap/update 主机和管理 tmux attach 会话。
-- `/api/network/*`、`/.well-known/switchyard`：Tailscale 状态、发现、同账号验证、双向握手与 SSH 配对。
-- `/api/onboarding/*`：实时派生网络、手机、供电和 keep-awake 状态，不保存笼统的“已完成”标志。
-- `/api/providers/*`：检查与保存本节点 Provider；浏览器只能得到脱敏摘要。
-- `/api/code/inspect`：在 owner-local Repository/worktree 边界内执行只读树、diff 和文件查看。
-- `/api/system/update`：更新已安装 checkout，安排相同参数重启，然后结束当前进程。
+正式终端只接受 `/pty?execution=<execution_id>`：
 
-具体请求/响应 shape 由相应领域类型和同目录测试定义，例如 `server/task/cli.ts`、`server/codeview/codeview.ts`、`server/session/transcript.ts` 与 `server/network/peering.ts`。新增字段应优先保持加法兼容；不得把原始路径或凭据加入跨节点 DTO。
+1. Platform session 必须有效，且当前用户等于 execution actor。
+2. Platform 根据 execution 取得 Runner 与本地 Task 摘要，不接受 browser 传 session、Host 或路径。
+3. Runner 再验证 `runner_task_id` 与 session 绑定后 attach tmux。
+4. 断开只终止 PTY attach，不杀死 tmux。
 
-## WebSocket 终端协议
+## 状态码
 
-客户端只连接 `/pty`，并提供：
-
-- 必需 `session`：必须匹配 `SESSION_RE`，且只能附着本机已拥有 session，或配合已登记远端 host。
-- 可选 `host`：仅在本机找不到该 session 时解析为已登记远端 Host ID，不能指定任意 SSH 目标。
-- 可选 `lang`：控制 attach 错误消息语言。
-
-服务端用 node-pty 启动本地 tmux attach，或经 SSH/mosh 附着远端 tmux。普通 WebSocket 文本直接写入 PTY；以 NUL 开头的控制帧包括 `\0resize:<cols>x<rows>` 和 `\0submit:<json>`。断开 WebSocket 只结束 attach client，不杀死 tmux session。连接建立后服务端会规范 tmux 选项并退出遗留 copy mode。
-
-## 状态码与边界
-
-- `400` 表示字段、格式、文档或状态值无效。
-- `404` 表示 Platform/Repository/Task 不存在或不属于当前可寻址边界。
-- `409` 表示资源状态阻止操作，例如 Repository 未就绪、Task 阶段不符、未 sync、存在活动 Task 或只读 Repository。
-- `502` 多用于 SSH、Git forge 或外部节点操作失败。
-- 未分类内部错误返回 `500`。
-
-路由层的状态码是协作契约；领域模块仍应返回语义结果，避免把 Express 依赖扩散到 `platform/`、`task/`、`repo/` 等目录。
+- `400`：输入、文档或状态值无效。
+- `401`：登录、device token 或 session 无效。
+- `403`：主体无权操作该 Repository、Task、Review、Runner 或 execution。
+- `404`：资源不存在。
+- `409`：Runner 离线/不兼容、能力不足、阶段冲突或资源仍被引用。
+- `502`：Runner、Git 或 forge 操作失败。
+- `503`：认证或数据库配置不可用。

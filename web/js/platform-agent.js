@@ -1,4 +1,4 @@
-import { connectPty, sendPtyResize } from "./core/pty-socket.js";
+import { connectExecutionPty, sendPtyResize } from "./core/pty-socket.js";
 import { activateCanvasRenderer } from "./core/terminal-renderer.js";
 import { activateCodexUnicode } from "./core/terminal-unicode.js";
 
@@ -78,7 +78,7 @@ export function openPlatformAgentWorkspace(task) {
   element("task-drawer").classList.add("task-workspace-mode");
   document.body.classList.add("agent-workspace-open");
 
-  if (!task?.runtime_task_id || !task.runtime_session || !task.runtime_alive) {
+  if (!task?.runner_execution_id || !task.runtime_task_id || !task.runtime_session || !task.runtime_alive) {
     disposeActiveTerminal();
     emptyTask = task;
     workspace.classList.add("is-empty");
@@ -107,7 +107,8 @@ export function openPlatformAgentWorkspace(task) {
   host.hidden = false;
   empty.hidden = true;
   controls.hidden = false;
-  if (active?.taskId === task.runtime_task_id && active.session === task.runtime_session) {
+  const executionKey = task.runner_execution_id;
+  if (active?.taskId === executionKey && active.session === task.runtime_session) {
     requestAnimationFrame(fit);
     return;
   }
@@ -146,7 +147,7 @@ export function openPlatformAgentWorkspace(task) {
     console.warn("xterm Canvas renderer failed; using DOM renderer", error);
   }
 
-  // Keep the same IME guard as Switchyard's mature terminal path. On macOS,
+  // Keep the IME guard for macOS input methods. On macOS,
   // CapsLock commonly switches Pinyin to English while composition is active.
   // Letting xterm handle that keydown finalizes the composition once, then the
   // browser's compositionend sends it again. Ignore only that composing key so
@@ -157,11 +158,10 @@ export function openPlatformAgentWorkspace(task) {
     return true;
   });
 
-  const terminalState = { taskId: task.runtime_task_id, session: task.runtime_session, host, term, socket: null, observer: null, lastSize: "" };
+  const terminalState = { taskId: executionKey, session: task.runtime_session, host, term, socket: null, observer: null, lastSize: "" };
   active = terminalState;
   term.onData((data) => send(data));
-  terminalState.socket = connectPty(`session=${encodeURIComponent(task.runtime_session)}`, {
-    lang: "zh",
+  terminalState.socket = connectExecutionPty(task.runner_execution_id, {
     onOpen: () => {
       if (active !== terminalState) return;
       setConnectionState("Agent 已连接", "connected");
