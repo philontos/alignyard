@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import Database from "better-sqlite3";
 import { initSchema } from "../core/schema.ts";
-import type { Runner } from "../fleet/runner.ts";
+import type { LocalExecutor } from "../core/local-executor.ts";
 import {
   branchesForOwnedRepo,
   deleteOwnedRepo,
@@ -20,7 +20,7 @@ function setup() {
   db.prepare("INSERT INTO hosts (id,name,target,kind,status) VALUES (2,'B','dev@b','ssh','online')").run();
   const calls: Array<{ file: string; args: string[]; cwd?: string }> = [];
   const paths = new Set<string>();
-  const runner: Runner = {
+  const runner: LocalExecutor = {
     kind: "local",
     dataDir: "/data",
     exec: async (file, args, execOpts = {}) => {

@@ -1,14 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ptyWebSocketUrl } from "./core/pty-socket.js";
+import { executionWebSocketUrl } from "./core/pty-socket.js";
 
-test("product terminals share the owner-local PTY relay URL", () => {
+test("Platform terminals address only a scoped Runner execution", () => {
   assert.equal(
-    ptyWebSocketUrl("session=tdsp-1", "zh-CN", { protocol: "http:", host: "localhost:14580" }),
-    "ws://localhost:14580/pty?session=tdsp-1&lang=zh-CN",
+    executionWebSocketUrl("rex_one", { protocol: "http:", host: "localhost:14580" }),
+    "ws://localhost:14580/pty?execution=rex_one",
   );
   assert.equal(
-    ptyWebSocketUrl("session=tdsp-1", "en", { protocol: "https:", host: "node.example" }),
-    "wss://node.example/pty?session=tdsp-1&lang=en",
+    executionWebSocketUrl("rex/a", { protocol: "https:", host: "node.example" }),
+    "wss://node.example/pty?execution=rex%2Fa",
   );
 });

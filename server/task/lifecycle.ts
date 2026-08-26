@@ -1,7 +1,5 @@
-// Node-local task lifecycle operations. A bootstrapped node is the sole owner of
-// its task rows, tmux sessions, worktrees and manifests, so remote controllers
-// drive these functions through one-shot `tdsp` verbs instead of mutating their
-// own databases.
+// Runner-local lifecycle operations. The Runner owns task rows, tmux sessions,
+// worktrees and manifests; Platform callers use the typed Runner protocol.
 import type Database from "better-sqlite3";
 import type { Task } from "../core/db.js";
 import { getOwnedRepo, getOwnedTask } from "../core/ownership.js";

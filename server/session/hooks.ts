@@ -5,9 +5,8 @@
 // (.claude/waiting). The owning node reads that marker locally and includes the
 // boolean in its fleet payload, so no controller probes another node's path.
 //
-// Why a file and not an HTTP ping: the session and Switchyard node share the
-// same machine. A local marker needs no callback service, and the node's existing
-// fleet response carries the resulting state to any controller.
+// Why a file and not an HTTP ping: the Agent session and Runner share one
+// machine. A local marker needs no callback service.
 
 /**
  * settings.local.json content for one task, given the worktree's ABSOLUTE path

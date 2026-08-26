@@ -5,11 +5,10 @@ import fs from "node:fs";
 const html = fs.readFileSync(new URL("./platform.html", import.meta.url), "utf8");
 const script = fs.readFileSync(new URL("./js/platform.js", import.meta.url), "utf8");
 const agent = fs.readFileSync(new URL("./js/platform-agent.js", import.meta.url), "utf8");
-const terminalScript = fs.readFileSync(new URL("./js/features/terminal.js", import.meta.url), "utf8");
-const codeViewer = fs.readFileSync(new URL("./js/features/codeview.js", import.meta.url), "utf8");
 const styles = fs.readFileSync(new URL("./css/platform.css", import.meta.url), "utf8");
-const codeViewStyles = fs.readFileSync(new URL("./css/platform-codeview.css", import.meta.url), "utf8");
-const routes = fs.readFileSync(new URL("../server/http/routes.ts", import.meta.url), "utf8");
+const platformRoutes = fs.readFileSync(new URL("../server/http/platform-routes.ts", import.meta.url), "utf8");
+const platformApp = fs.readFileSync(new URL("../server/platform/app.ts", import.meta.url), "utf8");
+const platformMain = fs.readFileSync(new URL("../server/platform/main.ts", import.meta.url), "utf8");
 
 test("Tasks surface keeps only the three primary filters and one create action", () => {
   const taskView = html.match(/<section class="view active" id="view-tasks"[\s\S]*?<\/section>/)?.[0] || "";
@@ -51,7 +50,7 @@ test("Repositories surface shows protocol workflow state and creates a dedicated
   assert.match(script, /\/api\/platform\/repositories\/\$\{repositoryId\}\/initialize/);
   assert.match(script, /task\.task_type === "repository_init"/);
   assert.match(script, /已创建，请选择 Agent 启动/);
-  const initializeRoute = routes.match(/app\.post\("\/api\/platform\/repositories\/:id\/initialize"[\s\S]*?app\.post\("\/api\/platform\/repositories\/:id\/refresh"/)?.[0] || "";
+  const initializeRoute = platformRoutes.match(/app\.post\("\/api\/platform\/repositories\/:id\/initialize"[\s\S]*?app\.post\("\/api\/platform\/repositories\/:id\/refresh"/)?.[0] || "";
   assert.match(initializeRoute, /createRepositoryInitializationTask/);
   assert.doesNotMatch(initializeRoute, /startRepositoryInitialization/);
   assert.doesNotMatch(html, /notice-card|repo-search|repository-card/);
@@ -70,7 +69,7 @@ test("clicking a Repository opens a compact credential-free metadata dialog", ()
   assert.match(styles, /\.repository-detail-dialog\s*\{[^}]*width:\s*min\(500px,100%\)/);
 });
 
-test("Task Repository branches reuse Switchyard's live branch catalog", () => {
+test("Task Repository branches go through the explicit execution backend", () => {
   const options = script.match(/function taskRepositoryOptions[\s\S]*?\n}\n\nfunction openTaskDialog/)?.[0] || "";
   assert.match(options, /data-repository-branch/);
   assert.doesNotMatch(options, /input type="text"[^>]+基准分支/);
@@ -78,14 +77,13 @@ test("Task Repository branches reuse Switchyard's live branch catalog", () => {
   assert.match(script, /\/api\/platform\/repositories\/\$\{repository\.id\}\/branches/);
   assert.match(script, /正在加载分支，请稍候/);
   assert.match(script, /base_branch: \$\('\[data-repository-branch\]'/);
-  const route = routes.match(/app\.get\("\/api\/platform\/repositories\/:id\/branches"[\s\S]*?\n}\);/)?.[0] || "";
-  assert.match(route, /findRepoByGitUrl/);
-  assert.match(route, /branchesForOwnedRepo/);
+  const route = platformRoutes.match(/app\.get\("\/api\/platform\/repositories\/:id\/branches"[\s\S]*?\n}\);/)?.[0] || "";
+  assert.match(route, /backend\.repositoryBranches/);
 });
 
 test("Task creation keeps one Repository role and leaves edit intent to the user", () => {
   const options = script.match(/function taskRepositoryOptions[\s\S]*?\n}\n\nfunction openTaskDialog/)?.[0] || "";
-  assert.match(html, /至少选择一个已就绪的 Repository/);
+  assert.match(html, /选择一个已就绪的 Repository/);
   assert.doesNotMatch(options, /data-repository-mode|value="reference"/);
   assert.match(options, /type="checkbox"[^>]+\$\{ready \? "" : "disabled"\}/);
   assert.match(script, /mode: "editable"/);
@@ -131,18 +129,16 @@ test("Repository Init workspace closes runtime, Review, PR, and merge behind exp
   assert.match(styles, /\.status-pill\s*\{[^}]*flex:\s*0 0 auto[^}]*white-space:\s*nowrap/);
   assert.match(styles, /\.task-drawer\s*\{\s*scrollbar-width:\s*none/);
   assert.match(styles, /\.task-drawer::\-webkit-scrollbar\s*\{\s*display:\s*none/);
-  assert.match(agent, /connectPty\(/);
+  assert.match(agent, /connectExecutionPty\(/);
   assert.match(html, /vendor\/addon-canvas\.js/);
   assert.match(agent, /activateCanvasRenderer/);
-  assert.match(terminalScript, /activateCanvasRenderer/);
   assert.match(agent, /attachCustomKeyEventHandler/);
   assert.match(agent, /event\.isComposing && event\.keyCode === 20/);
   assert.match(agent, /Math\.floor\(width \/ cell\.width\)/);
   assert.match(agent, /rescaleOverlappingGlyphs:\s*true/);
-  assert.match(terminalScript, /rescaleOverlappingGlyphs:\s*true/);
   assert.match(agent, /classList\.add\("task-workspace-mode"\)/);
   assert.match(agent, /setConnectionState\(canStartReview \? "等待 Reviewer" : "等待启动", "idle"\)/);
-  assert.match(agent, /active\?\.taskId === task\.runtime_task_id && active\.session === task\.runtime_session/);
+  assert.match(agent, /active\?\.taskId === executionKey && active\.session === task\.runtime_session/);
   assert.match(styles, /--sidebar-width:\s*210px/);
   assert.match(styles, /--topbar-height:\s*52px/);
   assert.match(styles, /\.topbar\s*\{[^}]*height:\s*var\(--topbar-height\)/);
@@ -211,8 +207,8 @@ test("every Review decision closes the reviewer workspace before the Author cont
   assert.doesNotMatch(decision, /openTaskDetail\(task\.key\)/);
   const actions = script.match(/function initTaskActions[\s\S]*?\n}\n\nfunction taskLocalCommands/)?.[0] || "";
   assert.match(actions, /task\.pr_state === "none" && taskBelongsToCurrentUser\(task\)/);
-  const createRequestRoute = routes.match(/app\.post\("\/api\/platform\/tasks\/:key\/pull-request"[\s\S]*?\n}\);/)?.[0] || "";
-  assert.match(createRequestRoute, /只有 Task 发起人可以创建合并请求/);
+  const createRequestRoute = platformRoutes.match(/app\.post\("\/api\/platform\/tasks\/:key\/pull-request"[\s\S]*?\n}\);/)?.[0] || "";
+  assert.match(createRequestRoute, /requireTaskOwner\(req, req\.params\.key\)/);
 });
 
 test("opening a Task confirms an open PR or MR once and reflects its remote state", () => {
@@ -223,36 +219,20 @@ test("opening a Task confirms an open PR or MR once and reflects its remote stat
   assert.match(script, /正在确认 \$\{requestLabel\} 状态/);
 });
 
-test("Task completion is a terminal state after approval", () => {
+test("Task completion is a terminal state after reviewed changes are merged", () => {
   assert.match(script, /completed: "已完成"/);
-  assert.match(script, /task\.status === "approved" && taskBelongsToCurrentUser\(task\)[\s\S]*data-set-status="completed">标记完成/);
+  assert.match(script, /task\.status === "approved" && task\.pr_state === "none"[\s\S]*data-init-pr/);
+  assert.match(script, /task\.status === "approved" && task\.pr_state === "open"[\s\S]*data-init-merge/);
   assert.match(script, /task\.completed_at \? `完成于/);
   assert.match(styles, /\.status-completed/);
-  assert.match(routes, /只有 Task 发起人可以完成 Task/);
+  assert.match(platformRoutes, /只有 Task 发起人可以完成 Task/);
 });
 
-test("Task Review reuses the Switchyard file and diff viewer", () => {
-  assert.match(html, /href="\/css\/platform-codeview\.css"/);
-  assert.match(html, /id="code-modal"[\s\S]*id="cv-tab-files"[\s\S]*id="cv-tab-changes"/);
-  assert.match(script, /openTaskCodeContext/);
-  assert.match(script, /task\.runtime_task_id/);
-  assert.match(script, /tab: "changes"/);
-  assert.match(script, /data-open-task-changes/);
-  assert.match(script, /data-artifact-path/);
-  assert.match(script, /openTaskChanges\(task, button\.dataset\.artifactPath\)/);
-  assert.match(codeViewer, /buildFileTree\(changes\.files\.map\(\(file\) => file\.path\)\)/);
-  assert.match(codeViewer, /renderChangeTreeNode\(changeTree, list, 0, changeByPath\)/);
-  assert.match(codeViewer, /openChangeDirs = parentDirectoryPaths/);
-  assert.match(codeViewer, /label\.textContent = treeFile\.name/);
-  assert.match(codeViewStyles, /#code-modal\.code-modal-bg[\s\S]*z-index:\s*150/);
-  assert.match(styles, /\.artifact-row:not\(:disabled\):hover/);
-});
-
-test("document and config previews use a compact soft-wrapped reading mode", () => {
-  assert.match(codeViewStyles, /\.cv-content\.cv-readable\s*\{[^}]*overflow-x:\s*hidden/);
-  assert.match(codeViewStyles, /\.cv-readable \.cv-source\s*\{[^}]*width:\s*min\(100%, 88ch\)[^}]*white-space:\s*pre-wrap[^}]*word-break:\s*break-word/);
-  assert.match(codeViewStyles, /\.cv-readable \.cv-json-leaf\s*\{[^}]*white-space:\s*pre-wrap[^}]*overflow-wrap:\s*anywhere/);
-  assert.match(codeViewStyles, /\.cv-readable \.cv-diff-line\s*\{[^}]*white-space:\s*pre-wrap/);
+test("Task detail exposes synced knowledge without pretending cloud can read Runner files", () => {
+  assert.doesNotMatch(html, /platform-codeview|code-modal|cv-tab-files/);
+  assert.doesNotMatch(script, /openTaskCodeContext|data-open-task-changes|data-artifact-path/);
+  assert.match(script, /protocol-badge">同步快照/);
+  assert.match(script, /class="artifact-row"/);
 });
 
 test("manual workflow commands keep copy controls readable without the browser focus frame", () => {
@@ -317,12 +297,11 @@ test("Task detail exposes only implemented ay workflow commands", () => {
   assert.match(script, /ay sync \. --platform/);
 });
 
-test("adding a Repository registers locally before sharing credential-free metadata", () => {
-  const localCall = script.indexOf('api("/api/repos"');
-  const platformCall = script.indexOf('api("/api/platform/repositories"', localCall);
-  assert.ok(localCall >= 0 && platformCall > localCall);
-  assert.match(html, /name="token" type="password"/);
-  assert.match(script, /token: undefined/);
+test("adding a Repository stores credential-free metadata and lets Runner prepare it lazily", () => {
+  assert.match(script, /if \(!runnerOnboarding\.enabled\(\)\)[\s\S]*api\("\/api\/repos"/);
+  assert.match(script, /api\("\/api\/platform\/repositories"/);
+  assert.doesNotMatch(html, /name="token" type="password"/);
+  assert.match(html, /Runner 会用你 Mac 上已有的 Git 凭据准备本地镜像/);
   assert.doesNotMatch(script, /created_by:/);
 });
 
@@ -333,4 +312,12 @@ test("Google login uses a backend session and authenticated platform members", (
   assert.match(script, /\/api\/auth\/logout/);
   assert.match(script, /state\.currentUser/);
   assert.doesNotMatch(script, /const CURRENT_USER/);
+});
+
+test("cloud composition exposes only Platform and execution-scoped terminal entrypoints", () => {
+  assert.match(platformApp, /registerPlatformRoutes\(app, platformRunnerBackend\)/);
+  assert.doesNotMatch(platformApp, /registerRoutes\(/);
+  assert.match(platformApp, /app\.get\("\/index\.html"[\s\S]*sendStatus\(404\)/);
+  assert.match(platformMain, /attachPlatformWs\(server\)/);
+  assert.doesNotMatch(platformMain, /http\/ws\.js/);
 });

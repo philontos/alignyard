@@ -29,18 +29,14 @@ test("auth mode is local by default and Google when explicitly configured", () =
   assert.throws(() => authMode({ ALIGNYARD_AUTH_MODE: "unknown" } as NodeJS.ProcessEnv));
 });
 
-test("Google mode requires an explicit account policy and service token", () => {
+test("Google mode requires a client id and an explicit account policy", () => {
   assert.match(googleConfigurationError({ ALIGNYARD_AUTH_MODE: "google" } as NodeJS.ProcessEnv) || "", /GOOGLE_CLIENT_ID/);
   assert.match(googleConfigurationError({
     ALIGNYARD_AUTH_MODE: "google", GOOGLE_CLIENT_ID: "client-id",
-  } as NodeJS.ProcessEnv) || "", /ALIGNYARD_API_TOKEN/);
-  assert.match(googleConfigurationError({
-    ALIGNYARD_AUTH_MODE: "google", GOOGLE_CLIENT_ID: "client-id", ALIGNYARD_API_TOKEN: "secret",
   } as NodeJS.ProcessEnv) || "", /ALIGNYARD_ALLOWED_EMAILS/);
   assert.equal(googleConfigurationError({
     ALIGNYARD_AUTH_MODE: "google",
     GOOGLE_CLIENT_ID: "client-id",
-    ALIGNYARD_API_TOKEN: "secret",
     ALIGNYARD_ALLOWED_EMAILS: "phil@example.com, alice@example.com",
   } as NodeJS.ProcessEnv), null);
   assert.equal(googleEmailAllowed({ email: "PHIL@example.com", email_verified: true }, {

@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+self=$0
+if [ -L "$self" ]; then self=$(readlink "$self"); fi
+root=$(CDPATH= cd -- "$(dirname -- "$self")/.." && pwd)
+exec "$root/runtime/node" "$root/app/node_modules/tsx/dist/cli.mjs" "$root/app/server/ay.ts" "$@"

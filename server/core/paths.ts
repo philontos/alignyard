@@ -10,26 +10,17 @@ const __dirname = path.dirname(__filename);
 export const ROOT = path.resolve(__dirname, "..", "..");
 export const WEB_DIR = path.join(ROOT, "web");
 
-// Per-machine data root. The SAME layout lives on the local box (machine #0)
-// and on every remote host, so "local" is just another machine. Holds
-// mirrors/, worktrees/, repos.json, and this node's dispatcher.db.
-//
-// Defaults to ~/.task-dispatcher, but TASK_DISPATCHER_DATA_DIR overrides it so a
-// second Switchyard instance on the same box — a dev/test instance, or a task
-// that runs Switchyard itself — can point at an isolated data root instead
-// of clobbering the live one's db/mirrors/worktrees (and, via the shared tmux
-// server and its live sessions.
+// Platform and Runner use the same persistence layout. The historical
+// TASK_DISPATCHER_DATA_DIR name is accepted only as an upgrade alias; new code
+// and documentation use ALIGNYARD_DATA_DIR.
 export function resolveDataDir(env: NodeJS.ProcessEnv = process.env, home: string = os.homedir()): string {
-  const override = env.TASK_DISPATCHER_DATA_DIR;
-  return override && override.trim() ? path.resolve(override) : path.join(home, ".task-dispatcher");
+  const override = env.ALIGNYARD_DATA_DIR?.trim() || env.TASK_DISPATCHER_DATA_DIR?.trim();
+  return override ? path.resolve(override) : path.join(home, ".alignyard", "runtime");
 }
 export const BASE_DATA_DIR = resolveDataDir();
 
-// Per-instance namespace. Two Switchyard instances sharing one machine's disk +
-// tmux server would otherwise collide because their DB ids both start at 1.
-// The stable id scopes this node instance's data and session names. The legacy
-// filename `controller-id` is retained to keep every existing DATA_DIR stable;
-// its value is now interpreted as the local instance id, not remote ownership.
+// The stable namespace prevents isolated development roots sharing one tmux
+// server from colliding. The filename is retained as data-format compatibility.
 export function resolveNamespace(baseDir: string): string {
   const idFile = path.join(baseDir, "controller-id");
   try {
@@ -56,7 +47,8 @@ export const MANIFEST_PATH = path.join(DATA_DIR, "repos.json");
 // migrate.ts (both keyed off DID_MIGRATE).
 export const LEGACY_DATA_DIR = path.join(ROOT, "data");
 export let DID_MIGRATE = false;
-if (!process.env.TASK_DISPATCHER_DATA_DIR && !fs.existsSync(DATA_DIR) && fs.existsSync(LEGACY_DATA_DIR)) {
+const HAS_DATA_DIR_OVERRIDE = !!(process.env.ALIGNYARD_DATA_DIR?.trim() || process.env.TASK_DISPATCHER_DATA_DIR?.trim());
+if (!HAS_DATA_DIR_OVERRIDE && !fs.existsSync(DATA_DIR) && fs.existsSync(LEGACY_DATA_DIR)) {
   fs.mkdirSync(path.dirname(DATA_DIR), { recursive: true });
   fs.renameSync(LEGACY_DATA_DIR, DATA_DIR);
   DID_MIGRATE = true;

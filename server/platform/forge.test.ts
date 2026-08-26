@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { CommandRunner } from "../fleet/runner.ts";
+import type { CommandRunner } from "../core/command-runner.ts";
 import { closeChangeRequest, repositoryForgeKind, resolveForge } from "./forge.ts";
 
 test("forge detection recognizes HTTPS, SSH, and branded self-hosted URLs", () => {

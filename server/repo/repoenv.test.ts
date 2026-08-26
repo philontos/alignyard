@@ -4,7 +4,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { initSchema } from "../core/schema.ts";
 import { buildRepoTaskEnv } from "./repoenv.ts";
-import type { Runner } from "../fleet/runner.ts";
+import type { LocalExecutor } from "../core/local-executor.ts";
 import type { AgentKind } from "../session/agent.ts";
 
 const opts = { didMigrate: false, legacyDir: "/legacy", dataDir: "/data" };
@@ -19,11 +19,11 @@ function recordingRunner() {
     mkdirp: async () => {}, exists: async () => false, readText: async () => null,
     rmrf: async () => {}, putFile: async () => {},
     putDir: async (src: string, dest: string) => { putDirs.push({ src, dest }); },
-  } as unknown as Runner;
+  } as unknown as LocalExecutor;
   return { runner, putDirs };
 }
 
-function setupWith(agent: AgentKind, runner: Runner) {
+function setupWith(agent: AgentKind, runner: LocalExecutor) {
   const db = new Database(":memory:");
   initSchema(db, opts);
   const env = buildRepoTaskEnv({ db, ns: "ns", runner, writeManifest: () => {} });

@@ -127,7 +127,7 @@ export function referencePrompt(
 ): string | null {
   if (!references.length) return userPrompt?.trim() ? userPrompt : null;
   const lines = [
-    "Switchyard workspace:",
+    "Alignyard workspace:",
     `- Primary repository (editable): ${primary.name} at ${primary.path}`,
     ...references.map((reference) =>
       `- ref:${reference.alias} (reference-only): ${reference.repo_name}/${reference.requested_ref}` +

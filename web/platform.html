@@ -8,7 +8,7 @@
   <title>Alignyard · Tasks</title>
   <link rel="stylesheet" href="/vendor/xterm.css" />
   <link rel="stylesheet" href="/css/platform.css" />
-  <link rel="stylesheet" href="/css/platform-codeview.css" />
+  <link rel="stylesheet" href="/css/features/runner-onboarding.css" />
 </head>
 <body>
   <div class="app-shell">
@@ -36,6 +36,7 @@
       <header class="topbar">
         <button class="mobile-menu" id="mobile-menu" type="button" aria-label="打开导航">☰</button>
         <div class="breadcrumbs"><span>Alignyard</span><b>/</b><strong id="breadcrumb-current">Tasks</strong></div>
+        <button class="runner-indicator" id="runner-indicator" type="button"><i></i><span>Runner</span><strong id="runner-indicator-label">未连接</strong></button>
         <div class="account-control">
           <button class="top-user" id="top-user" type="button" aria-label="当前用户" aria-expanded="false">
             <img id="top-user-image" alt="" hidden /><span id="top-user-initial">?</span>
@@ -44,6 +45,7 @@
             <strong id="account-name">—</strong>
             <small id="account-email"></small>
             <span id="account-mode"></span>
+            <button id="manage-runner-button" type="button">管理本机 Runner</button>
             <button id="logout-button" type="button">退出登录</button>
           </section>
         </div>
@@ -83,7 +85,7 @@
         <label class="full"><span>需求说明 <small>可选</small></span><textarea name="description" rows="3" placeholder="说明目标、范围和验收条件"></textarea></label>
         <label class="full"><span>负责人</span><input name="owner" required readonly autocomplete="off" /></label>
       </div>
-      <div class="repo-selection-head"><div><strong>Repositories</strong><small>至少选择一个已就绪的 Repository</small></div><button type="button" class="text-button" data-add-repository>＋ 添加</button></div>
+      <div class="repo-selection-head"><div><strong>Repository</strong><small>选择一个已就绪的 Repository</small></div><button type="button" class="text-button" data-add-repository>＋ 添加</button></div>
       <div id="task-repository-options" class="task-repository-options"></div>
       <div class="form-error" id="task-form-error" role="alert"></div>
       <div class="dialog-actions"><button class="button secondary" type="button" data-close-dialog>取消</button><button class="button primary" id="create-task-submit" type="submit">创建 Task</button></div>
@@ -93,17 +95,35 @@
   <div class="dialog-backdrop" id="add-repository-dialog" hidden>
     <form class="dialog-card repo-dialog" id="add-repository-form">
       <div class="dialog-head"><div><h2>添加 Repository</h2></div><button class="close-button" type="button" data-close-repo-dialog aria-label="关闭">×</button></div>
-      <p class="dialog-intro">先用你的权限添加到本机，再把名称、地址和默认分支同步到平台。</p>
+      <p class="dialog-intro">平台只保存 Repository 元数据；首次执行 Task 时，Runner 会用你 Mac 上已有的 Git 凭据准备本地镜像。</p>
       <div class="form-grid">
         <label><span>名称</span><input name="name" required placeholder="alignyard" autocomplete="off" /></label>
-        <label><span>默认分支 <small>留空自动检测</small></span><input name="default_branch" autocomplete="off" placeholder="自动" /></label>
+        <label><span>默认分支</span><input name="default_branch" autocomplete="off" placeholder="main" /></label>
         <label class="full"><span>Git 地址</span><input name="git_url" required placeholder="git@github.com:team/alignyard.git" autocomplete="off" /></label>
-        <label class="full"><span>HTTPS Token <small>可选，仅保存在本机</small></span><input name="token" type="password" autocomplete="new-password" /></label>
       </div>
-      <div class="security-row"><span>✓</span><p>凭据和 clone 留在本机；平台只保存 Repository 元数据。</p></div>
+      <div class="security-row"><span>✓</span><p>Git、SSH、gh、glab 的凭据都留在 Runner 所在的 Mac 上。</p></div>
       <div class="form-error" id="repo-form-error" role="alert"></div>
       <div class="dialog-actions"><button class="button secondary" type="button" data-close-repo-dialog>取消</button><button class="button primary" id="add-repository-submit" type="submit">添加 Repository</button></div>
     </form>
+  </div>
+
+  <div class="dialog-backdrop" id="runner-dialog" hidden>
+    <section class="dialog-card runner-dialog" role="dialog" aria-modal="true" aria-labelledby="runner-dialog-title">
+      <div class="dialog-head">
+        <div><p class="eyebrow">LOCAL EXECUTION</p><h2 id="runner-dialog-title">连接这台 Mac</h2></div>
+        <button class="close-button" id="runner-dialog-close" type="button" aria-label="关闭">×</button>
+      </div>
+      <p class="dialog-intro">Runner 在你的 Mac 上运行 Agent、Git 和 worktree；Alignyard 云端只负责任务、Review、Prompt 与工程知识。</p>
+      <div class="runner-state" id="runner-state"></div>
+      <section class="runner-install" id="runner-install">
+        <ol><li>点击生成一次性安装命令</li><li>在 Mac 的 Terminal 中粘贴并运行</li><li>回到这里，连接成功后会自动刷新</li></ol>
+        <button class="button primary" id="runner-pair-button" type="button">生成 macOS 安装命令</button>
+        <div class="runner-command" id="runner-command" hidden><code id="runner-command-text"></code><button id="runner-command-copy" type="button">复制</button></div>
+        <p class="form-hint runner-hint" id="runner-pair-expiry"></p>
+      </section>
+      <div class="form-error" id="runner-error" role="alert"></div>
+      <div class="dialog-actions"><button class="button secondary" id="runner-dialog-done" type="button">完成</button></div>
+    </section>
   </div>
 
   <div class="dialog-backdrop" id="repository-detail-dialog" hidden>
@@ -230,39 +250,8 @@
     </section>
   </div>
 
-  <!-- Shared Switchyard read-only file/diff viewer, opened with the runtime Task
-       id so worktree paths never cross the browser API boundary. -->
-  <div id="code-modal" class="modal-bg code-modal-bg" style="display:none" role="dialog" aria-modal="true" aria-labelledby="cv-title">
-    <div class="modal code-modal">
-      <div class="cv-head">
-        <div class="cv-heading">
-          <h2 id="cv-title"></h2>
-          <div id="cv-revision" class="cv-revision"></div>
-        </div>
-        <button id="cv-refresh" class="cv-head-btn" type="button" data-i18n-title="code.refresh" aria-label="Refresh"><span class="sync-icon" aria-hidden="true"></span></button>
-        <button id="cv-close" class="cv-head-btn cv-close" type="button" data-i18n-title="code.close" aria-label="Close">×</button>
-      </div>
-      <div class="cv-tabs" role="tablist">
-        <button id="cv-tab-files" type="button" role="tab" data-i18n="code.files"></button>
-        <button id="cv-tab-changes" type="button" role="tab" data-i18n="code.changes"></button>
-      </div>
-      <div id="cv-banner" class="cv-banner"></div>
-      <div class="cv-body">
-        <aside id="cv-nav" class="cv-nav" aria-label="Files"></aside>
-        <main id="cv-main" class="cv-main">
-          <div class="cv-mobile-bar">
-            <button id="cv-back" type="button">‹ <span data-i18n="code.back"></span></button>
-          </div>
-          <div id="cv-path" class="cv-path"></div>
-          <div id="cv-content" class="cv-content"></div>
-        </main>
-      </div>
-    </div>
-  </div>
 
   <div class="toast-region" id="toast-region" aria-live="polite"></div>
-  <script src="/i18n.js"></script>
-  <script>I18N.init(); I18N.applyStatic();</script>
   <script src="/vendor/xterm.js"></script>
   <script src="/vendor/addon-canvas.js"></script>
   <script src="/vendor/addon-unicode11.js"></script>

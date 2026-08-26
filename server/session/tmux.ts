@@ -1,4 +1,4 @@
-import type { CommandRunner } from "../fleet/runner.js";
+import type { CommandRunner } from "../core/command-runner.js";
 import { agentArgv, type AgentKind } from "./agent.js";
 
 const KIMI_READY_TEXT = "Welcome to Kimi Code!";
@@ -197,19 +197,7 @@ export async function loadSessionDirectory(
 }
 
 /**
- * Start a detached bare-shell tmux session (the login shell, no command) in cwd.
- * Used by the local quick task: a throwaway terminal where the user cd's and
- * runs claude (or anything) themselves — deliberately more general than
- * auto-launching claude.
- */
-export async function startShellSession(runner: CommandRunner, session: string, cwd: string) {
-  requireOwnerNode(runner);
-  await tmux(runner, ["new-session", "-d", "-s", session, "-c", cwd]);
-  await ensureSessionOptions(runner, session);
-}
-
-/**
- * Normalize the tmux options Switchyard relies on for its web terminal. User/global
+ * Normalize the tmux options Alignyard relies on for its web terminal. User/global
  * tmux config differs across machines; in particular `mouse off` makes trackpad
  * wheel gestures fall through as Up/Down keys in Codex, which flips prompt history
  * instead of scrolling.
@@ -275,8 +263,8 @@ export async function cancelCopyMode(runner: CommandRunner, session: string) {
  * No trailing newline, so it never auto-submits — the user adds text and Enters.
  */
 export async function pasteText(runner: CommandRunner, session: string, text: string) {
-  await tmux(runner, ["set-buffer", "-b", "tdsp-paste", "--", text]);
-  await tmux(runner, ["paste-buffer", "-t", session, "-b", "tdsp-paste", "-p", "-d"]);
+  await tmux(runner, ["set-buffer", "-b", "alignyard-paste", "--", text]);
+  await tmux(runner, ["paste-buffer", "-t", session, "-b", "alignyard-paste", "-p", "-d"]);
 }
 
 /**
@@ -293,7 +281,7 @@ export async function pasteSubmit(runner: CommandRunner, session: string, text: 
 export async function listSessions(runner: CommandRunner): Promise<string[]> {
   try {
     const out = await tmux(runner, ["list-sessions", "-F", "#{session_name}"]);
-    return out.split("\n").map((s) => s.trim()).filter((s) => /^(tdsp|task)-([a-z0-9]+-)?\d+(-[a-z0-9-]+)?$/.test(s));
+    return out.split("\n").map((s) => s.trim()).filter((s) => /^(ay|tdsp|task)-([a-z0-9]+-)?\d+(-[a-z0-9-]+)?$/.test(s));
   } catch {
     return []; // no server / no sessions
   }

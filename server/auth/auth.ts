@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type Database from "better-sqlite3";
 import type { NextFunction, Request, Response } from "express";
 import { OAuth2Client } from "google-auth-library";
+import { authenticateExecutionToken } from "../runner/registry.js";
 
 type DB = Database.Database;
 
@@ -37,7 +38,8 @@ type PlatformUserRow = Omit<PlatformUser, "email_verified"> & { email_verified: 
 
 export interface AuthenticatedRequest extends Request {
   alignyardUser?: PlatformUser;
-  alignyardAuthKind?: "local" | "session" | "service";
+  alignyardAuthKind?: "local" | "session" | "service" | "execution";
+  alignyardExecutionTaskKey?: string;
 }
 
 export interface GoogleIdentity {
@@ -76,7 +78,6 @@ export function googleEmailAllowed(
 export function googleConfigurationError(env: NodeJS.ProcessEnv = process.env): string | null {
   if (authMode(env) !== "google") return null;
   if (!googleClientId(env)) return "Google 登录已启用，但缺少 GOOGLE_CLIENT_ID";
-  if (!env.ALIGNYARD_API_TOKEN?.trim()) return "Google 登录已启用，但缺少 ALIGNYARD_API_TOKEN";
   if (!env.ALIGNYARD_ALLOWED_EMAILS?.trim() && env.ALIGNYARD_AUTH_ALLOW_ANY_GOOGLE?.trim() !== "1") {
     return "Google 登录已启用，但缺少 ALIGNYARD_ALLOWED_EMAILS";
   }
@@ -245,7 +246,7 @@ export function authenticateHeaders(
   db: DB,
   headers: Record<string, string | string[] | undefined>,
   env: NodeJS.ProcessEnv = process.env,
-): { user: PlatformUser; kind: "local" | "session" | "service" } | null {
+): { user: PlatformUser; kind: "local" | "session" | "service" | "execution"; task_key?: string } | null {
   if (authMode(env) === "local") return { user: ensureLocalUser(db, env), kind: "local" };
 
   const serviceToken = env.ALIGNYARD_API_TOKEN?.trim();
@@ -256,6 +257,15 @@ export function authenticateHeaders(
       name: "Alignyard Agent",
     });
     return { user, kind: "service" };
+  }
+
+  const execution = suppliedBearer ? authenticateExecutionToken(db, suppliedBearer) : null;
+  if (execution) {
+    const user = upsertPlatformUser(db, "service", {
+      sub: `execution:${execution.execution_id}`,
+      name: "Alignyard Runner Agent",
+    });
+    return { user, kind: "execution", task_key: execution.task_key };
   }
 
   const sessionToken = parseCookie(headers.cookie, SESSION_COOKIE);
@@ -271,6 +281,14 @@ export function requireAuthentication(db: DB, env: NodeJS.ProcessEnv = process.e
       if (!authenticated) return res.status(401).json({ error: "请先登录 Alignyard" });
       req.alignyardUser = authenticated.user;
       req.alignyardAuthKind = authenticated.kind;
+      if (authenticated.kind === "execution") {
+        const taskKey = authenticated.task_key!;
+        const expected = `/api/platform/tasks/${encodeURIComponent(taskKey)}/sync`.toLowerCase();
+        if (req.method !== "POST" || req.originalUrl.split("?")[0].toLowerCase() !== expected) {
+          return res.status(403).json({ error: "Execution token 只能同步对应 Task" });
+        }
+        req.alignyardExecutionTaskKey = taskKey;
+      }
       next();
     } catch (error: any) {
       res.status(503).json({ error: String(error?.message || error) });

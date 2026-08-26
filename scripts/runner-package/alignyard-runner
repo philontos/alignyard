@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+self=$0
+if [ -L "$self" ]; then self=$(readlink "$self"); fi
+root=$(CDPATH= cd -- "$(dirname -- "$self")/.." && pwd)
+export ALIGNYARD_RUNNER_BIN="$root/bin/alignyard-runner"
+export ALIGNYARD_DATA_DIR="${ALIGNYARD_DATA_DIR:-$HOME/.alignyard/runtime}"
+export PATH="$root/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+exec "$root/runtime/node" "$root/app/node_modules/tsx/dist/cli.mjs" "$root/app/server/runner/main.ts" "$@"

@@ -7,72 +7,89 @@ owners: []
 relations:
   - doc.shared.architecture
   - doc.server.cli-configuration
+  - doc.server.runner-protocol
   - doc.server.knowledge-protocol
   - doc.web.overview
+  - adr.shared.platform-runner-separation
 ---
 
 # 概述
 
-本仓库使用 Node.js 22+、TypeScript/ES modules 与直接加载的浏览器 JavaScript。没有编译产物或 bundler：服务端由 `tsx` 直接执行 `.ts`，浏览器端由 Express 原样提供 `web/`。`package-lock.json` 是依赖锁定文件，安装使用 npm。
+仓库使用 Node.js 22+、TypeScript/ES modules、SQLite 和原生浏览器 ES modules。服务端由 `tsx` 执行，Web 无 bundler。Platform 与 Runner 共用依赖和执行内核，但分别从唯一组合根启动。
 
-## 环境准备
-
-README 声明基础依赖为 Node.js 22+、`git`、`tmux` 与 zsh。`scripts/setup.sh` 还会按 tmux/SSH 使用的非交互 zsh 环境检查 `claude` 和 `kimi`，必要时在 `~/.zshenv` 写入带 marker 的 PATH 段，再运行 `npm install` 和 `tdsp install`。脚本不安装缺失的系统命令；`codex` 是可选 Agent，使用前单独确认 `zsh -c` 可找到它。
-
-首次开发可使用：
+## 本地开发
 
 ```sh
-npm install
-npm run dev
+npm ci
+ALIGNYARD_AUTH_MODE=local ALIGNYARD_DATA_DIR=/tmp/alignyard-dev npm run dev
 ```
 
-`npm run dev` 执行 `tsx watch server/index.ts`。默认页面为 `http://127.0.0.1:4500`；如机器已有正式实例，应使用 `TASK_DISPATCHER_DATA_DIR` 和未占用端口隔离开发数据。
+`npm run dev` watch `server/platform/main.ts`。使用独立 `ALIGNYARD_DATA_DIR` 可以避免测试数据与本机正式 Runner 冲突。源码方式启动 Runner：
+
+```sh
+ALIGNYARD_DATA_DIR=/tmp/alignyard-runner-dev npm run runner -- doctor
+```
 
 ## 常用命令
 
 | 命令 | 作用 |
 |---|---|
-| `npm run dev` | watch 模式启动 `server/index.ts` |
-| `npm start` | 直接启动 `server/index.ts` |
-| `npm run -s tdsp -- <命令>` | 从源码调用节点运行与运维 CLI |
-| `npm run -s ay -- <命令>` | 从源码调用 Alignyard 工程知识 CLI |
-| `npm test` | 运行全部 `server/**/*.test.ts` 与 `web/**/*.test.mjs` |
-| `npm run screenshots:readme` | 用临时 mock 服务和 headless Chrome 重建 README 截图 |
-| `./scripts/setup.sh --check` | 只读检查非交互 zsh 所需命令，不安装或写文件 |
-| `./scripts/setup.sh` | 修复 PATH、安装 npm 依赖，并安装全局 `tdsp`/`ay` 启动器 |
+| `npm run dev` | watch 模式启动 Platform |
+| `npm start` | 启动 Platform |
+| `npm run runner -- <命令>` | 源码方式运行 Runner CLI |
+| `npm run -s ay -- <命令>` | 运行工程知识 CLI |
+| `npm run build:runner:macos` | 构建当前 Mac 架构的自包含 Runner 制品 |
+| `npm test` | 运行服务端与 Web 全量测试 |
+| `npx tsc --noEmit --allowImportingTsExtensions` | TypeScript 静态检查 |
+| `npm run -s ay -- validate .` | 校验 `.alignyard/` 工程知识 |
+| `docker compose config` | 校验通用部署配置 |
+| `./scripts/deploy-platform.sh` | 构建、启动并等待 Platform 健康 |
 
-仓库没有独立 `build`、类型检查、lint 或 package 发布脚本。`tsconfig.json` 对 `server/**/*.ts` 启用 `strict`，但现有标准验证入口是 `npm test`；不要把不存在的 CI 门禁当作已配置流程。
+## Runner 制品
 
-## 测试约定
+`scripts/build-runner-macos.sh` 为当前 `arm64` 或 `x64` 构建：
 
-- 后端测试与源码同目录，命名为 `*.test.ts`，使用 Node.js 内置 test runner 并通过 `--import tsx` 加载 TypeScript。
-- 前端测试命名为 `*.test.mjs`，同样由 Node.js test runner 执行；测试通常用轻量 DOM/socket 替身覆盖核心交互，不需要浏览器构建步骤。
-- 领域逻辑优先通过依赖注入测试，例如 runner、数据库、文件探测和网络请求；涉及 SQLite 时使用临时或内存数据库，避免接触真实 profile。
-- 改动 `.alignyard/` 时额外运行 `ay validate .`；这只验证协议结构，仍需人工检查主题完整性和事实依据。
+```text
+dist/runner/stable/darwin-<arch>/
+  alignyard-runner.tar.gz
+  alignyard-runner.tar.gz.sha256
+  manifest.json
+```
 
-## 截图维护
+制品包含 Node runtime、锁定的 npm 依赖、Runner/`ay` launcher 和所需源码。系统已安装 Node 时仍使用包内 runtime，以保证 Node/native module ABI 一致。构建脚本需要联网下载对应 Node archive；产物不提交 Git。
 
-`scripts/readme-demo/server.mjs` 用确定性的 mock 数据提供真实 `web/`，`scripts/readme-demo/capture.mjs` 通过 Chrome DevTools Protocol 驱动桌面和移动流程，并写入 `docs/screenshots/`。该流程不打开真实 SQLite 或 tmux。Chrome 不在默认位置时设置 `CHROME_BIN`；截图是脚本生成物，不应手工修改。
+## Platform 部署
 
-## 安装、更新与运行
+仓库只提供通用 Docker/Compose 能力：
 
-- `tdsp install` 在 `~/.task-dispatcher` 下准备源码链接和启动器；`tdsp install --profile <name>` 创建隔离的数据目录、namespace、端口使用环境与 `tdsp-<name>` 命令，但不会启动服务。
-- `tdsp serve` 启动服务，`tdsp serve status|stop|restart` 管理同一 launcher/profile 的进程状态。
-- `tdsp update` 对已安装 checkout 执行 `git pull --ff-only` 和 `npm install --no-fund --no-audit`；更新后需重启服务。仓库没有 tag 驱动、制品上传或自动部署流程。
-- profile 卸载默认把完整数据移到 `~/.task-dispatcher/uninstalled-profiles/`；只有显式 `--purge` 才永久删除。默认 canonical 安装不能通过此命令移除。
-- 当前仓库未跟踪 `.github/workflows/`、`.gitlab-ci.yml` 或同类 CI 配置，因此评审前必须在本地执行相关验证。
+1. 从 `.env.example` 创建部署环境文件，只在目标机保存秘密值。
+2. 构建两种 Mac 架构制品，并把 `dist/runner` 挂载为只读下载目录。
+3. 执行 `./scripts/deploy-platform.sh`。
+4. 用 Caddy、Nginx 或云负载均衡终止 HTTPS，并转发普通 HTTP 与 WebSocket upgrade。
+5. 备份 `/data`，保持单实例运行。
 
-## 目录与代码约定
+本机可另写一个不提交的 GCP 辅助工具负责创建 VM、SSH、同步仓库与环境文件、调用通用部署脚本。它不能把项目 ID、实例名、域名或密钥写回仓库。
 
-- `server/index.ts` 只做组合和启动；HTTP 胶水放在 `server/http/`，业务规则放在领域目录。
-- 服务端 TypeScript 是 ESM，源码 import 使用运行时 `.js` 后缀；新增代码保持现有约定。
-- `web/js/core/` 放可复用状态、DOM、PTY 和代码阅读能力，`web/js/features/` 放 Switchyard 页面功能；Alignyard 当前入口使用 `web/js/platform.js` 与 `web/js/platform-agent.js`。
-- 稳定行为应有同目录测试；README 截图只通过 `screenshots:readme` 更新。
-- `node_modules/`、运行数据 `data/`、日志和 `.DS_Store` 已忽略。凭据值不得写入日志、文档或 fixture。
+## 目录与拆分规则
+
+- 组合根只做装配；业务状态机放 `platform/` 或 `runner/operations`。
+- HTTP 路由只做认证、校验和错误映射；不要直接操作 Git/tmux。
+- 本机执行能力依赖 `LocalExecutor`/`CommandRunner` 小接口，不依赖 Host/Fleet 抽象。
+- 新交互按完整闭环拆到 `web/js/features/` 与 `web/css/features/`；不要继续扩大页面级入口。
+- 对超过约 500 行且包含多类职责的文件优先按领域拆分；同一状态机仍应保留在一个高内聚模块中。
+- 删除旧功能时同步删除源文件、测试、依赖、静态资源和文档，避免形成影子产品。
 
 ## 提交前检查
 
-1. 运行与改动范围相称的定向测试，再运行 `npm test`。
-2. 若改动工程知识，运行 `ay validate .` 并检查 overview 导航、scope 覆盖与 relation。
-3. 若改动 README 关键界面，运行 `npm run screenshots:readme` 并检查确定性输出。
-4. 用 `git status --short` 确认没有 profile 数据、依赖、日志或其它生成物进入提交。
+```sh
+npx tsc --noEmit --allowImportingTsExtensions
+npm test
+npm run -s ay -- validate .
+docker compose config
+sh -n scripts/deploy-platform.sh
+sh -n scripts/build-runner-macos.sh
+sh -n web/downloads/install-runner-macos.sh
+git diff --check
+```
+
+再执行敏感信息扫描，至少覆盖 `.alignyard/`、README、部署文件和示例。不得提交真实邮箱、OAuth client ID、云项目/主机、Repository/Task 内容、token、pairing code 或本机绝对路径。

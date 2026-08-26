@@ -1,11 +1,6 @@
-// Task-creation orchestration, extracted so BOTH the HTTP route and the `tdsp`
-// CLI verb run the exact same code. In the edge-autonomy model a node only ever
-// creates tasks ON ITSELF — so the orchestration is always local; the machine,
-// shell-starter and cwd-check are injected (real localRunner in prod, fakes in
-// tests). The durable record is the manifest, written here as the single writer.
+// Runner-local task creation. Transport stays outside this module; filesystem,
+// database and durable manifest changes form one explicit state machine here.
 import path from "node:path";
-import { writeTaskManifestFromDb } from "./taskmanifest.js";
-import { resolveCwd } from "../fleet/local.js";
 import type { AgentKind } from "../session/agent.js";
 import type Database from "better-sqlite3";
 import { getOwnedTask } from "../core/ownership.js";
@@ -23,64 +18,6 @@ function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "task";
 }
 
-export interface LocalTaskEnv {
-  db: DB;
-  home: string; // the machine's home dir (os.homedir() in prod)
-  ns: string; // this node's namespace (NS) — scopes the tmux session name
-  dataDir: string; // this node's DATA_DIR — manifest root
-  cwdExists(cwd: string): Promise<boolean>;
-  startShell(session: string, cwd: string): Promise<void>;
-}
-
-export interface CreateLocalOpts {
-  cwd?: string | null;
-  title?: string | null;
-}
-
-export type CreateLocalResult =
-  | { ok: true; id: number; session: string }
-  | { ok: false; error: "cwdMissing" | "startFailed"; message?: string };
-
-/**
- * Create a repo-less shell task on THIS machine: resolve+verify the cwd, insert
- * the row, start the tmux shell, flip to running, and write the manifest. On a
- * start failure the row is marked errored (and still manifested, so the node owns
- * the record of the failure). cwdMissing is rejected before any row is inserted.
- */
-export async function createLocalTask(env: LocalTaskEnv, opts: CreateLocalOpts): Promise<CreateLocalResult> {
-  const cwd = resolveCwd(opts.cwd, env.home);
-  if (!(await env.cwdExists(cwd))) return { ok: false, error: "cwdMissing" };
-  const provided = String(opts.title ?? "").trim();
-
-  // a node's own local tasks belong to its local host row (so the UI groups them
-  // under "this machine"); absent in a bare test DB → null, which reads as local.
-  const localHost = env.db.prepare("SELECT id FROM hosts WHERE kind='local'").get() as { id: number } | undefined;
-  const hostId = localHost?.id ?? null;
-
-  // insert first so the row id seeds the auto-title and the session name
-  const info = env.db
-    .prepare(
-      "INSERT INTO tasks (kind, host_id, repo_id, base_branch, work_branch, title, prompt, worktree_path, session, status, cwd) " +
-        "VALUES ('local', ?, 0, '', '', ?, NULL, '', '', 'creating', ?)",
-    )
-    .run(hostId, provided, cwd);
-  const id = Number(info.lastInsertRowid);
-  const title = provided || `Local task #${id}`;
-  const session = `tdsp-${env.ns}-${id}-local-${slug(title)}`;
-
-  const manifest = () => writeTaskManifestFromDb(env.dataDir, env.db, id);
-  try {
-    await env.startShell(session, cwd);
-  } catch (e: any) {
-    env.db.prepare("UPDATE tasks SET title=?, status='error', error=? WHERE id=?").run(title, String(e?.message || e), id);
-    manifest();
-    return { ok: false, error: "startFailed", message: String(e?.message || e) };
-  }
-  env.db.prepare("UPDATE tasks SET title=?, session=?, status='running' WHERE id=?").run(title, session, id);
-  manifest();
-  return { ok: true, id, session };
-}
-
 // ---------- stop ----------
 export interface StopTaskEnv {
   db: DB;
@@ -92,9 +29,8 @@ export type StopResult = { ok: true } | { ok: false; error: "notFound" };
 
 /**
  * Stop one of THIS node's tasks: kill its tmux session, mark it cleaned, and
- * re-write the manifest so the durable record reflects the stop. The owning node
- * runs this (directly, or driven by `ssh <node> tdsp stop <id>`). The worktree is
- * kept — same as the existing archive action.
+ * re-write the manifest so the durable record reflects the stop. The Runner
+ * executes it locally and keeps the worktree.
  */
 export async function stopTask(env: StopTaskEnv, id: number): Promise<StopResult> {
   const task = getOwnedTask(env.db, id);
@@ -166,11 +102,8 @@ export interface CreateRepoOpts {
    * Task key; ordinary runtime dispatch keeps the historical feat/<id>-<slug>. */
   workBranch?: string | null;
   prompt?: string | null;
-  // Alternate model backend (optional). providerId is recorded on the task (so
-  // resume can re-inject the same backend); env is the resolved ANTHROPIC_* vars
-  // injected when claude launches. Both omitted → default claude login. Only the
-  // in-process caller sets these; the CLI/fleet caller leaves them undefined.
-  providerId?: number | null;
+  // Bounded environment passed to the Agent process. Runner operations filter
+  // caller input before reaching this interface.
   env?: Record<string, string>;
   // Which coding-agent CLI runs the task (claude default | codex | kimi) and the
   // optional non-Claude -m model. Recorded so resume rebuilds the same launch.
@@ -190,8 +123,7 @@ export type CreateRepoResult =
  * Create a repo task ON the owner: insert the row, prepare the worktree +
  * session, then flip to running and write the manifest. A failure
  * after the row exists removes the partial worktree and marks the task errored
- * (still manifested). Mirrors index.ts's POST /api/tasks exactly — the HTTP route
- * becomes a thin caller, and a future `tdsp create` verb reuses this verbatim.
+ * (still manifested). The Runner operation remains a thin caller.
  */
 export async function createRepoTask(env: RepoTaskEnv, repo: RepoRef, opts: CreateRepoOpts): Promise<CreateRepoResult> {
   const agent = opts.agent ?? "claude";
@@ -204,9 +136,9 @@ export async function createRepoTask(env: RepoTaskEnv, repo: RepoRef, opts: Crea
   }
   const info = env.db
     .prepare(
-      "INSERT INTO tasks (repo_id, base_branch, work_branch, title, prompt, worktree_path, session, status, provider_id, agent, agent_model) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO tasks (repo_id, base_branch, work_branch, title, prompt, worktree_path, session, status, agent, agent_model) VALUES (?,?,?,?,?,?,?,?,?,?)",
     )
-    .run(repo.id, opts.baseBranch, "", opts.title, opts.prompt || null, "", "", "creating", opts.providerId ?? null, agent, opts.model ?? null);
+    .run(repo.id, opts.baseBranch, "", opts.title, opts.prompt || null, "", "", "creating", agent, opts.model ?? null);
   const id = Number(info.lastInsertRowid);
   const s = slug(opts.title);
   const requestedBranch = String(opts.workBranch || "").trim();
@@ -222,7 +154,7 @@ export async function createRepoTask(env: RepoTaskEnv, repo: RepoRef, opts: Crea
   const workBranch = requestedBranch || `feat/${id}-${s}`;
   const worktree = path.resolve(path.join(path.dirname(repo.mirror_path), "..", "worktrees", `${repo.id}-${id}`));
   const referenceRoot = path.resolve(path.join(path.dirname(repo.mirror_path), "..", "worktrees", "refs", String(id)));
-  const session = `tdsp-${env.ns}-${id}-${slug(repo.name)}-${s}`;
+  const session = `ay-${env.ns}-${id}-${slug(repo.name)}-${s}`;
   const materialized: Array<{
     task_id: number;
     repo_id: number;
