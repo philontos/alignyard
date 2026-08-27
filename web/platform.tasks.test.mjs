@@ -14,6 +14,7 @@ const platformApp = fs.readFileSync(new URL("../server/platform/app.ts", import.
 const platformMain = fs.readFileSync(new URL("../server/platform/main.ts", import.meta.url), "utf8");
 
 test("Tasks surface keeps only the three primary filters and one create action", () => {
+  assert.match(html, /data-task-filter="all">All<\/button>[\s\S]*data-task-filter="mine">Mine<\/button>[\s\S]*data-task-filter="review">To Review<\/button>/);
   const taskView = html.match(/<section class="view active" id="view-tasks"[\s\S]*?<\/section>/)?.[0] || "";
   assert.deepEqual(
     [...taskView.matchAll(/data-task-filter="([^"]+)"/g)].map((match) => match[1]),
