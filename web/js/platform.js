@@ -404,10 +404,10 @@ function taskRepositoryOptions(preselectId) {
   }
   target.innerHTML = state.repositories.map((repo) => {
     const protocolState = repositoryProtocolState(repo);
-    const ready = protocolState === "ready";
-    const selected = ready && repo.id === preselectId;
+    const available = ["ready", "outdated"].includes(protocolState);
+    const selected = available && repo.id === preselectId;
     return `<label class="repo-option ${selected ? "selected" : ""}" data-repository-id="${repo.id}">
-      <input type="checkbox" value="${repo.id}" ${selected ? "checked" : ""} ${ready ? "" : "disabled"} />
+      <input type="checkbox" value="${repo.id}" ${selected ? "checked" : ""} ${available ? "" : "disabled"} />
       <span><strong>${escapeHtml(repo.name)}</strong><small>${escapeHtml(repo.git_url)} · ${escapeHtml(protocolStateLabels[protocolState] || protocolState)}</small></span>
       <select data-repository-branch data-state="idle" aria-label="${escapeHtml(repo.name)} 基准分支"><option value="${escapeHtml(repo.default_branch)}">${escapeHtml(repo.default_branch)}</option></select>
     </label>`;

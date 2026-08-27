@@ -95,9 +95,10 @@ test("Task Repository branches go through the explicit execution backend", () =>
 
 test("Task creation keeps one Repository role and leaves edit intent to the user", () => {
   const options = script.match(/function taskRepositoryOptions[\s\S]*?\n}\n\nfunction openTaskDialog/)?.[0] || "";
-  assert.match(html, /选择一个已就绪的 Repository/);
+  assert.match(html, /选择一个已完成初始化的 Repository/);
   assert.doesNotMatch(options, /data-repository-mode|value="reference"/);
-  assert.match(options, /type="checkbox"[^>]+\$\{ready \? "" : "disabled"\}/);
+  assert.match(options, /\["ready", "outdated"\]\.includes\(protocolState\)/);
+  assert.match(options, /type="checkbox"[^>]+\$\{available \? "" : "disabled"\}/);
   assert.match(script, /mode: "editable"/);
   assert.match(styles, /\.repo-option\s*\{[^}]*grid-template-columns:\s*24px minmax\(120px,1fr\) 180px/);
 });
