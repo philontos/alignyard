@@ -260,6 +260,13 @@ test("Task completion is a terminal state after reviewed changes are merged", ()
   assert.match(platformRoutes, /只有 Task 发起人可以完成 Task/);
 });
 
+test("Task states use distinct semantic colors", () => {
+  assert.match(styles, /\.status-draft\s*\{[^}]*var\(--muted\)[^}]*var\(--soft\)/);
+  assert.match(styles, /\.status-review\s*\{[^}]*var\(--amber\)[^}]*var\(--amber-soft\)/);
+  assert.match(styles, /\.status-approved\s*\{[^}]*var\(--blue\)[^}]*var\(--blue-soft\)/);
+  assert.match(styles, /\.status-completed\s*\{[^}]*var\(--success\)[^}]*var\(--success-soft\)/);
+});
+
 test("Task detail reads protocol documents transiently from the participant's worktree", () => {
   assert.doesNotMatch(html, /platform-codeview|code-modal|cv-tab-files/);
   assert.doesNotMatch(script, /openTaskCodeContext|data-open-task-changes|data-artifact-path/);
