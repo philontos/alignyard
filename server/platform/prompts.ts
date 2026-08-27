@@ -27,11 +27,11 @@ export function repositoryInitializationPrompt(input: {
 
 请自主完成以下流程，不要等待用户逐条确认：
 1. 运行 ${ay} init .，然后完整阅读生成的 .alignyard/skills/alignyard-knowledge/SKILL.md；后续步骤以该 Skill 为工作规范。
-2. 盘点证据：阅读仓库 README、package/workspace metadata、已有 docs、CI，以及主要目录、应用入口和测试。识别产品意图、系统边界、依赖方向、稳定公共接口、数据/安全/权限边界、明确不变量和重要技术取舍；忽略依赖、生成物、大文件、秘密值以及能从代码直接获得的局部实现细节。
+2. 盘点证据：阅读仓库 README、package/workspace metadata、已有 docs、CI，以及主要目录、应用入口和测试。识别产品意图、系统边界、依赖方向、稳定公共接口、数据/安全/权限边界、明确不变量和重要技术取舍；沿主要数据流检查同一业务概念在不同边界是否存在不易察觉的语义或表示差异。忽略依赖、生成物、大文件、秘密值以及能从代码直接获得的局部实现细节。
 3. 先形成文档计划，再写文件：在 repository.yaml 中保留 shared、overview 与 constitution 固定入口，并只为明确的应用或服务边界增加 scope。对每条候选内容使用同一个判断：未来 Agent 不知道它时，是否可能写出局部正确但整体违背设计意图的实现；不会则不写入 .alignyard/。
 4. 完善 ${ay} init 生成的 doc.shared.constitution：只记录有仓库证据或用户已确认的全局意图、不可随意改变的架构边界、关键不确定性确认规则与已有机器检查。运行 ${ay} new doc overview --scope shared --title "仓库概览"。overview 只负责仓库全貌和导航；只有会独立演进且确实影响设计方向的主题才拆成独立 Docs。
 5. Specs 只描述已有明确目标但尚未完成的变更；ADRs 只记录仓库中已有明确依据的长期决策；Plans 只用于已有明确需求的可选技术方案。初始化时不要为了凑数量创建空洞或推测性的 Spec/ADR/Plan。
-6. 做一次意图覆盖与精简检查：确认核心意图、架构边界、稳定契约、不变量和长期取舍足以约束后续 Agent，同时删除函数级机制、普通字段流转和与源码重复的内容。不要把 ${ay} validate . 通过当作内容正确或精简。
+6. 做一次意图覆盖与精简检查：确认核心意图、架构边界、稳定契约、不变量、长期取舍和必要的跨边界语义足以约束后续 Agent，同时删除函数级机制、普通字段流转和与源码重复的内容。不要把 ${ay} validate . 通过当作内容正确或精简。
 7. 只修改 .alignyard/。运行 ${ay} validate .，修复全部结构问题，再复查 overview 是否能导航到新增知识。
 8. 运行 git add .alignyard && git commit -m "docs: initialize Alignyard knowledge"。如果 Git 身份缺失，使用当前仓库已有的 author 配置；不要改全局配置。
 9. 最后确认 git status --short 为空，并总结检查过的证据、生成的 scopes/Docs/Specs/ADRs、主动省略的主题及原因、未决问题和验证结果。用户点击“提交 Review”时，Runner 会重新执行 ${ay} validate .、检查提交并推送工作分支。
@@ -76,7 +76,7 @@ Repository：${repository.name}
 
 请先完整阅读并遵循 .alignyard/skills/alignyard-knowledge/SKILL.md，再通过 repository.yaml 定位本 Task 相关的工程知识。
 
-本 Task 默认只形成最小充分、可供人工 Review 并指导后续实现的工程知识设计，不修改业务源码。若缺失信息可能影响产品意图、公共接口、架构边界、兼容性或修改范围，直接询问用户，不要自行推断。
+本 Task 默认只形成最小充分、可供人工 Review 并指导后续实现的工程知识设计，不修改业务源码。先识别受影响的业务概念及其经过的边界；同一概念在两侧缺少权威等价证据时，必须明确表示差异与映射，或直接询问用户，不能把实现表示当成业务含义。若缺失信息可能影响产品意图、公共接口、架构边界、兼容性或修改范围，同样直接询问用户，不要自行推断。
 
 完成时运行 ay validate .，只提交必要的 .alignyard/ 变更并确保 git status --short 为空。总结修改的权威文档、关键约束、已确认问题和验证结果，然后等待用户在 Alignyard 提交 Review。
 
@@ -95,6 +95,7 @@ Platform 只保存 Task 流转元数据，不保存工程知识、摘要或 diff
 你可以按需：
 - 解释 Docs、Specs、ADRs、Plans 的内容及变更原因；
 - 查找仓库证据，核对文档与实际工程是否一致；
+- 核对同一业务概念跨边界时，权威含义、表示差异、映射和示例是否明确；
 - 展示和解释 diff、文件关系与潜在问题；
 - 按 reviewer 要求运行检查；
 - 在 reviewer 明确要求后修改、提交并 push 当前工作分支。

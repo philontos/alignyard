@@ -29,6 +29,7 @@ AI-native 团队的主要协作成本逐渐从逐行编码转向需求澄清、�
 
 - 将普通 change Task 的默认产物改为可评审的知识设计包，而不是代码实现。
 - 明确 `.alignyard/` 只保存会影响 AI 决策方向的核心工程意图、架构边界、重要约束和变化契约；具体实现细节仍以代码、类型与测试为准。
+- 用统一的跨边界语义对齐机制保护业务含义：Task 先识别受影响概念与边界，再判断各边界语义等价、不同或未知，不为具体领域逐项硬编码检查清单。
 - 让 Agent 根据变化性质选择新增或更新 Spec、ADR、Plan、Docs，不强制每个 Task 新建主 Spec，也不为形式完整制造文档。
 - 在 Repository 协议中加入固定的 overview/constitution 入口，以及可选的 `plan` 技术方案。
 - 让技术方案显式引用原始需求来源和必须遵守的 Constitution、Docs、Specs、ADRs，并说明修改范围、保持不变的行为、实施步骤与验证方式。
@@ -37,6 +38,7 @@ AI-native 团队的主要协作成本逐渐从逐行编码转向需求澄清、�
 - 人工 Review 通过后记录不可变 `design_commit`，把普通 Task 交还发起人并标记为可开始实现，不自动进入 PR/MR 阶段。
 - 保持 Platform/Runner 边界：Runner 继续拥有 Git、worktree、Agent 和 forge 凭据；Platform 仅在用户主动阅读时中转其自己 Runner 临时解析的文档，不持久化响应。
 - 数据模型允许未来一个 Task 为多个 editable Repository 分别保存 branch 与 `design_commit`；本版继续只执行一个 editable Repository。
+- 明确 Alignyard 与 Agent Harness 的边界：Alignyard 保存项目意图与语义契约；Harness 负责 Agent 工作流和机器检查，只引用而不复制项目知识。
 
 # 非目标
 
@@ -77,6 +79,10 @@ entrypoints:
 
 设计包遵循“最小充分”原则：只记录未来 Agent 缺少后可能做出错误整体决策的信息。函数级实现、普通字段传递、可由类型和测试直接表达的行为不写入长期文档。Spec 聚焦目标、边界与验收，ADR 聚焦一项长期取舍及原因；Plan 仅在具体技术设计能显著减少实现漂移时创建。
 
+Task 在选择文档之前先完成一次轻量分析：列出本次真正受影响的业务概念，以及它们经过的模块、服务、Repository、API 或持久化边界，并通过对应 scope 与 relations 读取两侧知识。每个概念在各边界的语义被判断为等价、不同或未知。字段同名、类型相同或产品语言中的简写不能单独证明等价；表示不同时，设计包必须通过 `governing` 引用权威 Docs/ADRs，给出归一化或映射规则、保持不变的含义和代表性示例；现有知识不足时继续检查仓库证据，仍未知且会改变结果时直接向用户确认。
+
+这项分析不是新文件、新 frontmatter 或 Platform 实体。简单 Task 可以只在 Agent 分析中确认“没有跨边界语义变化”；需要长期复用的当前契约进入 Docs，本次变化与示例进入 Spec，长期选择原因进入 ADR。可执行映射与回归检查留给代码、测试或 Harness。这样保持协议轻量，同时让 Review 能核对设计是否错误地把实现表示当成业务含义。
+
 外部原始需求只作为适合提交到 Git 的 `sources` 或 Platform Task 元数据。实现时以审核通过的 Spec 和技术方案为准；敏感或不适合进入 Git 的链接只留在私有 Task 元数据中，不写入 `.alignyard/`。
 
 ## Review 与设计基线
@@ -103,6 +109,9 @@ Review 批准时，把每个 editable Repository 当前已推送的 Review HEAD 
 - Reviewer 能在自己的 Runner 拉取远端工作分支，通过 Git diff 和 Agent 阅读、修改完整设计包，包括被删除的文件；Task 页面可按需读取 Reviewer 自己 worktree 的协议文档且不持久化。
 - 普通 Task Prompt 以知识设计为默认目标，明确不确定时直接询问用户，并明确不默认编码。
 - 普通 Task Prompt 使用“最小充分”判断，不强制每个 Task 新建 Spec，也不把可由源码表达的细节搬进长期文档。
+- 普通 Task Prompt 会先识别受影响的业务概念与边界；同一概念在两侧缺少权威等价证据时，不得直接按原始字段合并、比较或迁移。
+- 两侧表示不同的场景必须在设计包中明确权威业务含义、映射规则和代表性示例；含义未知且会影响结果时必须询问用户。该能力通过通用语义对齐实现，不依赖领域专用规则清单。
+- Alignyard 管理的 Skill 和模板明确 `.alignyard/` 与 Agent Harness 的真源边界；Framework 不管理 Harness 安装或版本，也不要求 Harness 复制项目知识。
 - 提交 Review 时 Runner 执行 `ay validate`、clean worktree、新提交与 push 检查；批准后记录各 Repository 的 `design_commit`。
 - 普通 Task 批准后停在“可开始实现”，不会提示或自动推进 PR/MR；Repository Init 保持现有 PR/MR 合并闭环。
 - Task 分支中的 Docs 使用正常路径，协议和工作流中不存在 temp Docs 清理步骤。

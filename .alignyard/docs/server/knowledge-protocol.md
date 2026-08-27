@@ -48,6 +48,19 @@ v1 Repository 被平台判定为完成初始化时，默认分支必须包含 ma
 
 所有内容遵守最小充分原则：如果一条信息缺失不会让 Agent 做出错误的整体设计决定，就不应为了“完整”写入 `.alignyard/`。具体函数调用、局部算法、普通字段流转和实现日志留在代码、测试、注释或 Task 会话中。
 
+## 业务语义与边界契约
+
+Alignyard 不为每个业务领域分别建立规则清单，而是统一处理“同一业务概念跨边界后是否仍保持同一语义”。业务概念的权威定义、不同边界的表示差异以及必须保持的不变量，是稳定接口的一部分；字段类型、序列化方式和局部转换代码仍属于实现。
+
+初始化时，Agent 从主要数据流和系统边界中识别那些仅看局部代码容易误解的概念，把当前语义与边界契约写入对应 scope 的 Docs，并通过 overview、scope 与 relations 保持可发现。普通 Task 开始时先识别受影响的业务概念和边界，再读取两侧适用 Docs 与 ADRs，将源与目标语义判断为等价、不同或未知：
+
+- 等价必须有权威文档或仓库证据支持，不能仅凭字段同名、类型相同或自然语言中的简写判断；
+- 表示不同时，Spec 通过 `governing` 引用两侧真正适用的 Docs/ADRs，并明确归一化或映射规则、保持不变的业务含义和代表性边界示例；
+- 含义未知且会影响设计结果时，Agent 在当前会话向用户确认，再把结论写回 Doc、Spec 或 ADR；
+- 持续变化的运行数据不进入 `.alignyard/`；只有它的权威来源、解释方式、生命周期或兜底策略会约束设计时，才记录长期规则。
+
+这套机制不增加新的文档类型。Docs 保存当前语义，Spec 描述本次变化和映射，ADR 解释长期选择，Plan 可选地展开实现。Agent Harness、hooks 和 CI 可以读取这些文档 ID 并执行相应检查，但只负责工作方式和机器执行，不成为项目知识的第二真源；Alignyard 也不管理 Harness 自身的安装、版本或同步。
+
 ## 创建与校验
 
 新文档必须通过以下命令从仓库模板创建，再填正文和关系：
@@ -93,9 +106,9 @@ Task 页面可以经当前用户自己的 execution 调用 `execution.knowledge`
 ## 初始化维护流程
 
 1. 运行 `ay init .` 并完整阅读生成的 Skill。
-2. 以 README、manifest、docs、CI、入口、主要目录和测试建立证据清单，再规划 scopes、constitution 与长期主题。
+2. 以 README、manifest、docs、CI、入口、主要目录和测试建立证据清单，再规划 scopes、constitution 与长期主题；沿主要数据流检查同一业务概念在不同边界是否存在不易察觉的语义或表示差异。
 3. 只用 `ay new` 创建必要文档；使用“缺少这条信息是否会让 Agent 写出局部正确、整体跑偏的实现”判断是否纳入，不为目录、主题数量或形式完整创建文档。
 4. 检查产品意图、系统边界、稳定接口、长期取舍和明确不可改变行为是否有足够约束，同时删除可由源码直接推导的重复细节。
 5. 运行 `ay validate .`，复查 overview 导航，提交 `.alignyard/` 并确保 worktree clean；用户确认后由 Platform 的提交 Review 动作完成复检和 push。
 
-普通 Task 先读取 overview、constitution 和相关约束，再按变化性质决定新增或更新 Spec、ADR、Plan、Docs。明确的新功能通常形成 Spec，但平台不强制每个 Task 创建主文档；目标是最小充分且能直接约束后续实现。关键不确定性直接在当前 Agent 会话向用户确认，结论进入最终文档，不创建独立决策实体。人工 Review 通过后记录 Repository 级 `design_commit`；普通 Task 停在可开始实现，Repository Init 才继续 PR/MR 合并闭环。已有文档 ID 应保持稳定。
+普通 Task 先读取 overview、constitution 和相关约束，识别受影响的业务概念与边界，再按变化性质决定新增或更新 Spec、ADR、Plan、Docs。明确的新功能通常形成 Spec，但平台不强制每个 Task 创建主文档；目标是最小充分且能直接约束后续实现。关键不确定性直接在当前 Agent 会话向用户确认，结论进入最终文档，不创建独立决策实体。人工 Review 通过后记录 Repository 级 `design_commit`；普通 Task 停在可开始实现，Repository Init 才继续 PR/MR 合并闭环。已有文档 ID 应保持稳定。

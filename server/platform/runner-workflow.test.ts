@@ -195,6 +195,8 @@ test("ordinary Task produces a reviewed design baseline and stops before PR crea
   assert.match(start.params.prompt, /把原始需求整理成可实现的知识设计包/);
   assert.match(start.params.prompt, /请先完整阅读并遵循 \.alignyard\/skills\/alignyard-knowledge\/SKILL\.md/);
   assert.match(start.params.prompt, /直接询问用户，不要自行推断/);
+  assert.match(start.params.prompt, /先识别受影响的业务概念及其经过的边界/);
+  assert.match(start.params.prompt, /不能把实现表示当成业务含义/);
   assert.doesNotMatch(start.params.prompt, /Plan 是可选的|不要为了流程形式强制创建主 Spec/);
   assert.ok(start.params.prompt.length < 1_200);
 

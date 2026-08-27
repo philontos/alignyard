@@ -7,7 +7,7 @@ export const ALIGNYARD_DIR = ".alignyard";
 export const ALIGNYARD_MANIFEST = `${ALIGNYARD_DIR}/repository.yaml`;
 export const ALIGNYARD_PROTOCOL_VERSION = 2 as const;
 export const ALIGNYARD_PROTOCOL_VERSIONS = [1, 2] as const;
-export const ALIGNYARD_FRAMEWORK_VERSION = 2 as const;
+export const ALIGNYARD_FRAMEWORK_VERSION = 3 as const;
 export type AlignyardProtocolVersion = typeof ALIGNYARD_PROTOCOL_VERSIONS[number];
 
 export const KNOWLEDGE_KINDS = ["doc", "spec", "adr", "plan"] as const;
@@ -458,19 +458,19 @@ export function validateRepositoryProtocol(repositoryRoot: string): ProtocolVali
 }
 
 const DEFAULT_TEMPLATES: Record<KnowledgeKind, string> = {
-  doc: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 概述\n`,
-  spec: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景\n\n# 目标\n\n# 非目标\n\n# 设计\n\n# 验收标准\n`,
-  adr: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景\n\n# 决策\n\n# 影响\n`,
-  plan: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景与目标\n\n# 依据与约束\n\n# 实现设计\n\n# 修改范围\n\n# 保持不变\n\n# 实施步骤\n\n# 验证方案\n\n# 文档更新\n\n# 未决问题\n`,
+  doc: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 概述\n\n<!-- 同一业务概念跨边界存在不同表示时，记录概念定义、各边界表示、必须保持的语义不变量和权威来源；只写长期有效规则，不罗列实现细节。 -->\n`,
+  spec: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景\n\n# 目标\n\n# 非目标\n\n# 设计\n\n<!-- 通过 governing 引用真正约束本次变化的 Docs/ADRs。识别受影响的业务概念与系统边界，说明沿用或改变哪些语义不变量；存在不同表示时，给出明确映射和代表性示例。 -->\n\n# 验收标准\n`,
+  adr: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景\n\n# 决策\n\n<!-- 只有业务概念、边界契约或表示选择具有长期替代方案和后果时，才在这里记录为什么。 -->\n\n# 影响\n`,
+  plan: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景与目标\n\n# 依据与约束\n\n<!-- 引用真正约束实现的文档；涉及跨边界语义时，明确权威定义、表示差异和映射顺序。 -->\n\n# 实现设计\n\n# 修改范围\n\n# 保持不变\n\n# 实施步骤\n\n# 验证方案\n\n<!-- 用可执行测试覆盖已确认的语义不变量、边界映射和代表性示例。 -->\n\n# 文档更新\n\n# 未决问题\n`,
 };
 
 const DEFAULT_README = `# Alignyard 工程意图
 
-这个目录是 Repository 中随代码版本管理的核心工程意图与架构约束真源。它只记录未来 AI 不知道时可能造成整体设计漂移的信息；具体函数、局部算法和普通字段传递仍以代码、类型和测试为准。
+这个目录是 Repository 中随代码版本管理的核心工程意图与架构约束真源。它只记录未来 AI 不知道时可能造成整体设计漂移的信息；具体函数、局部算法和普通字段传递仍以代码、类型和测试为准。同一业务概念在不同边界中的定义、表示差异与必须保持的语义不变量，如果无法从局部实现可靠还原，也属于工程知识；持续变化的运行数据本身不属于。
 
 \`repository.yaml\` 声明协议、知识框架版本、固定入口与逻辑 scopes；Docs 记录当前有效的稳定架构事实，Specs 描述一次变化的意图与边界，ADRs 保存长期取舍，Plans 提供可选的可执行技术方案。文档作者和审核轨迹优先使用 Git commit 与 PR/MR/Alignyard Review，不额外维护一套作者字段。
 
-使用 \`ay new\` 创建文档，在 Review 前运行 \`ay validate\` 并提交全部改动。\`ay update --check\` 可预览框架升级，\`ay update\` 只更新 Alignyard 管理的 Skill、模板和协议结构，不覆盖 Repository 的知识正文。工程文档始终保存在 Repository 和 worktree 中；Platform 不保存副本。
+使用 \`ay new\` 创建文档，在 Review 前运行 \`ay validate\` 并提交全部改动。\`ay update --check\` 可预览框架升级，\`ay update\` 只更新 Alignyard 管理的 Skill、模板和协议结构，不覆盖 Repository 的知识正文。工程文档始终保存在 Repository 和 worktree 中；Platform 不保存副本。Agent Harness、skills、hooks 和 CI 负责工作方式与机器检查，可以引用这里的文档 ID，但不复制或重新定义 Repository 的业务结论。
 `;
 
 const DEFAULT_CONSTITUTION = `---
@@ -485,7 +485,7 @@ governing: []
 
 # 概述
 
-这份文档是 Repository 的固定工程约束入口。初始化时应根据仓库证据补充产品意图、架构边界、需要人工确认的关键不确定性，以及已有机器检查；只记录缺失后可能导致整体设计漂移的信息，具体实现细节留在代码、类型与测试中。缺少依据时直接向用户确认，不自行推断。
+这份文档是 Repository 的固定工程约束入口。初始化时应根据仓库证据补充产品意图、架构边界、需要人工确认的关键不确定性，以及已有机器检查；只记录缺失后可能导致整体设计漂移的信息，具体实现细节留在代码、类型与测试中。同一业务概念跨边界流转或组合时，必须区分权威语义与各处实现表示；缺少依据时直接向用户确认，不自行推断。Agent Harness 负责执行与校验方式，不作为这些项目结论的第二真源。
 `;
 
 export const DEFAULT_KNOWLEDGE_SKILL = `---
@@ -503,18 +503,34 @@ Use this repository's \`.alignyard/repository.yaml\` as the routing contract and
 - **Framework update:** use to upgrade Alignyard-managed files and protocol structure while preserving repository knowledge content.
 - **Task work:** use for ordinary requirement discussion, implementation, or documentation changes in an initialized repository.
 
+## Responsibility boundaries
+
+- Put repository-specific product intent, current architecture, stable contracts, non-obvious business semantics, and durable invariants in \`.alignyard/\` when an Agent could otherwise make a locally reasonable but systemically wrong decision.
+- Keep function mechanics, ordinary field plumbing, executable behavior, and implementation truth in code, types, tests, and runtime behavior.
+- Keep Agent operating instructions, tools, hooks, build/test commands, and mechanical enforcement in the repository's Agent Harness, \`AGENTS.md\`, or equivalent workflow layer. That layer may route to Alignyard entrypoints or document IDs, but must not copy or redefine repository knowledge as a second source of truth.
+- Do not snapshot changing runtime data into long-lived knowledge. Record a durable source, interpretation, lifecycle, or fallback policy only when it constrains design.
+
+## Semantic alignment across boundaries
+
+Apply this review whenever a Task combines, transfers, compares, or reinterprets a business concept across module, service, repository, API, storage, or organizational boundaries.
+
+1. Identify the affected business concepts and every boundary they cross. Separate the authoritative meaning of each concept from its representation at each boundary.
+2. Classify source and target semantics as equivalent, different, or unknown. Matching field names, primitive types, or product shorthand are not evidence of equivalence.
+3. When representations differ, define the normalization or mapping rule and representative boundary examples before implementation. When meaning is unknown, establish it from repository evidence or ask the user; do not silently choose an interpretation.
+4. Store the current semantic invariant and boundary contract in Docs, the intended change and examples in a Spec, the reason for a durable choice in an ADR, and optional implementation detail in a Plan. Put executable mappings and regression checks in code/tests or the Harness; do not duplicate them as prose.
+
 ## Repository bootstrap
 
 ### 1. Survey repository evidence
 
 1. Inventory tracked source, root README files, package or workspace manifests, build/test/release commands, CI, existing docs, and the main application entry points. Ignore dependencies, generated output, large binaries, and secrets.
-2. Build an evidence map of the repository's system boundaries, main data flows, stable CLI/API/configuration surfaces, development and operating workflows, and repository-specific conventions. Distinguish verified facts from questions.
+2. Build an evidence map of the repository's system boundaries, main data flows, stable CLI/API/configuration surfaces, development and operating workflows, repository-specific conventions, and non-obvious data semantics at boundaries. Distinguish verified facts from questions.
 3. Define \`shared\` plus only the meaningful application or service boundaries as scopes. Do not mirror every directory or package into a scope. Set \`source\` only when one directory clearly owns that scope.
 
 ### 2. Plan a minimal, sufficient baseline
 
 1. Always create the shared repository overview. Use it as a concise map and navigation entry, not as a catch-all document. For protocol v2, also complete the generated Constitution from verified repository constraints and user-confirmed intent; never leave it as a generic placeholder.
-2. Cover only durable information that can change an Agent's design direction: product intent, architecture and dependency boundaries, stable public contracts, data/security/permission boundaries, explicit invariants, and important technical choices. Keep implementation details in code, types, tests, or local comments when they are directly recoverable there.
+2. Cover only durable information that can change an Agent's design direction: product intent, architecture and dependency boundaries, stable public contracts, data/security/permission boundaries, explicit invariants, important technical choices, and non-obvious semantic differences for the same business concept across boundaries. Keep implementation details in code, types, tests, or local comments when they are directly recoverable there.
 3. Use this test before creating or expanding a document: if a future Agent did not know this fact, could it produce a locally correct implementation that violates the intended system design? If not, omit it. Give a topic its own Doc only when it has enough verified substance and evolves independently.
 4. Classify existing knowledge: current verified behavior belongs in Docs, an intended but unfinished change belongs in Specs, an explicit durable decision belongs in ADRs, and a concrete optional implementation design belongs in a Plan. Do not infer an ADR merely from code shape. Bootstrap Specs and Plans are optional; empty or speculative Specs, ADRs, and Plans are prohibited.
 
@@ -522,7 +538,7 @@ Use this repository's \`.alignyard/repository.yaml\` as the routing contract and
 
 1. Use \`ay new\` for every new document, then fill its body from repository evidence. Preserve original documents unless the Task explicitly includes migration or removal.
 2. Keep documents focused and add meaningful \`relations\` when the overview or one topic depends on another document.
-3. Run an intent-coverage review before validation: ensure core intent, architecture boundaries, stable contracts, invariants, and durable choices are covered, then remove details duplicated from code or tests.
+3. Run an intent-coverage review before validation: ensure core intent, architecture boundaries, stable contracts, invariants, durable choices, and relevant cross-boundary data semantics are covered, then remove details duplicated from code or tests.
 4. Run \`ay validate\` and resolve every structural error. Passing validation proves protocol structure, not truth, sufficiency, or concision.
 5. Run \`ay validate\`. Report evidence inspected, scopes and documents created, topics intentionally omitted with reasons, unresolved questions, and validation results.
 
@@ -536,13 +552,14 @@ Use this repository's \`.alignyard/repository.yaml\` as the routing contract and
 ## Task work
 
 1. Read the manifest entrypoints first, then route through the relevant scope Docs, active Specs, related ADRs, and existing Plans. Treat the accepted Spec as authoritative over external source links.
-2. Decide which existing or new documents the change actually needs. A material new capability or boundary change normally needs a concise Spec; a small correction, documentation-only Task, or change already covered by an accepted Spec may only update existing Docs. Do not create a primary document merely to satisfy a workflow shape.
-3. Ask the user directly when missing facts could change product intent, public interfaces, architecture boundaries, compatibility, or change scope. Do not invent a decision. Incorporate the confirmed answer into the final Spec, ADR, Plan, or Doc.
-4. Create an ADR only for a durable decision with meaningful alternatives or consequences. Create a Plan only when a concrete implementation design materially reduces ambiguity; Plans are optional.
-5. A Plan must govern itself with the Constitution and cite only the Docs, Specs, and ADRs that actually constrain the implementation. A Spec is typical for new behavior or boundary changes, but is not mandatory when existing knowledge already states the intent. State what may change and what must remain unchanged, and include implementation and validation steps. External sources are traceability references, not governing truth.
-6. Draft target-state Docs at their normal paths on the Task branch. The branch is the proposal; do not create a temporary Docs copy. Reconcile Docs with the actual implementation before publishing them to the default branch.
-7. Unless the Task explicitly requests implementation, stop after producing the reviewable knowledge package. Preserve stable document IDs and use \`relations\` only for meaningful dependencies.
-8. Run \`ay validate\` after knowledge changes. Before requesting Review, commit all changes and make sure \`git status --short\` is empty; the Runner will repeat these checks and push the branch when the user submits Review.
+2. Map the affected business concepts and boundaries. For each affected boundary, route through its scope Docs and relations. When a concept is combined, transferred, compared, or reinterpreted, establish the authoritative meaning, each representation, their compatibility, and any required mapping before proposing a design. If existing knowledge is insufficient, inspect repository evidence and then ask the user when the meaning remains uncertain.
+3. Decide which existing or new documents the change actually needs. A material new capability or boundary change normally needs a concise Spec; a small correction, documentation-only Task, or change already covered by an accepted Spec may only update existing Docs. Do not create a primary document merely to satisfy a workflow shape.
+4. Ask the user directly when missing facts could change product intent, public interfaces, architecture boundaries, compatibility, change scope, or the meaning of a concept across boundaries. Do not invent a decision. Incorporate the confirmed answer into the final Spec, ADR, Plan, or Doc.
+5. Create an ADR only for a durable decision with meaningful alternatives or consequences. Create a Plan only when a concrete implementation design materially reduces ambiguity; Plans are optional.
+6. Use \`governing\` on a Spec or Plan to cite only the Docs and ADRs that actually define its affected concepts, boundaries, and constraints. A Plan must also govern itself with the Constitution and may cite its accepted Spec. A Spec is typical for new behavior or boundary changes, but is not mandatory when existing knowledge already states the intent. State what may change and what must remain unchanged, and include implementation and validation steps. External sources are traceability references, not governing truth.
+7. Draft target-state Docs at their normal paths on the Task branch. The branch is the proposal; do not create a temporary Docs copy. Reconcile Docs with the actual implementation before publishing them to the default branch.
+8. Unless the Task explicitly requests implementation, stop after producing the reviewable knowledge package. Preserve stable document IDs and use \`relations\` only for meaningful dependencies.
+9. Run \`ay validate\` after knowledge changes. Before requesting Review, commit all changes and make sure \`git status --short\` is empty; the Runner will repeat these checks and push the branch when the user submits Review. When cross-boundary semantic alignment applied, summarize the confirmed concepts, representations, mappings, examples, and unresolved non-blocking risks for the Reviewer.
 
 ## Document semantics
 

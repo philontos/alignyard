@@ -23,6 +23,7 @@ governing: []
 - `.alignyard/` 是核心工程意图、架构边界、重要约束和变更契约的真源；它可以持续演进，但任何改变都必须显式 Review。
 - 代码、类型、测试与运行行为是具体实现事实的真源。可以从这些载体直接准确获得的函数调用、局部算法和普通字段传递，不在 `.alignyard/` 重复维护。
 - 判断一条信息是否应进入 `.alignyard/`：如果未来 Agent 不知道它，可能写出局部正确但违背整体设计意图的实现，就应记录；否则留在代码或测试中。
+- 同一业务概念在不同系统边界中的权威定义、表示差异和必须保持的语义不变量，属于稳定接口的一部分；只记录长期有效的语义与规则，不保存持续变化的运行数据。
 - Docs、Specs 和 ADRs 必须精简、明确、可执行。一个文件只承担一个稳定主题或关键决策，不保存会议过程、实现日志或可由源码推导的细枝末节。
 
 ## 产品意图
@@ -38,11 +39,12 @@ governing: []
 - Runner 永久拥有本地 mirror、worktree、tmux、Agent 登录和 Git/gh/glab 凭据，只执行版本化 RPC allowlist，不开放任意 shell 或 argv 接口。
 - Browser 只连接 Platform；本机 Runner 使用出站 WebSocket。Browser 不接收设备 token、本机路径或 Runner-local Task ID。
 - `.alignyard/` 只保存适合提交到 Repository 的通用工程知识，不写入运行实例用户、Task、token、本机绝对路径、云项目或秘密值。
+- Agent Harness、`AGENTS.md`、skills、hooks 和 CI 负责 Agent 如何操作与怎样执行机器检查，可以引用 `.alignyard/` 的入口或文档 ID，但不复制或重新定义 Repository 的产品与架构结论。Alignyard 不管理 Harness 的安装、版本或运行生命周期。
 - 一个 Task 的长期模型允许多个 Repository 分别拥有分支与设计基线；在跨仓库 Review 和失败补偿完成前，Runner workflow 继续限制单一 editable Repository。
 
 ## 人工确认
 
-当缺少信息可能改变产品意图、公共接口、架构边界、安全和隐私、兼容性、跨 Repository 契约或修改范围时，Agent 必须直接在当前会话向用户确认，不能自行选择一种假设继续。确认后的结论写入最终 Spec、ADR、Plan 或 Docs，不额外创建独立 Decision Request 实体。
+当缺少信息可能改变产品意图、公共接口、架构边界、安全和隐私、兼容性、跨 Repository 契约、修改范围，或无法判断同一业务概念在两个边界是否等价时，Agent 必须直接在当前会话向用户确认，不能自行选择一种假设继续。确认后的结论写入最终 Spec、ADR、Plan 或 Docs，不额外创建独立 Decision Request 实体。
 
 人工 Review 决定设计是否被接受。Reviewer Agent 只能提供证据、解释或按人类指令修改，不能替人批准。普通 Task Review 通过只表示设计已确认并可开始实现；Repository Init 必须合入默认分支后才完成。
 
@@ -51,6 +53,7 @@ governing: []
 ## 机器检查
 
 - `ay validate` 是 `.alignyard/` 目录、manifest、模板、frontmatter、必需章节和引用完整性的结构权威，但不能证明内容事实正确。
+- 语义是否完整由 Agent 在 Task 中识别受影响概念和边界，并由人工 Review 确认；可执行的映射与回归检查属于代码、测试或 Harness，而不是 Platform 状态。
 - 用户与 Agent 判断内容具备审核条件后才提交 Review；Platform 不维护“知识已完成”状态。
 - 提交 Review 时，Runner 必须重新执行 `ay validate`，并保证 worktree clean、有新提交且工作分支成功 push。
 - 代码修改必须通过 TypeScript 检查、相关测试、`ay validate` 与 `git diff --check`；部署和 Runner 脚本变更还需执行对应 shell 或 Compose 检查。

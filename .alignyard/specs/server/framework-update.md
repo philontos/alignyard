@@ -40,7 +40,7 @@ Platform 不能保存或改写 Repository 知识。版本检测和文件更新�
 `repository.yaml` 同时声明两个版本：
 
 - `version` 表示文档结构与校验契约；当前支持 v1、v2，`ay update` 会升级到当前协议版本。
-- `framework_version` 表示 Alignyard 管理文件的发布版本；缺失时按 legacy v0 处理，当前最新版为 v2。
+- `framework_version` 表示 Alignyard 管理文件的发布版本；缺失时按 legacy v0 处理，当前最新版为 v3。v3 在不增加文档类型或结构强制项的前提下，明确 Alignyard 与 Agent Harness 的真源边界，并加入通用的跨边界业务语义对齐方法。
 
 `ay update --check [repository]` 只计算 `create`、`replace`、`merge` 变化，不写文件。`ay update [repository]` 执行同一计划：合并 `repository.yaml`，替换 `.alignyard/README.md`、默认模板与 `alignyard-knowledge` Skill，补齐缺失的 Constitution、kind/scope 目录。它保留 scopes 及扩展字段，不修改已有 Docs、Specs、ADRs、Plans、文档 ID、relations、sources 或 governing；重复运行没有变化。
 

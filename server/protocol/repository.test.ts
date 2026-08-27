@@ -77,8 +77,12 @@ test("ay init scaffold is idempotent and requires a shared overview baseline", (
     assert.match(skill, /minimal, sufficient baseline/);
     assert.match(skill, /architecture and dependency boundaries/);
     assert.match(skill, /intent-coverage review/);
+    assert.match(skill, /Semantic alignment across boundaries/);
+    assert.match(skill, /equivalent, different, or unknown/);
+    assert.match(skill, /must not copy or redefine repository knowledge/);
     assert.match(skill, /not truth, sufficiency, or concision/);
     assert.match(skill, /Simplified Chinese/);
+    assert.match(fs.readFileSync(path.join(root, ".alignyard/templates/spec.md"), "utf8"), /受影响的业务概念与系统边界/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -114,7 +118,9 @@ test("ay update replaces managed framework files while preserving repository kno
     assert.equal(manifest?.version, 2);
     assert.equal(manifest?.framework_version, ALIGNYARD_FRAMEWORK_VERSION);
     assert.deepEqual(manifest?.scopes.map((scope) => scope.id), ["shared", "web"]);
-    assert.match(fs.readFileSync(path.join(root, ".alignyard/skills/alignyard-knowledge/SKILL.md"), "utf8"), /Framework update/);
+    const updatedSkill = fs.readFileSync(path.join(root, ".alignyard/skills/alignyard-knowledge/SKILL.md"), "utf8");
+    assert.match(updatedSkill, /Framework update/);
+    assert.match(updatedSkill, /Semantic alignment across boundaries/);
     assert.equal(fs.readFileSync(overviewPath, "utf8"), overview);
     assert.equal(updateRepositoryFramework(root, { check: true }).changes.length, 0);
     assert.equal(validateRepositoryProtocol(root).ok, true);
