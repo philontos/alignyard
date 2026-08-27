@@ -11,6 +11,7 @@ export const RUNNER_RPC_METHODS = [
   "execution.cleanup",
   "execution.message",
   "execution.prepare-review",
+  "execution.knowledge",
   "change-request.create",
   "change-request.refresh",
   "change-request.merge",

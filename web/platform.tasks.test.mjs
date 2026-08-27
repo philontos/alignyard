@@ -187,13 +187,21 @@ test("Review is an assigned handoff with an optional reviewer Agent and a separa
   assert.match(script, /正在打开 Review 工作区/);
 });
 
+test("ordinary Task approval exposes a design baseline instead of PR actions", () => {
+  const actions = script.match(/function initTaskActions[\s\S]*?\n}\n\nfunction taskLocalCommands/)?.[0] || "";
+  assert.match(actions, /task\.status === "approved" && task\.task_type !== "repository_init"/);
+  assert.match(actions, /设计已确认，可以开始实现/);
+  assert.match(actions, /repository\.design_commit/);
+  assert.match(script, /status === "approved" && task\?\.task_type !== "repository_init"[\s\S]*"可开始实现"/);
+});
+
 test("a returned Repository Init always exposes explicit resumption and Review submission", () => {
   const actions = script.match(/function initTaskActions[\s\S]*?\n}\n\nfunction taskLocalCommands/)?.[0] || "";
   assert.match(actions, /task\.status === "draft"/);
   assert.match(actions, /data-run-init>继续 Agent/);
   assert.match(actions, /data-init-review>提交 Review/);
   assert.doesNotMatch(actions, /manifest_status === "valid"/);
-  assert.match(html, /执行 ay validate 与 ay sync/);
+  assert.match(html, /Runner 执行 ay validate、检查 worktree 与提交并推送工作分支/);
 });
 
 test("every Review decision closes the reviewer workspace before the Author continues", () => {
@@ -228,11 +236,15 @@ test("Task completion is a terminal state after reviewed changes are merged", ()
   assert.match(platformRoutes, /只有 Task 发起人可以完成 Task/);
 });
 
-test("Task detail exposes synced knowledge without pretending cloud can read Runner files", () => {
+test("Task detail reads protocol documents transiently from the participant's worktree", () => {
   assert.doesNotMatch(html, /platform-codeview|code-modal|cv-tab-files/);
   assert.doesNotMatch(script, /openTaskCodeContext|data-open-task-changes|data-artifact-path/);
-  assert.match(script, /protocol-badge">同步快照/);
-  assert.match(script, /class="artifact-row"/);
+  assert.match(script, /data-load-knowledge/);
+  assert.match(script, /\/api\/platform\/tasks\/\$\{encodeURIComponent\(task\.key\)\}\/knowledge/);
+  assert.match(script, /renderKnowledgeMarkdown/);
+  assert.match(script, /内容不会保存到 Platform/);
+  assert.match(platformRoutes, /app\.get\("\/api\/platform\/tasks\/:key\/knowledge"/);
+  assert.doesNotMatch(platformRoutes, /\/api\/platform\/artifacts|\/api\/platform\/tasks\/:key\/sync/);
 });
 
 test("manual workflow commands keep copy controls readable without the browser focus frame", () => {
@@ -266,7 +278,7 @@ test("Task items expose protected deletion without opening the detail drawer", (
   assert.match(script, /data-delete-task-key/);
   assert.match(script, /class="button danger small task-row-delete"/);
   assert.match(script, /删除 Task？/);
-  assert.match(script, /Agent session、worktree、本地 runtime Task 和工程知识快照都会清理/);
+  assert.match(script, /Agent session、worktree 和本地 runtime Task 都会清理/);
   assert.match(script, /\/api\/platform\/tasks\/\$\{encodeURIComponent\(task\.key\)\}/);
   assert.match(script, /method: "DELETE"/);
   assert.doesNotMatch(script, /window\.confirm/);
@@ -294,7 +306,7 @@ test("Task detail exposes only implemented ay workflow commands", () => {
   assert.match(script, /ay new doc overview --scope shared/);
   assert.match(script, /--title \\"仓库概览\\"/);
   assert.match(script, /ay validate \./);
-  assert.match(script, /ay sync \. --platform/);
+  assert.doesNotMatch(script, /ay sync|--platform/);
 });
 
 test("adding a Repository stores credential-free metadata and lets Runner prepare it lazily", () => {

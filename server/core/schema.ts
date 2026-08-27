@@ -190,9 +190,9 @@ CREATE TABLE IF NOT EXISTS platform_task_repositories (
   base_commit TEXT,
   work_branch TEXT,
   head_commit TEXT,
+  design_commit TEXT,
+  design_approved_at TEXT,
   assignee TEXT,
-  manifest_status TEXT NOT NULL DEFAULT 'waiting',
-  last_reported_at TEXT,
   remote_pushed_at TEXT,
   PRIMARY KEY (task_id, repository_id)
 );
@@ -268,19 +268,6 @@ CREATE INDEX IF NOT EXISTS platform_runner_executions_task_id
 CREATE INDEX IF NOT EXISTS platform_runner_executions_runner_id
   ON platform_runner_executions(runner_id, created_at DESC);
 
--- Short-lived credentials passed to an Agent are scoped to one execution and
--- one Task sync endpoint. Runner device credentials are never exposed to it.
-CREATE TABLE IF NOT EXISTS platform_execution_tokens (
-  token_hash TEXT PRIMARY KEY,
-  execution_id TEXT NOT NULL,
-  task_key TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS platform_execution_tokens_execution_id
-  ON platform_execution_tokens(execution_id);
-
 -- Owner-local idempotency/recovery map. A Platform retry or a reinstalled
 -- Runner can adopt the runtime Task already created for the same execution
 -- instead of creating a second worktree and Agent session.
@@ -294,28 +281,6 @@ CREATE TABLE IF NOT EXISTS runner_execution_bindings (
 CREATE INDEX IF NOT EXISTS runner_execution_bindings_task_id
   ON runner_execution_bindings(runner_task_id);
 
--- Normalized manifest output reported by a local ay sync. The platform can
--- link and review these artifacts without ever reading the private checkout.
-CREATE TABLE IF NOT EXISTS platform_artifacts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  task_id INTEGER NOT NULL,
-  repository_id INTEGER NOT NULL,
-  document_id TEXT,
-  kind TEXT NOT NULL,
-  scope TEXT,
-  path TEXT NOT NULL,
-  title TEXT,
-  owners TEXT NOT NULL DEFAULT '[]',
-  relations TEXT NOT NULL DEFAULT '[]',
-  content TEXT NOT NULL DEFAULT '',
-  content_hash TEXT,
-  change_kind TEXT,
-  review_status TEXT NOT NULL DEFAULT 'unreviewed',
-  base_commit TEXT,
-  head_commit TEXT,
-  updated_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(task_id, repository_id, path)
-);
 `;
 
 /** Add a column if it's missing — backfills schema drift on pre-existing DBs. */
@@ -331,6 +296,8 @@ function addColumn(db: DB, table: string, col: string, def: string) {
  */
 function dropDeprecated(db: DB) {
   db.exec("DROP TABLE IF EXISTS presets");
+  db.exec("DROP TABLE IF EXISTS platform_artifacts");
+  db.exec("DROP TABLE IF EXISTS platform_execution_tokens");
   const columns = (table: string) =>
     (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
   const taskCols = columns("tasks");
@@ -390,12 +357,8 @@ function reconcileColumns(db: DB) {
   addColumn(db, "platform_task_reviews", "submitted_by_user_id", "INTEGER");
   addColumn(db, "platform_task_reviews", "feedback", "TEXT");
   addColumn(db, "platform_task_reviews", "feedback_delivered_at", "TEXT");
-  addColumn(db, "platform_artifacts", "document_id", "TEXT");
-  addColumn(db, "platform_artifacts", "scope", "TEXT");
-  addColumn(db, "platform_artifacts", "owners", "TEXT NOT NULL DEFAULT '[]'");
-  addColumn(db, "platform_artifacts", "relations", "TEXT NOT NULL DEFAULT '[]'");
-  addColumn(db, "platform_artifacts", "content", "TEXT NOT NULL DEFAULT ''");
-  addColumn(db, "platform_artifacts", "content_hash", "TEXT");
+  addColumn(db, "platform_task_repositories", "design_commit", "TEXT");
+  addColumn(db, "platform_task_repositories", "design_approved_at", "TEXT");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS hosts_node_id_unique ON hosts(node_id) WHERE node_id IS NOT NULL");
   db.exec("CREATE INDEX IF NOT EXISTS task_references_repo_id ON task_references(repo_id)");
   db.exec("UPDATE platform_tasks SET current_assignee=owner WHERE current_assignee IS NULL OR current_assignee=''");

@@ -171,24 +171,15 @@ test("Repository initialization is a first-class idempotent Task and gates ordin
   assert.equal(listPlatformRepositories(db)[0].protocol_state, "initializing");
 });
 
-test("requesting changes on Repository Init requires a fresh sync before another Review", () => {
+test("Platform status transitions do not depend on a stored knowledge snapshot", () => {
   const db = memoryDb();
   const repository = createPlatformRepository(db, {
     name: "new-service", git_url: "git@example/new-service", created_by: "Phil",
   });
   const task = createRepositoryInitializationTask(db, repository.id, "Phil");
-  db.prepare(
-    "UPDATE platform_task_repositories SET manifest_status='valid' WHERE task_id=? AND repository_id=?",
-  ).run(task.id, repository.id);
-  db.prepare(
-    "INSERT INTO platform_artifacts (task_id,repository_id,document_id,kind,scope,path,title) " +
-      "VALUES (?,?,?,'doc','shared','.alignyard/docs/shared/overview.md','Repository Overview')",
-  ).run(task.id, repository.id, "overview");
-
   assert.equal(updatePlatformTaskStatus(db, task.key, "review")?.status, "review");
-  const draft = updatePlatformTaskStatus(db, task.key, "draft");
-  assert.equal(draft?.repositories[0].manifest_status, "waiting");
-  assert.throws(() => updatePlatformTaskStatus(db, task.key, "review"), /ay validate、ay sync/);
+  assert.equal(updatePlatformTaskStatus(db, task.key, "draft")?.status, "draft");
+  assert.equal(updatePlatformTaskStatus(db, task.key, "review")?.status, "review");
 });
 
 test("an approved Repository Init with an open change request can return to draft", () => {
@@ -197,14 +188,6 @@ test("an approved Repository Init with an open change request can return to draf
     name: "new-service", git_url: "git@example/new-service", created_by: "Phil",
   });
   const task = createRepositoryInitializationTask(db, repository.id, "Phil");
-  db.prepare(
-    "UPDATE platform_task_repositories SET manifest_status='valid' WHERE task_id=? AND repository_id=?",
-  ).run(task.id, repository.id);
-  db.prepare(
-    "INSERT INTO platform_artifacts (task_id,repository_id,document_id,kind,scope,path,title) " +
-      "VALUES (?,?,?,'doc','shared','.alignyard/docs/shared/overview.md','仓库概览')",
-  ).run(task.id, repository.id, "overview");
-
   updatePlatformTaskStatus(db, task.key, "review");
   recordPlatformPullRequest(db, task.key, {
     number: 42, url: "https://github.com/example/new-service/pull/42", state: "open",
@@ -215,7 +198,6 @@ test("an approved Repository Init with an open change request can return to draf
   assert.equal(draft?.status, "draft");
   assert.equal(draft?.pr_state, "open");
   assert.equal(draft?.pr_number, 42);
-  assert.equal(draft?.repositories[0].manifest_status, "waiting");
 });
 
 test("Repository Init completes only after its change request is merged and Repository is ready", () => {
@@ -316,6 +298,8 @@ test("Review records handoff, remote push, reviewer execution, and decision sepa
   assert.equal(approved?.review?.status, "approved");
   assert.equal(approved?.current_assignee, "Phil");
   assert.equal(approved?.current_assignee_user_id, phil.id);
+  assert.equal(approved?.repositories[0].design_commit, "b".repeat(40));
+  assert.ok(approved?.repositories[0].design_approved_at);
 });
 
 test("Repository deletion is blocked by Task references and otherwise removes metadata", () => {
@@ -334,32 +318,22 @@ test("Repository deletion is blocked by Task references and otherwise removes me
   assert.throws(() => deletePlatformRepository(db, used.id), /已被 1 个 Task 引用/);
 });
 
-test("deleting an unfinished Repository Init removes its snapshot and releases the Repository", () => {
+test("deleting an unfinished Repository Init removes workflow metadata and releases the Repository", () => {
   const db = memoryDb();
   const repository = createPlatformRepository(db, {
     name: "new-service", git_url: "git@example.com:team/new-service.git", created_by: "Phil",
   });
   const task = createRepositoryInitializationTask(db, repository.id, "Phil");
   db.prepare(
-    "INSERT INTO platform_artifacts (task_id,repository_id,kind,path,title) VALUES (?,?, 'doc',?,?)",
-  ).run(task.id, repository.id, ".alignyard/docs/shared/overview.md", "仓库概览");
-  db.prepare(
     "INSERT INTO platform_runner_executions " +
       "(id,task_id,runner_id,actor,actor_user_id,role,agent) VALUES ('execution-1',?,'runner-1','Phil',1,'author','codex')",
   ).run(task.id);
-  db.prepare(
-    "INSERT INTO platform_execution_tokens (token_hash,execution_id,task_key,expires_at) " +
-      "VALUES ('token-hash','execution-1',?,datetime('now','+1 day'))",
-  ).run(task.key);
-
   const deleted = deletePlatformTask(db, task.key);
 
   assert.equal(deleted?.key, task.key);
   assert.equal(getPlatformTask(db, task.key), undefined);
   assert.equal(platformRepositoryTaskCount(db, repository.id), 0);
-  assert.equal((db.prepare("SELECT COUNT(*) AS count FROM platform_artifacts").get() as { count: number }).count, 0);
   assert.equal((db.prepare("SELECT COUNT(*) AS count FROM platform_runner_executions").get() as { count: number }).count, 0);
-  assert.equal((db.prepare("SELECT COUNT(*) AS count FROM platform_execution_tokens").get() as { count: number }).count, 0);
   assert.equal(getPlatformRepository(db, repository.id)?.protocol_state, "uninitialized");
 });
 

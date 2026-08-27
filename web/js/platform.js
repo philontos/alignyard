@@ -165,8 +165,11 @@ async function copyCommand(command) {
   toast(`已复制：${command}`);
 }
 
-function statusPill(status) {
-  return `<span class="status-pill status-${escapeHtml(status)}"><i></i>${escapeHtml(statusLabels[status] || status)}</span>`;
+function statusPill(status, task = null) {
+  const label = status === "approved" && task?.task_type !== "repository_init"
+    ? "可开始实现"
+    : statusLabels[status] || status;
+  return `<span class="status-pill status-${escapeHtml(status)}"><i></i>${escapeHtml(label)}</span>`;
 }
 
 function taskDisplayTitle(task) {
@@ -208,7 +211,7 @@ function renderTaskList() {
   target.classList.remove("is-empty");
   target.innerHTML = tasks.map((task) => `<article class="task-row">
     <button class="task-row-open" type="button" data-task-key="${escapeHtml(task.key)}">
-      <span class="task-main"><span class="task-key-line"><span class="task-key">${escapeHtml(task.key)}</span>${statusPill(task.status)}</span><strong class="task-title">${escapeHtml(taskDisplayTitle(task))}</strong></span>
+      <span class="task-main"><span class="task-key-line"><span class="task-key">${escapeHtml(task.key)}</span>${statusPill(task.status, task)}</span><strong class="task-title">${escapeHtml(taskDisplayTitle(task))}</strong></span>
       <span class="repo-chips">${repositoryChips(task.repositories)}</span>
       <span class="task-owner"><span class="mini-avatar">${escapeHtml(initial(task.current_assignee || task.owner))}</span>${escapeHtml(task.current_assignee || task.owner)}</span>
     </button>
@@ -458,7 +461,7 @@ async function deletePlatformTask(task, button) {
   const confirmed = await confirmDialog({
     title: "删除 Task？",
     message: `确定要删除「${task.key} · ${taskDisplayTitle(task)}」吗？`,
-    detail: `关联的 Agent session、worktree、本地 runtime Task 和工程知识快照都会清理。${remoteDetail}`,
+    detail: `关联的 Agent session、worktree 和本地 runtime Task 都会清理。${remoteDetail}`,
     confirmText: "删除 Task",
   });
   if (!confirmed) return;
@@ -714,15 +717,85 @@ async function refreshProtocol(repositoryId, button) {
   }
 }
 
-function artifactKind(kind) {
+function knowledgeKind(kind) {
   const normalized = String(kind || "docs").toLowerCase();
   if (normalized === "adr") return "adr";
   if (normalized === "spec" || normalized === "specs") return "specs";
+  if (normalized === "plan" || normalized === "plans") return "plans";
   return "docs";
 }
 
+function knowledgeBody(content) {
+  return String(content || "").replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
+}
+
+function inlineKnowledgeMarkdown(value) {
+  return escapeHtml(value)
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+}
+
+function renderKnowledgeMarkdown(content) {
+  const lines = knowledgeBody(content).split(/\r?\n/);
+  const output = [];
+  let code = [];
+  let inCode = false;
+  for (const line of lines) {
+    if (line.startsWith("```")) {
+      if (inCode) {
+        output.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
+        code = [];
+      }
+      inCode = !inCode;
+    } else if (inCode) {
+      code.push(line);
+    } else {
+      const heading = line.match(/^(#{1,4})\s+(.+)$/);
+      if (heading) output.push(`<h${Math.min(4, heading[1].length + 1)}>${inlineKnowledgeMarkdown(heading[2])}</h${Math.min(4, heading[1].length + 1)}>`);
+      else if (/^\s*[-*]\s+/.test(line)) output.push(`<p class="knowledge-list-line">• ${inlineKnowledgeMarkdown(line.replace(/^\s*[-*]\s+/, ""))}</p>`);
+      else if (line.startsWith("> ")) output.push(`<blockquote>${inlineKnowledgeMarkdown(line.slice(2))}</blockquote>`);
+      else if (line.trim()) output.push(`<p>${inlineKnowledgeMarkdown(line)}</p>`);
+    }
+  }
+  if (code.length) output.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
+  return output.join("") || `<p class="detail-empty">文档正文为空。</p>`;
+}
+
+async function openWorktreeKnowledgeDocument(task, documentId, button) {
+  const preview = $("#worktree-knowledge-preview");
+  if (!preview) return;
+  $$('[data-knowledge-document]', $("#task-detail")).forEach((item) => item.classList.toggle("selected", item === button));
+  preview.innerHTML = `<div class="detail-empty">正在从当前 worktree 读取文档…</div>`;
+  try {
+    const result = await api(`/api/platform/tasks/${encodeURIComponent(task.key)}/knowledge?document_id=${encodeURIComponent(documentId)}`);
+    const document = result.document;
+    preview.innerHTML = `<header><span>${escapeHtml(document.id)}</span><strong>${escapeHtml(document.title)}</strong><code>${escapeHtml(document.path)}</code></header><article class="knowledge-document">${renderKnowledgeMarkdown(document.content)}</article>`;
+  } catch (error) {
+    preview.innerHTML = `<div class="detail-empty error">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function loadWorktreeKnowledge(task, button) {
+  const target = $("#worktree-knowledge");
+  if (!target) return;
+  button.disabled = true;
+  target.innerHTML = `<div class="detail-empty">正在从当前 Runner worktree 解析 .alignyard/…</div>`;
+  try {
+    const result = await api(`/api/platform/tasks/${encodeURIComponent(task.key)}/knowledge`);
+    target.innerHTML = `<div class="worktree-knowledge-list">${result.documents.map((document) => `<button type="button" class="worktree-knowledge-row" data-knowledge-document="${escapeHtml(document.id)}"><span class="artifact-kind ${knowledgeKind(document.kind)}">${escapeHtml(knowledgeKind(document.kind).slice(0, 4))}</span><span><strong>${escapeHtml(document.title)}</strong><small>${escapeHtml(document.path)}</small></span></button>`).join("")}</div><section id="worktree-knowledge-preview" class="worktree-knowledge-preview"><div class="detail-empty">选择文档后在这里阅读；内容不会保存到 Platform。</div></section>`;
+    $$('[data-knowledge-document]', target).forEach((item) => item.addEventListener("click", () => openWorktreeKnowledgeDocument(task, item.dataset.knowledgeDocument, item)));
+  } catch (error) {
+    target.innerHTML = `<div class="detail-empty error">${escapeHtml(error.message)}</div>`;
+  } finally {
+    if (button.isConnected) button.disabled = false;
+  }
+}
+
 function detailRepository(repo) {
-  return `<article class="detail-repo"><div><strong>${escapeHtml(repo.name)}</strong><small>${escapeHtml(repo.git_url)}</small></div><div><strong>${escapeHtml(repo.base_branch)}</strong><small>${escapeHtml(repo.work_branch || "工作分支尚未创建")}</small></div></article>`;
+  const design = repo.design_commit
+    ? `设计基线 ${String(repo.design_commit).slice(0, 10)}`
+    : repo.work_branch || "工作分支尚未创建";
+  return `<article class="detail-repo"><div><strong>${escapeHtml(repo.name)}</strong><small>${escapeHtml(repo.git_url)}</small></div><div><strong>${escapeHtml(repo.base_branch)}</strong><small>${escapeHtml(design)}</small></div></article>`;
 }
 
 function taskChangeRequestLabel(task) {
@@ -752,10 +825,9 @@ function initWorkflowStage(task) {
   if (task.status === "approved" && task.pr_state === "open") return { key: "pr", label: `${requestLabel} 待合并`, note: `Review 已批准，${requestLabel} 已创建，等待人工确认合并。` };
   if (task.status === "approved") return { key: "approved", label: "Review 已通过", note: `平台状态已流转完成；确认后可单独创建 ${requestLabel}。` };
   if (task.status === "review") return { key: "review", label: "等待 Review", note: `工作分支已推送并分派给 ${task.review?.reviewer || task.current_assignee || "reviewer"}。` };
-  if (task.status === "draft" && task.pr_state === "open") return { key: "paused", label: "要求修改", note: `${requestLabel} 保持打开；继续 Agent 修改并 sync 后重新提交 Review。` };
-  if (repository?.manifest_status === "valid") return { key: "ready", label: "可提交 Review", note: `Agent 已提交并同步 ${task.artifacts?.length || 0} 个工程知识产物。` };
-  if (task.runtime_task_id && task.runtime_alive) return { key: "running", label: "Agent 执行中", note: "Agent 正在初始化 worktree；产物 sync 后这里会自动更新。" };
-  if (task.runtime_task_id) return { key: "paused", label: "Agent 已暂停", note: "worktree 已保留，可以进入工作区检查或继续 Agent。" };
+  if (task.status === "draft" && task.pr_state === "open") return { key: "paused", label: "要求修改", note: `${requestLabel} 保持打开；继续 Agent 修改后重新提交 Review。` };
+  if (task.runtime_task_id && task.runtime_alive) return { key: "running", label: "Agent 执行中", note: "Agent 正在 worktree 中编撰工程文档；是否提交 Review 由你和 Agent 判断。" };
+  if (task.runtime_task_id) return { key: "ready", label: "等待你的判断", note: "worktree 已保留；可以继续 Agent、按需读取文档，或提交 Review。" };
   return { key: "waiting", label: "等待启动", note: "启动后平台会自动创建 worktree、工作分支和 Agent session。" };
 }
 
@@ -797,6 +869,10 @@ function initTaskActions(task) {
   } else if (task.status === "review") {
     actions.push(`<button class="button secondary" type="button" data-review-decision="changes_requested">要求修改</button>`);
     actions.push(`<button class="button primary" type="button" data-review-decision="approved">审核通过</button>`);
+  } else if (task.status === "approved" && task.task_type !== "repository_init") {
+    const repository = task.repositories.find((item) => item.mode === "editable");
+    const commit = repository?.design_commit ? String(repository.design_commit).slice(0, 10) : "已审核提交";
+    actions.push(`<div class="design-ready"><strong>设计已确认，可以开始实现</strong><span>继续使用远端工作分支；设计基线 ${escapeHtml(commit)}。</span></div>`);
   } else if (task.status === "approved" && task.pr_state === "none" && taskBelongsToCurrentUser(task)) {
     actions.push(`<button class="button primary" type="button" data-init-pr ${pendingAction(task, "pull-request") ? "disabled" : ""}>${pendingAction(task, "pull-request") ? `正在创建 ${requestLabel}…` : `创建 ${requestLabel}`}</button>`);
   } else if (task.status === "approved" && task.pr_state === "open" && taskBelongsToCurrentUser(task)) {
@@ -847,12 +923,9 @@ function wireAgentPicker(root) {
 }
 
 function taskLocalCommands(task) {
-  const repository = task.repositories.find((item) => item.mode === "editable");
-  if (!repository) return [];
-  const sync = `ay sync . --platform ${location.origin} --task ${task.key} --repository-id ${repository.id}`;
   return task.task_type === "repository_init"
-    ? ["ay init .", "ay new doc overview --scope shared --title \"仓库概览\"", "ay validate .", sync]
-    : ["ay validate .", sync];
+    ? ["ay init .", "ay new doc overview --scope shared --title \"仓库概览\"", "ay validate ."]
+    : ["ay validate ."];
 }
 
 function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
@@ -875,17 +948,16 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
     ? `Reviewer 已要求修改，Task 已退回 ${escapeHtml(task.owner)}。继续 Agent 时会恢复 Author 工作区并传入本轮反馈。`
     : `由 ${escapeHtml(task.review?.submitted_by || "")} 于 ${escapeHtml(formatDate(task.review?.submitted_at))} 分派；当前状态：${escapeHtml(task.review?.status || "")}。工作分支已推送到远端，reviewer 可在右侧选择 Agent 进入对应 worktree。`;
   const reviewHandoff = task.review ? `<section class="detail-workflow"><strong>Review · ${escapeHtml(task.review.reviewer)}</strong><p>${reviewSummary}</p>${reviewFeedback}</section>` : "";
-  const artifacts = task.artifacts?.length ? task.artifacts.map((artifact) => `<div class="artifact-row"><span class="artifact-kind ${artifactKind(artifact.kind)}">${escapeHtml(artifactKind(artifact.kind).slice(0, 4))}</span><span><strong>${escapeHtml(artifact.title || artifact.path)}</strong><small>${escapeHtml(artifact.path)}</small></span><span>${escapeHtml(artifact.review_status)}</span></div>`).join("") : `<div class="detail-empty">尚未收到 manifest 结果。成员在本地执行 <code>ay sync</code> 后，这里会显示 docs、specs 和 ADR 的同步快照。</div>`;
   const displayTitle = taskDisplayTitle(task);
   const description = task.task_type === "repository_init"
     ? ""
     : `<p>${escapeHtml(task.description || "尚未填写需求说明")}</p>`;
   const workspaceTask = { ...task, display_title: displayTitle };
   $("#task-detail").innerHTML = `<div class="detail-top"><div class="detail-title-row"><button class="drawer-close" id="drawer-close" type="button" aria-label="返回 Task 列表">返回</button><span class="task-key">${escapeHtml(task.key)}</span><h1>${escapeHtml(displayTitle)}</h1>${taskContextHelp(task)}</div>${description}</div>
-    <div class="detail-meta">${statusPill(task.status)}<span>负责人：${escapeHtml(task.owner)}</span><span>当前处理人：${escapeHtml(task.current_assignee || task.owner)}</span><span>${task.completed_at ? `完成于 ${escapeHtml(formatDate(task.completed_at))}` : `创建于 ${escapeHtml(formatDate(task.created_at))}`}</span></div>
+    <div class="detail-meta">${statusPill(task.status, task)}<span>负责人：${escapeHtml(task.owner)}</span><span>当前处理人：${escapeHtml(task.current_assignee || task.owner)}</span><span>${task.completed_at ? `完成于 ${escapeHtml(formatDate(task.completed_at))}` : `创建于 ${escapeHtml(formatDate(task.created_at))}`}</span></div>
     ${workflowNote}${reviewHandoff}${task.task_type === "repository_init" ? "" : commandList}
     <section class="detail-section"><div class="detail-section-head"><h2>Repositories · ${task.repositories.length}</h2><span class="protocol-badge">peer worktrees</span></div><div class="detail-repos">${task.repositories.map(detailRepository).join("")}</div></section>
-    <section class="detail-section"><div class="detail-section-head"><h2>工程知识 · ${task.artifacts?.length || 0}</h2><span class="protocol-badge">同步快照</span></div><div class="artifact-list">${artifacts}</div></section>
+    <section class="detail-section"><div class="detail-section-head"><h2>工程文档</h2><button class="button secondary compact" type="button" data-load-knowledge>从当前 worktree 读取</button></div><p class="detail-section-note">Platform 不保存知识；这里只按需解析你自己的 Runner worktree，实际权限由 GitHub / GitLab 决定。</p><div id="worktree-knowledge"><div class="detail-empty">启动自己的 Agent 工作区后，可以按需读取符合 .alignyard/ 协议的文档。</div></div></section>
     <div class="detail-actions">${taskNextAction(task)}</div>`;
   $("#task-drawer").hidden = false;
   $("#drawer-close").addEventListener("click", closeTaskDetail);
@@ -896,6 +968,7 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
   });
   wireAgentPicker($("#task-detail"));
   $$('[data-copy-command]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => copyCommand(commands[Number(button.dataset.copyCommand)])));
+  $('[data-load-knowledge]', $("#task-detail"))?.addEventListener("click", (event) => loadWorktreeKnowledge(task, event.currentTarget));
   $$('[data-set-status]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => setTaskStatus(task.key, button.dataset.setStatus)));
   $$('[data-submit-review]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => openReviewDialog(task)));
   $$('[data-review-decision]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => {

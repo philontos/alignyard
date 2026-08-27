@@ -5,6 +5,7 @@ kind: doc
 scope: shared
 owners: []
 relations:
+  - doc.shared.constitution
   - doc.shared.architecture
   - doc.shared.development
   - doc.server.overview
@@ -15,17 +16,19 @@ relations:
   - doc.web.overview
   - adr.shared.node-local-ownership
   - adr.shared.platform-runner-separation
+  - adr.shared.knowledge-first-product-boundary
+  - spec.shared.knowledge-first-task
 ---
 
 # 概述
 
-本仓库是单一 Alignyard 产品的 npm 工程。云端 Platform 提供 Web、登录、Repository/Task/Review、工程知识与流程状态；用户本地 Runner 调用已有 Git、tmux、Agent 和 forge CLI 完成执行。仓库不再包含另一套本地控制台、Host fleet、Network、Provider 或源码浏览产品。
+本仓库是单一 Alignyard 产品的 npm 工程。Alignyard 维护核心工程意图与架构约束，不追求复制全部源码知识；Platform 提供 Web、登录、Repository/Task/Review 与流程状态，用户本地 Runner 调用已有 Git、tmux、Agent 和 forge CLI 完成内容编撰与审核。工程知识只存在于 Git Repository 与 worktree，Platform 不保存副本或摘要。仓库不再包含另一套本地控制台、Host fleet、Network、Provider 或源码浏览产品。
 
 ## 源码边界
 
 | 目录 | 职责 | 约束 |
 |---|---|---|
-| `server/platform/` | 协作模型、工作流、Prompt、工程知识同步和云端组合根 | 不 import 本机 Git/worktree/tmux 实现 |
+| `server/platform/` | 协作模型、工作流、Prompt 和云端组合根 | 不 import 本机 Git/worktree/tmux 实现，不持久化工程知识 |
 | `server/runner/` | 设备配对、连接、RPC 调度和本机 operations | 只执行协议 allowlist |
 | `server/http/` | HTTP/WS 鉴权、参数与响应适配 | 不承载工作流状态机 |
 | `server/repo/`、`task/`、`session/` | Runner 使用的 Git/worktree/tmux 执行内核 | 不依赖 Express 或 Platform 用户模型 |
@@ -46,6 +49,7 @@ relations:
 
 ## 文档导航
 
+- [工程约束](constitution.md)
 - [架构与数据流](architecture.md)
 - [开发、测试与运维](development.md)
 - [后端服务概览](../server/overview.md)
@@ -57,4 +61,4 @@ relations:
 
 ## 信息边界
 
-`.alignyard/` 只保存可提交的通用工程知识，不保存运行实例数据。禁止写入真实用户身份、邮箱白名单、Google client ID、Platform session、Runner/device/execution token、pairing code、已登记 Repository/Task/Review 内容、本机绝对路径、云项目 ID、域名或部署密钥。示例必须使用占位值。
+`.alignyard/` 只保存可提交、会影响 Agent 决策方向的核心工程意图与架构约束，不保存可从源码直接获得的实现细节或运行实例数据。禁止写入真实用户身份、邮箱白名单、Google client ID、Platform session、Runner device token、pairing code、已登记 Repository/Task/Review 内容、本机绝对路径、云项目 ID、域名或部署密钥。示例必须使用占位值。

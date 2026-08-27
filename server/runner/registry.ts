@@ -129,38 +129,3 @@ export function markRunnerOffline(db: DB, id: string): void {
 export function revokeRunner(db: DB, id: string, userId: number): boolean {
   return db.prepare("DELETE FROM platform_runners WHERE id=? AND user_id=?").run(id, userId).changes > 0;
 }
-
-export function createExecutionToken(
-  db: DB,
-  executionId: string,
-  taskKey: string,
-  now = new Date(),
-): string {
-  db.prepare("DELETE FROM platform_execution_tokens WHERE expires_at<=?").run(now.toISOString());
-  const token = crypto.randomBytes(32).toString("base64url");
-  const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
-  db.prepare(
-    "INSERT INTO platform_execution_tokens (token_hash,execution_id,task_key,expires_at) VALUES (?,?,?,?)",
-  ).run(hash(token), executionId, taskKey.toUpperCase(), expiresAt);
-  return token;
-}
-
-export function authenticateExecutionToken(
-  db: DB,
-  token: string,
-  now = new Date(),
-): { execution_id: string; task_key: string } | null {
-  if (!token) return null;
-  return (db.prepare(
-    "SELECT token.execution_id,token.task_key FROM platform_execution_tokens token " +
-      "JOIN platform_runner_executions execution ON execution.id=token.execution_id " +
-      "JOIN platform_tasks task ON task.task_key=token.task_key " +
-      "WHERE token.token_hash=? AND token.expires_at>? " +
-      "AND execution.status IN ('queued','starting','running','waiting') " +
-      "AND task.runner_execution_id=execution.id",
-  ).get(hash(token), now.toISOString()) as { execution_id: string; task_key: string } | undefined) || null;
-}
-
-export function revokeExecutionTokens(db: DB, executionId: string): void {
-  db.prepare("DELETE FROM platform_execution_tokens WHERE execution_id=?").run(executionId);
-}

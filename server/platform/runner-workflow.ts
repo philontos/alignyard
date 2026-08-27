@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type Database from "better-sqlite3";
 import type { AgentKind } from "../session/agent.js";
 import type { RunnerGateway } from "../runner/gateway.js";
-import { createExecutionToken, getRunner, listUserRunners, revokeExecutionTokens } from "../runner/registry.js";
+import { getRunner, listUserRunners } from "../runner/registry.js";
 import {
   createPlatformRunnerExecution,
   decidePlatformTaskReview,
@@ -27,6 +27,7 @@ import {
 } from "./catalog.js";
 import { PlatformWorkflowError } from "./errors.js";
 import {
+  knowledgeDesignPrompt,
   repositoryInitializationPrompt,
   repositoryRevisionPrompt,
   taskReviewPrompt,
@@ -110,25 +111,6 @@ function repositoryInput(task: PlatformTask) {
   };
 }
 
-function genericTaskPrompt(task: PlatformTask, platformUrl: string): string {
-  const repository = editableRepository(task);
-  return `你正在执行 Alignyard Task ${task.key}：${task.title}。
-
-目标：${task.description || "按 Task 标题完成变更，并保持实现、测试和工程知识一致。"}
-
-当前 Repository：${repository.name}
-工作分支：${repository.work_branch}
-基线分支：${repository.base_branch}
-
-请自主检查仓库说明与 .alignyard/ 工程知识，完成实现、测试和必要的工程知识更新。结束前：
-1. 运行与变更相关的检查；
-2. 提交全部变更，确保 git status --short 为空；
-3. 如修改了 .alignyard/，运行 ay validate .；
-4. 运行 ay sync . --platform '${platformUrl.replace(/'/g, `'\\''`)}' --task ${task.key} --repository-id ${repository.id} --base-commit "$(git merge-base HEAD origin/${repository.base_branch})"。
-
-不要 push，不要创建或合并 PR/MR；这些动作由 Alignyard 在人工 Review 后执行。`;
-}
-
 function currentRemoteExecution(env: RunnerWorkflowEnv, task: PlatformTask): PlatformRunnerExecution | undefined {
   return task.runner_execution_id ? getPlatformRunnerExecution(env.db, task.runner_execution_id) : undefined;
 }
@@ -147,32 +129,10 @@ function runtimeResult(value: unknown): RuntimeResult {
   return result as RuntimeResult;
 }
 
-function executionEnvironment(task: PlatformTask, platformUrl: string, token: string) {
-  const repository = editableRepository(task);
-  return {
-    AY_PLATFORM_URL: platformUrl,
-    AY_PLATFORM_TOKEN: token,
-    AY_TASK_KEY: task.key,
-    AY_REPOSITORY_ID: String(repository.id),
-    ...(repository.base_commit ? { AY_BASE_COMMIT: repository.base_commit } : {}),
-  };
-}
-
-function freshExecutionEnvironment(
-  env: RunnerWorkflowEnv,
-  executionId: string,
-  task: PlatformTask,
-  platformUrl: string,
-) {
-  revokeExecutionTokens(env.db, executionId);
-  const token = createExecutionToken(env.db, executionId, task.key);
-  return executionEnvironment(task, platformUrl, token);
-}
-
 async function callExecution(
   env: RunnerWorkflowEnv,
   execution: PlatformRunnerExecution,
-  method: "execution.status" | "execution.resume" | "execution.stop" | "execution.cleanup" | "execution.message" | "execution.prepare-review",
+  method: "execution.status" | "execution.resume" | "execution.stop" | "execution.cleanup" | "execution.message" | "execution.prepare-review" | "execution.knowledge",
   extra: Record<string, unknown> = {},
 ): Promise<unknown> {
   if (!execution.runner_task_id) throw new PlatformWorkflowError(409, "Runner Task 尚未创建");
@@ -183,10 +143,35 @@ async function callExecution(
   });
 }
 
+export async function taskKnowledgeOnRunner(
+  env: RunnerWorkflowEnv,
+  key: string,
+  actor: RunnerWorkflowActor,
+  documentId?: unknown,
+): Promise<unknown> {
+  const task = taskFor(env, key);
+  const isOwner = task.owner_user_id != null ? task.owner_user_id === actor.id : task.owner === actor.name;
+  const isReviewer = task.review?.reviewer_user_id != null
+    ? task.review.reviewer_user_id === actor.id
+    : task.review?.reviewer === actor.name;
+  if (!isOwner && !isReviewer) throw new PlatformWorkflowError(403, "只有 Task 参与者可以读取工程文档");
+  const row = env.db.prepare(
+    "SELECT id FROM platform_runner_executions WHERE task_id=? " +
+      "AND (actor_user_id=? OR (actor_user_id IS NULL AND actor=?)) " +
+      "AND status<>'cleaned' ORDER BY created_at DESC,id DESC LIMIT 1",
+  ).get(task.id, actor.id, actor.name) as { id: string } | undefined;
+  const execution = row ? getPlatformRunnerExecution(env.db, row.id) : undefined;
+  if (!execution?.runner_task_id) {
+    throw new PlatformWorkflowError(409, "请先启动自己的 Agent 工作区，再从对应 worktree 读取工程文档");
+  }
+  if (!env.gateway.isOnline(execution.runner_id)) throw new PlatformWorkflowError(409, "当前 Runner 离线");
+  const requested = typeof documentId === "string" && documentId.trim() ? documentId.trim() : undefined;
+  return callExecution(env, execution, "execution.knowledge", requested ? { document_id: requested } : {});
+}
+
 export async function startTaskOnRunner(
   env: RunnerWorkflowEnv,
   key: string,
-  platformUrl: string,
   actor: RunnerWorkflowActor,
   agent: AgentKind = "codex",
   requestedRunnerId?: unknown,
@@ -199,7 +184,7 @@ export async function startTaskOnRunner(
   const revision = task.review?.status === "changes_requested";
   const latest = latestRemoteExecution(env, task, "author");
   const existing = latest ? getPlatformRunnerExecution(env.db, latest.id) : undefined;
-  let tokenExecutionId: string | undefined;
+  let activeExecutionId: string | undefined;
 
   try {
     if (existing && !existing.runner_task_id && ["queued", "starting"].includes(existing.status)) {
@@ -211,10 +196,8 @@ export async function startTaskOnRunner(
       }
       if (existing.status === "starting") throw new PlatformWorkflowError(409, "Runner execution 正在启动，请稍候");
       updatePlatformRunnerExecution(env.db, existing.id, { status: "starting", error: null });
-      tokenExecutionId = existing.id;
-      await callExecution(env, existing, "execution.resume", {
-        env: freshExecutionEnvironment(env, existing.id, task, platformUrl),
-      });
+      activeExecutionId = existing.id;
+      await callExecution(env, existing, "execution.resume");
       env.db.prepare(
         "UPDATE platform_tasks SET runner_execution_id=?,runtime_task_id=NULL,workflow_error=NULL,updated_at=datetime('now') WHERE id=?",
       ).run(existing.id, task.id);
@@ -241,13 +224,12 @@ export async function startTaskOnRunner(
       if (!execution) throw new PlatformWorkflowError(404, "Task 不存在");
     }
     updatePlatformRunnerExecution(env.db, executionId, { status: "starting" });
-    tokenExecutionId = executionId;
-    const executionEnv = freshExecutionEnvironment(env, executionId, task, platformUrl);
+    activeExecutionId = executionId;
     const prompt = revision
       ? repositoryRevisionPrompt(task)
       : task.task_type === "repository_init"
-        ? repositoryInitializationPrompt({ task, platformUrl, ayCommand: "ay" })
-        : genericTaskPrompt(task, platformUrl);
+        ? repositoryInitializationPrompt({ task, ayCommand: "ay" })
+        : knowledgeDesignPrompt(task);
     const started = runtimeResult(await env.gateway.call(runner.id, "execution.start", {
       execution_id: executionId,
       repository: repositoryInput(task),
@@ -258,16 +240,14 @@ export async function startTaskOnRunner(
       prompt,
       agent,
       automated: true,
-      env: executionEnv,
     }));
     task = linkPlatformRunnerExecution(env.db, key, executionId, started) || task;
     if (revision) markPlatformReviewFeedbackDelivered(env.db, key);
     return { task: taskFor(env, key), runtime_created: true };
   } catch (error) {
-    if (tokenExecutionId) updatePlatformRunnerExecution(
-      env.db, tokenExecutionId, { status: "failed", error: errorMessage(error) },
+    if (activeExecutionId) updatePlatformRunnerExecution(
+      env.db, activeExecutionId, { status: "failed", error: errorMessage(error) },
     );
-    if (tokenExecutionId) revokeExecutionTokens(env.db, tokenExecutionId);
     setPlatformTaskWorkflowError(env.db, key, errorMessage(error));
     throw error;
   }
@@ -287,20 +267,14 @@ export async function submitTaskForReviewOnRunner(
   try {
     const prepared = runtimeResult(await callExecution(env, execution, "execution.prepare-review"));
     const repository = editableRepository(task);
-    if (repository.head_commit !== prepared.head_commit) {
-      throw new PlatformWorkflowError(409, "最新提交尚未 sync，请让 Agent 重新执行 ay sync");
-    }
-    if (task.task_type === "repository_init") {
-      const hasOverview = task.artifacts.some(
-        (artifact) => artifact.kind === "doc" && artifact.path === ".alignyard/docs/shared/overview.md",
-      );
-      if (repository.manifest_status !== "valid" || !hasOverview) {
-        throw new PlatformWorkflowError(409, "初始化 Task 需要先完成 ay validate、ay sync，并提供 shared/overview.md");
-      }
-    }
     updatePlatformRunnerExecution(env.db, execution.id, { status: "stopped", head_commit: prepared.head_commit || null });
-    updatePlatformTaskCommits(env.db, key, { base_commit: prepared.base_commit, head_commit: prepared.head_commit });
-    recordPlatformTaskPush(env.db, key, prepared.head_commit!);
+    updatePlatformTaskCommits(
+      env.db,
+      key,
+      { base_commit: prepared.base_commit, head_commit: prepared.head_commit },
+      repository.id,
+    );
+    recordPlatformTaskPush(env.db, key, prepared.head_commit!, repository.id);
     const updated = submitPlatformTaskReview(env.db, key, input);
     if (!updated) throw new PlatformWorkflowError(404, "Task 不存在");
     return updated;
@@ -313,7 +287,6 @@ export async function submitTaskForReviewOnRunner(
 export async function startReviewOnRunner(
   env: RunnerWorkflowEnv,
   key: string,
-  platformUrl: string,
   actor: RunnerWorkflowActor,
   agent: AgentKind = "codex",
   requestedRunnerId?: unknown,
@@ -337,12 +310,9 @@ export async function startReviewOnRunner(
     }
     updatePlatformRunnerExecution(env.db, existing.id, { status: "starting", error: null });
     try {
-      await callExecution(env, existing, "execution.resume", {
-        env: freshExecutionEnvironment(env, existing.id, task, platformUrl),
-      });
+      await callExecution(env, existing, "execution.resume");
     } catch (error) {
       updatePlatformRunnerExecution(env.db, existing.id, { status: "failed", error: errorMessage(error) });
-      revokeExecutionTokens(env.db, existing.id);
       setPlatformTaskWorkflowError(env.db, key, errorMessage(error));
       throw error;
     }
@@ -367,7 +337,6 @@ export async function startReviewOnRunner(
     agent,
   });
   updatePlatformRunnerExecution(env.db, executionId, { status: "starting" });
-  const executionEnv = freshExecutionEnvironment(env, executionId, task, platformUrl);
   try {
     const started = runtimeResult(await env.gateway.call(runner.id, "execution.start", {
       execution_id: executionId,
@@ -376,17 +345,15 @@ export async function startReviewOnRunner(
       base_branch: repository.work_branch,
       work_branch: `review/${task.key.toLowerCase()}/${task.review.id}`,
       title: `[${task.key}] Review ${repository.name}`,
-      prompt: taskReviewPrompt(task, { syncChanges: true }),
+      prompt: taskReviewPrompt(task),
       agent,
       automated: false,
-      env: executionEnv,
     }));
     linkPlatformRunnerExecution(env.db, key, executionId, started);
     task = markPlatformTaskReviewStarted(env.db, key) || task;
     return { task: taskFor(env, key), runtime_created: true };
   } catch (error) {
     updatePlatformRunnerExecution(env.db, executionId, { status: "failed", error: errorMessage(error) });
-    revokeExecutionTokens(env.db, executionId);
     setPlatformTaskWorkflowError(env.db, key, errorMessage(error));
     throw error;
   }
@@ -408,16 +375,18 @@ export async function decideReviewOnRunner(
   const execution = currentRemoteExecution(env, task);
   if (execution?.role === "reviewer" && execution.runner_task_id) {
     if (decision === "approved") {
-      const status = runtimeResult(await callExecution(env, execution, "execution.status"));
+      const status = runtimeResult(await callExecution(env, execution, "execution.prepare-review", {
+        push_branch: editableRepository(task).work_branch,
+        allow_unchanged: true,
+      }));
       const repository = editableRepository(task);
-      if (!status.head_commit || status.head_commit !== repository.head_commit) {
-        throw new PlatformWorkflowError(409, "Reviewer 修改后的 HEAD 尚未 ay sync，不能批准 Review");
-      }
+      if (!status.head_commit) throw new PlatformWorkflowError(502, "Runner 未返回审核提交");
+      updatePlatformTaskCommits(env.db, key, { head_commit: status.head_commit }, repository.id);
+      recordPlatformTaskPush(env.db, key, status.head_commit, repository.id);
       updatePlatformRunnerExecution(env.db, execution.id, { head_commit: status.head_commit });
     }
-    await callExecution(env, execution, decision === "approved" ? "execution.stop" : "execution.cleanup");
+    if (decision !== "approved") await callExecution(env, execution, "execution.cleanup");
     updatePlatformRunnerExecution(env.db, execution.id, { status: decision === "approved" ? "stopped" : "cleaned" });
-    revokeExecutionTokens(env.db, execution.id);
   }
   task = decidePlatformTaskReview(env.db, key, decision, feedback) || task;
   task = restoreLatestPlatformAuthorRunnerExecution(env.db, key) || task;
@@ -454,6 +423,9 @@ export async function createChangeRequestOnRunner(
   let task = taskFor(env, key);
   requireTaskOwner(task, actor);
   if (task.status !== "approved") throw new PlatformWorkflowError(409, "Task 需要先通过 Review");
+  if (task.task_type !== "repository_init") {
+    throw new PlatformWorkflowError(409, "普通 Task 已形成设计基线；实现与合并闭环将在后续能力中处理");
+  }
   const execution = authorRunnerExecution(env, task);
   const result = await env.gateway.call(execution.runner_id, "change-request.create", changeRequestParams(task, execution)) as ChangeRequestResult;
   recordPlatformPullRequest(env.db, key, result);
@@ -485,7 +457,6 @@ async function finishMergedTask(env: RunnerWorkflowEnv, task: PlatformTask, exec
     if (!remote?.runner_task_id || !env.gateway.isOnline(remote.runner_id)) continue;
     await callExecution(env, remote, "execution.cleanup").catch(() => {});
     updatePlatformRunnerExecution(env.db, remote.id, { status: "cleaned" });
-    revokeExecutionTokens(env.db, remote.id);
   }
   return { task: taskFor(env, task.key), repository };
 }
@@ -581,7 +552,6 @@ export async function deleteTaskOnRunner(
     if (remote?.runner_task_id && env.gateway.isOnline(remote.runner_id)) {
       await callExecution(env, remote, "execution.cleanup");
     }
-    if (remote) revokeExecutionTokens(env.db, remote.id);
   }
   const deleted = deletePlatformTask(env.db, key);
   if (!deleted) throw new PlatformWorkflowError(404, "Task 不存在");

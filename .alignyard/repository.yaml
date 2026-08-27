@@ -1,5 +1,9 @@
-version: 1
+version: 2
 preset: basic
+
+entrypoints:
+  overview: doc.shared.overview
+  constitution: doc.shared.constitution
 
 scopes:
   - id: shared

@@ -8,7 +8,6 @@ import {
   deletePlatformRepository,
   getPlatformRepository,
   getPlatformTask,
-  listPlatformArtifacts,
   listPlatformMembers,
   listPlatformRepositories,
   listPlatformTasks,
@@ -18,9 +17,8 @@ import {
   type PlatformRepository,
   type PlatformTask,
 } from "../platform/catalog.js";
-import { PlatformSyncError, syncPlatformTaskKnowledge } from "../platform/sync.js";
 import { PlatformWorkflowError } from "../platform/errors.js";
-import { authenticatedUser, getPlatformUser, type AuthenticatedRequest } from "../auth/auth.js";
+import { authenticatedUser, getPlatformUser } from "../auth/auth.js";
 
 export interface PlatformRouteActor { id: number; name: string }
 
@@ -30,18 +28,14 @@ export interface PlatformRouteBackend {
   deleteRepository(repository: PlatformRepository): Promise<{ local_removed: boolean }>;
   refreshRepository(repositoryId: number, actor: PlatformRouteActor, runnerId?: unknown): Promise<PlatformRepository>;
   deleteTask(key: string, actor: PlatformRouteActor): Promise<PlatformTask>;
-  startTask(key: string, platformUrl: string, actor: PlatformRouteActor, agent: ReturnType<typeof asAgentKind>, runnerId?: unknown): Promise<{ task: PlatformTask; runtime_created: boolean }>;
+  startTask(key: string, actor: PlatformRouteActor, agent: ReturnType<typeof asAgentKind>, runnerId?: unknown): Promise<{ task: PlatformTask; runtime_created: boolean }>;
   submitReview(key: string, actor: PlatformRouteActor, input: { reviewer: string; reviewer_user_id: number; submitted_by: string; submitted_by_user_id: number }): Promise<PlatformTask>;
-  startReview(key: string, platformUrl: string, actor: PlatformRouteActor, agent: ReturnType<typeof asAgentKind>, runnerId?: unknown): Promise<{ task: PlatformTask; runtime_created: boolean }>;
+  taskKnowledge(key: string, actor: PlatformRouteActor, documentId?: unknown): Promise<unknown>;
+  startReview(key: string, actor: PlatformRouteActor, agent: ReturnType<typeof asAgentKind>, runnerId?: unknown): Promise<{ task: PlatformTask; runtime_created: boolean }>;
   decideReview(key: string, actor: PlatformRouteActor, decision: "approved" | "changes_requested", feedback?: unknown): Promise<PlatformTask>;
   createChangeRequest(key: string, actor: PlatformRouteActor): Promise<PlatformTask>;
   mergeChangeRequest(key: string, actor: PlatformRouteActor): Promise<{ task: PlatformTask; repository?: PlatformRepository; cleanup_warning?: string }>;
   refreshChangeRequest(key: string, actor: PlatformRouteActor): Promise<{ task: PlatformTask; repository?: PlatformRepository; cleanup_warning?: string }>;
-}
-
-function requestBaseUrl(req: Request): string {
-  const forwarded = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
-  return `${forwarded || req.protocol || "http"}://${req.get("host") || "localhost"}`;
 }
 
 function workflowActor(req: Request): PlatformRouteActor {
@@ -171,6 +165,15 @@ app.get("/api/platform/tasks/:key", async (req, res) => {
   res.json(await platformTaskPayload(task));
 });
 
+app.get("/api/platform/tasks/:key/knowledge", async (req, res) => {
+  try {
+    res.json(await backend.taskKnowledge(req.params.key, workflowActor(req), req.query.document_id));
+  } catch (error: any) {
+    if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
+    res.status(502).json({ error: String(error?.message || error) });
+  }
+});
+
 app.post("/api/platform/tasks", (req, res) => {
   try {
     const repositories = Array.isArray(req.body?.repositories) ? req.body.repositories : [];
@@ -231,7 +234,7 @@ app.post("/api/platform/tasks/:key/run", async (req, res) => {
   try {
     requireTaskOwner(req, req.params.key);
     const started = await backend.startTask(
-      req.params.key, requestBaseUrl(req), workflowActor(req),
+      req.params.key, workflowActor(req),
       asAgentKind(req.body?.agent || "codex"), req.body?.runner_id,
     );
     res.json({ task: await platformTaskPayload(started.task), runtime_created: started.runtime_created });
@@ -272,7 +275,7 @@ app.post("/api/platform/tasks/:key/review/run", async (req, res) => {
   try {
     requireTaskReviewer(req, req.params.key);
     const started = await backend.startReview(
-      req.params.key, requestBaseUrl(req), workflowActor(req),
+      req.params.key, workflowActor(req),
       asAgentKind(req.body?.agent || "codex"), req.body?.runner_id,
     );
     res.json({ task: await platformTaskPayload(started.task), runtime_created: started.runtime_created });
@@ -336,22 +339,6 @@ app.post("/api/platform/tasks/:key/change-request/refresh", async (req, res) => 
     if (error instanceof PlatformValidationError) return res.status(409).json({ error: error.message });
     res.status(500).json({ error: String(error?.message || error) });
   }
-});
-
-app.post("/api/platform/tasks/:key/sync", (req, res) => {
-  try {
-    const authKind = (req as AuthenticatedRequest).alignyardAuthKind;
-    if (authKind === "session" || authKind === "local") requireTaskOwner(req, req.params.key);
-    res.json({ ok: true, ...syncPlatformTaskKnowledge(db, req.params.key, req.body ?? {}) });
-  } catch (error: any) {
-    if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
-    if (error instanceof PlatformSyncError) return res.status(error.status).json({ error: error.message });
-    res.status(500).json({ error: String(error?.message || error) });
-  }
-});
-
-app.get("/api/platform/artifacts", (_req, res) => {
-  res.json(listPlatformArtifacts(db));
 });
 
 }

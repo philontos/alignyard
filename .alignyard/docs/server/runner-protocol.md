@@ -28,7 +28,7 @@ Web 创建一次性 pairing code，并展示从当前 Platform origin 下载 boo
 | `~/.local/bin/alignyard-runner` | 当前版本 Runner launcher |
 | `~/.local/bin/ay` | 当前版本工程知识 CLI |
 | `~/.alignyard/runner.json` | Platform URL、Runner ID、设备 token、名称；权限 `0600` |
-| `~/.alignyard/runtime` | SQLite、mirror、worktree、manifest、execution secret |
+| `~/.alignyard/runtime` | SQLite、mirror、worktree 与 manifest |
 | `~/.alignyard/logs` | LaunchAgent 日志 |
 | `~/Library/LaunchAgents/com.alignyard.runner.plist` | 登录后常驻和自动重启 |
 
@@ -65,19 +65,19 @@ Web 创建一次性 pairing code，并展示从当前 Platform origin 下载 boo
 
 当前一个 Task 只支持一个 editable Repository。这个限制换取清晰的分支、Review 与 PR/MR 语义；多 Repository 写入必须先设计跨仓库提交与失败补偿，不能只放宽数组校验。
 
-## Token 与环境
+## 凭据边界
 
 - 设备 token 只用于 `/runner`，从不注入 Agent。
-- Platform 为活动 execution 签发 Task-scoped token，只允许同步对应 Task。
-- Runner 将 token 写入 `runner-executions/<execution_id>/platform-token`，权限 `0600`，只向 Agent 暴露 `AY_PLATFORM_TOKEN_FILE`。
-- 传给 Agent 的 Platform 环境使用固定 allowlist，不接受任意客户端环境变量。
-- stop、cleanup、启动失败或 execution 被替换后旧 token 不能认证；恢复会签发并写入新 token。
+- Agent 不获得 Platform session、service token 或 Runner device token。
+- Git、SSH、gh/glab 与 Agent 登录都由本机工具自己读取，Platform 不代理或复制凭据。
 
 ## Review 与终端
 
-- `prepare-review` 必须通过 `ay validate`、worktree clean、有新 commit、HEAD 等于最近同步 commit，并成功 push 后才停止 Author session。
-- Reviewer execution 使用 Reviewer 自己的在线 Runner 和独立 branch。approve 前再次确认 Reviewer HEAD 与 Platform 同步 HEAD 一致。
+- Author 的 `execution.prepare-review` 必须通过 `ay validate`、worktree clean、有新 commit，并成功 push 后才停止 session。Reviewer 批准时允许 HEAD 保持不变；若有新提交则 push 回 Author 工作分支。
+- `execution.knowledge` 只索引该 execution 的本地 worktree；列表不含正文，指定 document ID 才返回正文，Platform 不持久化响应。
+- Reviewer execution 使用 Reviewer 自己的在线 Runner 和独立 branch。approve 时若 Reviewer 修改过内容，同样执行 prepare-review 并 push 回 Author 工作分支。
 - changes requested 会关闭 Reviewer execution、恢复 Author execution，并通过 Prompt 提醒 Author fetch/reconcile Reviewer 已 push 的修改。
+- approve 会把每个 editable Repository 已推送的 Review HEAD 固化为 `design_commit`。普通 Task 到此停在可开始实现；Repository Init 继续使用 `change-request.*`。
 - `/pty` 只按 execution 寻址。Platform 校验 actor，Runner 校验本地 Task/session；浏览器不知道设备 token、本地路径或本地 Task ID。
 
 ## 发布与演进

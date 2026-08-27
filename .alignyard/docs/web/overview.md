@@ -21,12 +21,12 @@ relations:
 - Google 登录、退出和成员选择。
 - 无凭据 Repository 登记、协议 refresh 与 Repository Init。
 - change / repository_init Task 创建、筛选、详情和清理。
-- Author → Review → changes requested/approved → PR/MR → merge 闭环。
-- 显式同步的工程知识 artifact 展示。
+- 普通 Task 的知识设计 → Review → changes requested/可开始实现闭环，以及 Repository Init 的 PR/MR → merge 特殊闭环。
+- 从当前用户自己的 Runner worktree 按需读取 Docs、Specs、ADRs、Plans，并展示设计基线；Git diff 仍在 worktree 中通过 Git 与 Agent 阅读。
 - 当前用户 Runner 状态、macOS 安装与重新连接引导。
 - 通过 execution ID 打开的本地 Agent 终端。
 
-Web 不浏览 Runner 源码树，不接收 Repository token、设备 token、本机路径或本地 Task ID。页面展示的工程知识来自 Platform 已验证快照，不代表云端能读取 Runner 文件系统。
+Web 不接收 Repository token、设备 token、本机路径或本地 Task ID，也不提供 Platform 侧 diff。Task 页面只能按需请求当前参与者自己的 Runner 解析 `.alignyard/` 文档，正文仅用于当次浏览，不写入 Platform 数据库；Reviewer 需先启动自己的 Review Agent，实际拉取和修改权限由 GitHub/GitLab 决定。
 
 ## Runner 安装引导
 

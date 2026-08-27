@@ -172,7 +172,7 @@
         <div><p class="eyebrow">HAND OFF FOR REVIEW</p><h2>提交 Review</h2></div>
         <button class="close-button" type="button" data-close-review-dialog aria-label="关闭">×</button>
       </div>
-      <p class="dialog-intro">平台会检查 worktree 提交，执行 ay validate 与 ay sync，再推送工作分支并将 Task 分派给 reviewer。</p>
+      <p class="dialog-intro">平台会让 Runner 执行 ay validate、检查 worktree 与提交并推送工作分支，然后将 Task 分派给 reviewer；是否已具备审核条件由你和 Agent 判断。</p>
       <label class="field"><span>Reviewer</span><select name="reviewer_user_id" required></select></label>
       <input name="task_key" type="hidden" />
       <p class="form-hint">Reviewer 来自已登录过 Alignyard 的用户；GitHub / GitLab 仍决定其是否能拉取、修改和推送该分支。</p>

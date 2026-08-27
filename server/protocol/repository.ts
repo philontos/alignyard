@@ -5,10 +5,13 @@ import YAML from "yaml";
 
 export const ALIGNYARD_DIR = ".alignyard";
 export const ALIGNYARD_MANIFEST = `${ALIGNYARD_DIR}/repository.yaml`;
-export const ALIGNYARD_PROTOCOL_VERSION = 1 as const;
+export const ALIGNYARD_PROTOCOL_VERSION = 2 as const;
+export const ALIGNYARD_PROTOCOL_VERSIONS = [1, 2] as const;
+export type AlignyardProtocolVersion = typeof ALIGNYARD_PROTOCOL_VERSIONS[number];
 
-export const KNOWLEDGE_KINDS = ["doc", "spec", "adr"] as const;
-export const REQUIRED_BOOTSTRAP_FILES = [
+export const KNOWLEDGE_KINDS = ["doc", "spec", "adr", "plan"] as const;
+const V1_KNOWLEDGE_KINDS = ["doc", "spec", "adr"] as const;
+const COMMON_BOOTSTRAP_FILES = [
   ".alignyard/repository.yaml",
   ".alignyard/README.md",
   ".alignyard/templates/doc.md",
@@ -19,6 +22,12 @@ export const REQUIRED_BOOTSTRAP_FILES = [
 ] as const;
 export type KnowledgeKind = typeof KNOWLEDGE_KINDS[number];
 
+export function requiredBootstrapFiles(version: AlignyardProtocolVersion): readonly string[] {
+  return version === 2
+    ? [...COMMON_BOOTSTRAP_FILES, ".alignyard/templates/plan.md", ".alignyard/docs/shared/constitution.md"]
+    : COMMON_BOOTSTRAP_FILES;
+}
+
 export interface ProtocolScope {
   id: string;
   title?: string;
@@ -26,9 +35,13 @@ export interface ProtocolScope {
 }
 
 export interface RepositoryProtocolManifest {
-  version: typeof ALIGNYARD_PROTOCOL_VERSION;
+  version: AlignyardProtocolVersion;
   preset: "basic";
   scopes: ProtocolScope[];
+  entrypoints?: {
+    overview: string;
+    constitution: string;
+  };
 }
 
 export interface ProtocolDocument {
@@ -39,6 +52,8 @@ export interface ProtocolDocument {
   path: string;
   owners: string[];
   relations: string[];
+  sources: string[];
+  governing: string[];
 }
 
 export interface IndexedProtocolDocument extends ProtocolDocument {
@@ -65,6 +80,7 @@ const KIND_DIRS: Record<KnowledgeKind, string> = {
   doc: "docs",
   spec: "specs",
   adr: "adrs",
+  plan: "plans",
 };
 
 interface RequiredSection {
@@ -89,11 +105,22 @@ const REQUIRED_SECTIONS: Record<KnowledgeKind, RequiredSection[]> = {
     { label: "决策", headings: ["决策", "Decision"] },
     { label: "影响", headings: ["影响", "Consequences"] },
   ],
+  plan: [
+    { label: "背景与目标", headings: ["背景与目标", "Context and Goals"] },
+    { label: "依据与约束", headings: ["依据与约束", "Sources and Constraints"] },
+    { label: "实现设计", headings: ["实现设计", "Implementation Design"] },
+    { label: "修改范围", headings: ["修改范围", "Change Scope"] },
+    { label: "保持不变", headings: ["保持不变", "Preserve"] },
+    { label: "实施步骤", headings: ["实施步骤", "Implementation Steps"] },
+    { label: "验证方案", headings: ["验证方案", "Validation"] },
+    { label: "文档更新", headings: ["文档更新", "Documentation Updates"] },
+    { label: "未决问题", headings: ["未决问题", "Open Questions"] },
+  ],
 };
 
 const SCOPE_ID = /^[a-z][a-z0-9-]*$/;
 const DOCUMENT_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const DOCUMENT_ID = /^(doc|spec|adr)\.([a-z][a-z0-9-]*)\.([a-z0-9]+(?:[.-][a-z0-9]+)*)$/;
+const DOCUMENT_ID = /^(doc|spec|adr|plan)\.([a-z][a-z0-9-]*)\.([a-z0-9]+(?:[.-][a-z0-9]+)*)$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -112,6 +139,10 @@ export function knowledgeDirectory(kind: KnowledgeKind): string {
   return KIND_DIRS[kind];
 }
 
+export function knowledgeKindsForVersion(version: AlignyardProtocolVersion): readonly KnowledgeKind[] {
+  return version === 2 ? KNOWLEDGE_KINDS : V1_KNOWLEDGE_KINDS;
+}
+
 export function parseRepositoryManifest(text: string): { manifest?: RepositoryProtocolManifest; errors: string[] } {
   const errors: string[] = [];
   let raw: unknown;
@@ -121,7 +152,8 @@ export function parseRepositoryManifest(text: string): { manifest?: RepositoryPr
     return { errors: [`repository.yaml: ${String(error?.message || error)}`] };
   }
   if (!isRecord(raw)) return { errors: ["repository.yaml: 根节点必须是对象"] };
-  if (raw.version !== ALIGNYARD_PROTOCOL_VERSION) errors.push("repository.yaml: version 必须是 1");
+  const version = raw.version as AlignyardProtocolVersion;
+  if (!ALIGNYARD_PROTOCOL_VERSIONS.includes(version)) errors.push("repository.yaml: version 必须是 1 或 2");
   if (raw.preset !== "basic") errors.push("repository.yaml: preset 必须是 basic");
   if (!Array.isArray(raw.scopes) || raw.scopes.length === 0) {
     errors.push("repository.yaml: 至少声明一个 scope");
@@ -145,9 +177,26 @@ export function parseRepositoryManifest(text: string): { manifest?: RepositoryPr
   }
   if (!seen.has("shared")) errors.push("repository.yaml: 必须声明 shared scope");
 
+  let entrypoints: RepositoryProtocolManifest["entrypoints"];
+  if (version === 2) {
+    if (!isRecord(raw.entrypoints)) {
+      errors.push("repository.yaml: version 2 必须声明 entrypoints");
+    } else {
+      const overview = typeof raw.entrypoints.overview === "string" ? raw.entrypoints.overview.trim() : "";
+      const constitution = typeof raw.entrypoints.constitution === "string" ? raw.entrypoints.constitution.trim() : "";
+      if (overview !== "doc.shared.overview") {
+        errors.push("repository.yaml: entrypoints.overview 必须是 doc.shared.overview");
+      }
+      if (constitution !== "doc.shared.constitution") {
+        errors.push("repository.yaml: entrypoints.constitution 必须是 doc.shared.constitution");
+      }
+      if (overview && constitution) entrypoints = { overview, constitution };
+    }
+  }
+
   return errors.length
     ? { errors }
-    : { manifest: { version: ALIGNYARD_PROTOCOL_VERSION, preset: "basic", scopes }, errors };
+    : { manifest: { version, preset: "basic", scopes, ...(entrypoints ? { entrypoints } : {}) }, errors };
 }
 
 function markdownFiles(root: string, errors: string[]): string[] {
@@ -223,6 +272,8 @@ function validateDocument(
   const scope = stringField(parsed.metadata, "scope", filePath, errors);
   const owners = stringListField(parsed.metadata, "owners", filePath, errors);
   const relations = stringListField(parsed.metadata, "relations", filePath, errors);
+  const sources = stringListField(parsed.metadata, "sources", filePath, errors);
+  const governing = stringListField(parsed.metadata, "governing", filePath, errors);
 
   if (declaredKind && declaredKind !== kind) errors.push(`${filePath}: kind 必须是 ${kind}`);
   if (scope && !scopes.has(scope)) errors.push(`${filePath}: scope「${scope}」未在 repository.yaml 中声明`);
@@ -251,7 +302,7 @@ function validateDocument(
     }
   }
   return id && title && scope && declaredKind === kind
-    ? { id, kind, scope, title, path: filePath, owners, relations }
+    ? { id, kind, scope, title, path: filePath, owners, relations, sources, governing }
     : undefined;
 }
 
@@ -294,6 +345,7 @@ export function validateRepositoryProtocol(repositoryRoot: string): ProtocolVali
   const parsed = parseRepositoryManifest(fs.readFileSync(manifestPath, "utf8"));
   errors.push(...parsed.errors);
   if (!parsed.manifest) return { ok: false, initialized: true, documents: [], errors };
+  const protocolVersion = parsed.manifest.version;
 
   const scopes = new Set(parsed.manifest.scopes.map((scope) => scope.id));
   for (const scope of parsed.manifest.scopes) {
@@ -302,7 +354,8 @@ export function validateRepositoryProtocol(repositoryRoot: string): ProtocolVali
     }
   }
 
-  for (const kind of KNOWLEDGE_KINDS) validateTemplate(root, kind, errors);
+  const supportedKinds = knowledgeKindsForVersion(parsed.manifest.version);
+  for (const kind of supportedKinds) validateTemplate(root, kind, errors);
   const skillPath = path.join(root, ALIGNYARD_DIR, "skills/alignyard-knowledge/SKILL.md");
   if (!fs.existsSync(skillPath)) errors.push(`缺少 ${ALIGNYARD_DIR}/skills/alignyard-knowledge/SKILL.md`);
   else if (fs.lstatSync(skillPath).isSymbolicLink()) errors.push(`${ALIGNYARD_DIR}/skills/alignyard-knowledge/SKILL.md: 不允许符号链接`);
@@ -310,6 +363,13 @@ export function validateRepositoryProtocol(repositoryRoot: string): ProtocolVali
   const documents: ProtocolDocument[] = [];
   for (const kind of KNOWLEDGE_KINDS) {
     const kindRoot = path.join(root, ALIGNYARD_DIR, KIND_DIRS[kind]);
+    if (!supportedKinds.includes(kind)) {
+      const unsupported = markdownFiles(kindRoot, errors);
+      for (const file of unsupported) {
+        errors.push(`${displayPath(path.relative(root, file))}: protocol v1 不支持 plan；请升级 repository.yaml`);
+      }
+      continue;
+    }
     for (const file of markdownFiles(kindRoot, errors)) {
       const document = validateDocument(root, file, kind, scopes, errors);
       if (document) documents.push(document);
@@ -317,6 +377,7 @@ export function validateRepositoryProtocol(repositoryRoot: string): ProtocolVali
   }
 
   const ids = new Set<string>();
+  const documentsById = new Map(documents.map((document) => [document.id, document]));
   for (const document of documents) {
     if (ids.has(document.id)) errors.push(`${document.path}: id「${document.id}」重复`);
     ids.add(document.id);
@@ -325,21 +386,45 @@ export function validateRepositoryProtocol(repositoryRoot: string): ProtocolVali
     for (const relation of document.relations) {
       if (!ids.has(relation)) errors.push(`${document.path}: relation「${relation}」不存在`);
     }
+    for (const governing of document.governing) {
+      const target = documentsById.get(governing);
+      if (!target) {
+        errors.push(`${document.path}: governing「${governing}」不存在`);
+      } else if (governing === document.id) {
+        errors.push(`${document.path}: governing 不能指向自身「${governing}」`);
+      } else if (target.kind === "plan") {
+        errors.push(`${document.path}: governing 不能指向技术方案「${governing}」`);
+      }
+    }
+    if (document.kind === "plan") {
+      if (!document.governing.includes("doc.shared.constitution")) {
+        errors.push(`${document.path}: Plan 的 governing 必须包含 doc.shared.constitution`);
+      }
+    }
   }
 
-  if (!documents.some((document) =>
-    document.kind === "doc" && document.path === `${ALIGNYARD_DIR}/docs/shared/overview.md`
+  if (!documents.some((document) => document.kind === "doc"
+    && document.path === `${ALIGNYARD_DIR}/docs/shared/overview.md`
+    && (protocolVersion === 1 || document.id === "doc.shared.overview")
   )) {
     errors.push(`缺少 ${ALIGNYARD_DIR}/docs/shared/overview.md；初始化需要一份 shared overview`);
+  }
+  if (protocolVersion === 2 && !documents.some((document) =>
+    document.kind === "doc"
+      && document.id === "doc.shared.constitution"
+      && document.path === `${ALIGNYARD_DIR}/docs/shared/constitution.md`
+  )) {
+    errors.push(`缺少 ${ALIGNYARD_DIR}/docs/shared/constitution.md；protocol v2 需要固定 constitution 入口`);
   }
 
   return { ok: errors.length === 0, initialized: true, manifest: parsed.manifest, documents, errors };
 }
 
 const DEFAULT_TEMPLATES: Record<KnowledgeKind, string> = {
-  doc: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nowners: []\nrelations: []\n---\n\n# 概述\n`,
-  spec: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nowners: []\nrelations: []\n---\n\n# 背景\n\n# 目标\n\n# 非目标\n\n# 设计\n\n# 验收标准\n`,
-  adr: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nowners: []\nrelations: []\n---\n\n# 背景\n\n# 决策\n\n# 影响\n`,
+  doc: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 概述\n`,
+  spec: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景\n\n# 目标\n\n# 非目标\n\n# 设计\n\n# 验收标准\n`,
+  adr: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景\n\n# 决策\n\n# 影响\n`,
+  plan: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景与目标\n\n# 依据与约束\n\n# 实现设计\n\n# 修改范围\n\n# 保持不变\n\n# 实施步骤\n\n# 验证方案\n\n# 文档更新\n\n# 未决问题\n`,
 };
 
 export const DEFAULT_KNOWLEDGE_SKILL = `---
@@ -349,7 +434,7 @@ description: Bootstrap or maintain repository engineering knowledge under .align
 
 # Alignyard Knowledge
 
-Use this repository's \`.alignyard/repository.yaml\` as the routing contract and \`ay\` as the structural authority. Keep the knowledge set small but complete, evidence-based, and reviewable.
+Use this repository's \`.alignyard/repository.yaml\` as the routing contract and \`ay\` as the structural authority. Treat \`.alignyard/\` as the source of truth for core engineering intent and architectural constraints, not as a mirror of the codebase. Keep only decision-relevant, evidence-based, reviewable knowledge.
 
 ## Choose the workflow
 
@@ -364,39 +449,46 @@ Use this repository's \`.alignyard/repository.yaml\` as the routing contract and
 2. Build an evidence map of the repository's system boundaries, main data flows, stable CLI/API/configuration surfaces, development and operating workflows, and repository-specific conventions. Distinguish verified facts from questions.
 3. Define \`shared\` plus only the meaningful application or service boundaries as scopes. Do not mirror every directory or package into a scope. Set \`source\` only when one directory clearly owns that scope.
 
-### 2. Plan a small but complete baseline
+### 2. Plan a minimal, sufficient baseline
 
-1. Always create the shared repository overview. Use it as a concise map and navigation entry, not as a catch-all document.
-2. Evaluate every applicable durable topic: architecture and boundaries; local development, build, test, release, and operations; stable CLI/API/configuration contracts; repository-specific protocols, directory conventions, and maintenance workflows; and an overview for each meaningful non-shared scope.
-3. Give a topic its own Doc when it has enough verified substance and will evolve independently. Merge truly small topics into the overview instead of creating empty files. A repository with several stable commands or a repository-specific protocol normally needs a dedicated Doc for that surface.
-4. Classify existing knowledge: current verified behavior belongs in Docs, an intended but unfinished change belongs in Specs, and an explicit durable decision belongs in ADRs. Do not infer an ADR merely from code shape. Bootstrap Specs are optional; empty or speculative Specs and ADRs are prohibited.
+1. Always create the shared repository overview. Use it as a concise map and navigation entry, not as a catch-all document. For protocol v2, also complete the generated Constitution from verified repository constraints and user-confirmed intent; never leave it as a generic placeholder.
+2. Cover only durable information that can change an Agent's design direction: product intent, architecture and dependency boundaries, stable public contracts, data/security/permission boundaries, explicit invariants, and important technical choices. Keep implementation details in code, types, tests, or local comments when they are directly recoverable there.
+3. Use this test before creating or expanding a document: if a future Agent did not know this fact, could it produce a locally correct implementation that violates the intended system design? If not, omit it. Give a topic its own Doc only when it has enough verified substance and evolves independently.
+4. Classify existing knowledge: current verified behavior belongs in Docs, an intended but unfinished change belongs in Specs, an explicit durable decision belongs in ADRs, and a concrete optional implementation design belongs in a Plan. Do not infer an ADR merely from code shape. Bootstrap Specs and Plans are optional; empty or speculative Specs, ADRs, and Plans are prohibited.
 
 ### 3. Create and verify documents
 
 1. Use \`ay new\` for every new document, then fill its body from repository evidence. Preserve original documents unless the Task explicitly includes migration or removal.
 2. Keep documents focused and add meaningful \`relations\` when the overview or one topic depends on another document.
-3. Run a content-completeness review before validation: every meaningful scope and every applicable durable topic must point to a Doc, be intentionally covered by the overview, or have an explicit evidence-based reason for omission.
-4. Run \`ay validate\` and resolve every structural error. Passing validation proves protocol structure, not content completeness; do not stop merely because it passes.
-5. Run \`ay sync\`. Report evidence inspected, scopes and documents created, topics intentionally omitted with reasons, unresolved questions, and validation results.
+3. Run an intent-coverage review before validation: ensure core intent, architecture boundaries, stable contracts, invariants, and durable choices are covered, then remove details duplicated from code or tests.
+4. Run \`ay validate\` and resolve every structural error. Passing validation proves protocol structure, not truth, sufficiency, or concision.
+5. Run \`ay validate\`. Report evidence inspected, scopes and documents created, topics intentionally omitted with reasons, unresolved questions, and validation results.
 
 ## Task work
 
-1. Read the manifest, then the relevant scope Docs, active Specs, and related ADRs before proposing changes.
-2. Use a Spec for a material intended change once goals and boundaries are clear. Keep transient conversation and implementation logs out of long-lived knowledge.
-3. Update Docs when accepted current behavior changes. Create an ADR only for a durable decision with meaningful alternatives or consequences.
-4. Preserve stable document IDs. Use \`relations\` for meaningful dependencies; do not create decorative links.
-5. Run \`ay validate\` after knowledge changes and \`ay sync\` before handing the Task back or requesting review.
+1. Read the manifest entrypoints first, then route through the relevant scope Docs, active Specs, related ADRs, and existing Plans. Treat the accepted Spec as authoritative over external source links.
+2. Decide which existing or new documents the change actually needs. A material new capability or boundary change normally needs a concise Spec; a small correction, documentation-only Task, or change already covered by an accepted Spec may only update existing Docs. Do not create a primary document merely to satisfy a workflow shape.
+3. Ask the user directly when missing facts could change product intent, public interfaces, architecture boundaries, compatibility, or change scope. Do not invent a decision. Incorporate the confirmed answer into the final Spec, ADR, Plan, or Doc.
+4. Create an ADR only for a durable decision with meaningful alternatives or consequences. Create a Plan only when a concrete implementation design materially reduces ambiguity; Plans are optional.
+5. A Plan must govern itself with the Constitution and cite only the Docs, Specs, and ADRs that actually constrain the implementation. A Spec is typical for new behavior or boundary changes, but is not mandatory when existing knowledge already states the intent. State what may change and what must remain unchanged, and include implementation and validation steps. External sources are traceability references, not governing truth.
+6. Draft target-state Docs at their normal paths on the Task branch. The branch is the proposal; do not create a temporary Docs copy. Reconcile Docs with the actual implementation before publishing them to the default branch.
+7. Unless the Task explicitly requests implementation, stop after producing the reviewable knowledge package. Preserve stable document IDs and use \`relations\` only for meaningful dependencies.
+8. Run \`ay validate\` after knowledge changes. Before requesting Review, commit all changes and make sure \`git status --short\` is empty; the Runner will repeat these checks and push the branch when the user submits Review.
 
 ## Document semantics
 
 - **Docs:** current accepted system truth. Prefer concise overviews and operational facts that remain useful after the Task closes.
 - **Specs:** the contract for an intended change: context, goals, non-goals, design, and acceptance criteria.
 - **ADRs:** a durable decision and its consequences. Record why, not a chronological meeting transcript.
+- **Plans:** an optional, executable technical design for one intended change. It bridges accepted knowledge to implementation without becoming current system truth.
+- **Constitution:** the reserved \`doc.shared.constitution\` entrypoint. It records repository-wide intent, boundaries, confirmation rules, and enforceable constraints.
+
+Keep every document concise and single-purpose. Record the intent, boundary, rationale, or invariant that must survive implementation; omit function-level mechanics, ordinary field plumbing, meeting transcripts, and implementation logs. Git commits, blame, PR/MR review, and Alignyard Review provide authorship and approval traceability; do not add document owners merely to duplicate that history.
 
 ## Safety and quality
 
-- Write Docs, Specs, and ADRs in Simplified Chinese, including titles, headings, and prose. Keep code identifiers, commands, paths, API names, and established product names unchanged when translation would reduce precision. This Skill itself may remain in English.
-- Do not invent behavior, ownership, commands, or decisions. Mark uncertain facts for confirmation.
+- Write Docs, Specs, ADRs, and Plans in Simplified Chinese, including titles, headings, and prose. Keep code identifiers, commands, paths, API names, and established product names unchanged when translation would reduce precision. This Skill itself may remain in English.
+- Do not invent behavior, ownership, commands, or decisions. Ask the user in the current Agent conversation when a consequential fact or decision is uncertain.
 - Do not read or reproduce secret values. Refer to environment-variable names only when relevant.
 - Do not edit source paths outside the Task's scope merely to make documentation appear complete.
 - Treat \`ay validate\` as authoritative for structure; use repository evidence and user decisions for substance.
@@ -410,14 +502,24 @@ export function initializeRepositoryProtocol(repositoryRoot: string): { created:
   const root = path.resolve(repositoryRoot);
   const protocolRoot = path.join(root, ALIGNYARD_DIR);
   const title = repositoryTitle(root);
+  const manifestPath = path.join(protocolRoot, "repository.yaml");
+  let targetVersion: AlignyardProtocolVersion = ALIGNYARD_PROTOCOL_VERSION;
+  if (fs.existsSync(manifestPath)) {
+    const parsed = parseRepositoryManifest(fs.readFileSync(manifestPath, "utf8"));
+    if (parsed.manifest) targetVersion = parsed.manifest.version;
+  }
   const defaultFiles: Record<string, string> = {
-    "repository.yaml": `version: 1\npreset: basic\n\nscopes:\n  - id: shared\n    title: ${JSON.stringify(title)}\n`,
-    "README.md": `# Alignyard 工程知识\n\n这个目录是 Repository 中随代码版本管理的工程知识工作区。\`repository.yaml\` 声明逻辑 scopes；Docs 记录当前事实，Specs 描述计划中的变更，ADRs 保存长期有效的决策。\n\n使用 \`ay new\` 创建文档，在 Review 前运行 \`ay validate\`，并通过 \`ay sync\` 将当前 Task 的知识快照同步到 Alignyard。\n`,
+    "repository.yaml": `version: 2\npreset: basic\n\nentrypoints:\n  overview: doc.shared.overview\n  constitution: doc.shared.constitution\n\nscopes:\n  - id: shared\n    title: ${JSON.stringify(title)}\n`,
+    "README.md": `# Alignyard 工程意图\n\n这个目录是 Repository 中随代码版本管理的核心工程意图与架构约束真源。它只记录未来 AI 不知道时可能造成整体设计漂移的信息；具体函数、局部算法和普通字段传递仍以代码、类型和测试为准。\n\n\`repository.yaml\` 声明固定入口与逻辑 scopes；Docs 记录当前有效的稳定架构事实，Specs 描述一次变化的意图与边界，ADRs 保存长期取舍，Plans 提供可选的可执行技术方案。文档作者和审核轨迹优先使用 Git commit 与 PR/MR/Alignyard Review，不额外维护一套作者字段。\n\n使用 \`ay new\` 创建文档，在 Review 前运行 \`ay validate\` 并提交全部改动。工程文档始终保存在 Repository 和 worktree 中；Platform 不保存副本。\n`,
     "templates/doc.md": DEFAULT_TEMPLATES.doc,
     "templates/spec.md": DEFAULT_TEMPLATES.spec,
     "templates/adr.md": DEFAULT_TEMPLATES.adr,
     "skills/alignyard-knowledge/SKILL.md": DEFAULT_KNOWLEDGE_SKILL,
   };
+  if (targetVersion === 2) {
+    defaultFiles["templates/plan.md"] = DEFAULT_TEMPLATES.plan;
+    defaultFiles["docs/shared/constitution.md"] = `---\nid: doc.shared.constitution\ntitle: "工程约束"\nkind: doc\nscope: shared\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 概述\n\n这份文档是 Repository 的固定工程约束入口。初始化时应根据仓库证据补充产品意图、架构边界、需要人工确认的关键不确定性，以及已有机器检查；只记录缺失后可能导致整体设计漂移的信息，具体实现细节留在代码、类型与测试中。缺少依据时直接向用户确认，不自行推断。\n`;
+  }
   const created: string[] = [];
   const existing: string[] = [];
   for (const [relative, contents] of Object.entries(defaultFiles)) {
@@ -431,7 +533,10 @@ export function initializeRepositoryProtocol(repositoryRoot: string): { created:
     fs.writeFileSync(target, contents, "utf8");
     created.push(relativePath);
   }
-  for (const directory of Object.values(KIND_DIRS)) {
+  const directories = targetVersion === 2
+    ? Object.values(KIND_DIRS)
+    : V1_KNOWLEDGE_KINDS.map((kind) => KIND_DIRS[kind]);
+  for (const directory of directories) {
     fs.mkdirSync(path.join(protocolRoot, directory, "shared"), { recursive: true });
   }
   return { created, existing };
@@ -453,6 +558,9 @@ export function createRepositoryDocument(
   if (!fs.existsSync(manifestPath)) throw new Error(`缺少 ${ALIGNYARD_MANIFEST}；请先运行 ay init`);
   const parsed = parseRepositoryManifest(fs.readFileSync(manifestPath, "utf8"));
   if (!parsed.manifest) throw new Error(parsed.errors.join("\n"));
+  if (parsed.manifest.version === 1 && input.kind === "plan") {
+    throw new Error("protocol v1 不支持 plan；请先升级 repository.yaml");
+  }
   if (!parsed.manifest.scopes.some((scope) => scope.id === input.scope)) {
     throw new Error(`scope「${input.scope}」未在 repository.yaml 中声明`);
   }
@@ -479,7 +587,17 @@ export function createRepositoryDocument(
 
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, content, "utf8");
-  return { id, kind: input.kind, scope: input.scope, title, path: relative, owners: [], relations: [] };
+  return {
+    id,
+    kind: input.kind,
+    scope: input.scope,
+    title,
+    path: relative,
+    owners: [],
+    relations: [],
+    sources: [],
+    governing: [],
+  };
 }
 
 export function indexRepositoryProtocol(repositoryRoot: string): {

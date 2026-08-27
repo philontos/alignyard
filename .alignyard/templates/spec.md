@@ -3,8 +3,9 @@ id: {{id}}
 title: {{title}}
 kind: {{kind}}
 scope: {{scope}}
-owners: []
 relations: []
+sources: []
+governing: []
 ---
 
 # 背景

@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { db, type Repo, type Task } from "../core/db.js";
 import { DATA_DIR, NS } from "../core/paths.js";
 import { getOwnedRepo, getOwnedTask, listOwnedTasks, localHostId } from "../core/ownership.js";
@@ -28,8 +26,9 @@ import {
 import type { RunnerRpcMethod } from "./protocol.js";
 import {
   ALIGNYARD_MANIFEST,
-  REQUIRED_BOOTSTRAP_FILES,
+  indexRepositoryProtocol,
   parseRepositoryManifest,
+  requiredBootstrapFiles,
 } from "../protocol/repository.js";
 
 function writeManifest(id: number) {
@@ -59,30 +58,6 @@ function executionId(params: Record<string, any>): string {
   const value = String(params.execution_id || "").trim();
   if (!/^rex_[A-Za-z0-9_-]{8,128}$/.test(value)) throw new Error("Runner execution ID 无效");
   return value;
-}
-
-function executionSecretDir(id: string): string {
-  return path.join(DATA_DIR, "runner-executions", id);
-}
-
-function executionEnvironment(params: Record<string, any>): Record<string, string> | undefined {
-  const source = params.env && typeof params.env === "object" ? params.env as Record<string, unknown> : {};
-  const allowed = ["AY_PLATFORM_URL", "AY_TASK_KEY", "AY_REPOSITORY_ID", "AY_BASE_COMMIT"];
-  const result = Object.fromEntries(allowed.flatMap((key) =>
-    typeof source[key] === "string" && source[key] ? [[key, source[key] as string]] : [],
-  ));
-  const token = typeof source.AY_PLATFORM_TOKEN === "string" ? source.AY_PLATFORM_TOKEN.trim() : "";
-  if (token) {
-    const directory = executionSecretDir(executionId(params));
-    const target = path.join(directory, "platform-token");
-    const temporary = `${target}.tmp-${process.pid}`;
-    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(temporary, `${token}\n`, { mode: 0o600 });
-    fs.renameSync(temporary, target);
-    fs.chmodSync(target, 0o600);
-    result.AY_PLATFORM_TOKEN_FILE = target;
-  }
-  return Object.keys(result).length ? result : undefined;
 }
 
 function bindExecution(id: string, runnerTaskId: number): void {
@@ -158,16 +133,13 @@ async function startExecution(params: Record<string, any>) {
       prompt: typeof params.prompt === "string" ? params.prompt : null,
       agent: asAgentKind(params.agent),
       automated: params.automated === true,
-      env: executionEnvironment(params),
     },
   );
   if (!result.ok) {
-    fs.rmSync(executionSecretDir(id), { recursive: true, force: true });
     throw new Error(result.message);
   }
   const task = getOwnedTask(db, result.id);
   if (!task) {
-    fs.rmSync(executionSecretDir(id), { recursive: true, force: true });
     throw new Error("Runner Task 创建后未找到");
   }
   bindExecution(id, task.id);
@@ -185,7 +157,6 @@ async function resumeExecution(id: number, params: Record<string, any>) {
       model: task.agent_model,
       addDirs: referenceWorktreePaths(db, task.id),
       automated: true,
-      env: executionEnvironment(params),
     }),
     writeManifest,
   }, id);
@@ -205,7 +176,6 @@ async function cleanupExecution(params: Record<string, any>) {
     writeManifest,
   }, id);
   if (!result.ok) throw new Error(result.message || result.error);
-  fs.rmSync(executionSecretDir(executionId(params)), { recursive: true, force: true });
   return { ok: true };
 }
 
@@ -224,17 +194,42 @@ async function prepareReview(params: Record<string, any>) {
   })).trim();
   if (dirty) throw new Error("worktree 仍有未提交变更");
   const head = (await localExecutor.exec("git", ["rev-parse", "HEAD"], { cwd: task.worktree_path })).trim();
-  if (!head || head === task.base_commit) throw new Error("Task 尚未产生可评审的提交");
-  await localExecutor.exec("git", ["push", "--set-upstream", "origin", task.work_branch], {
-    cwd: task.worktree_path,
-    env: { GIT_TERMINAL_PROMPT: "0" },
-  });
+  const unchanged = head === task.base_commit;
+  if (!head || (unchanged && params.allow_unchanged !== true)) throw new Error("Task 尚未产生可评审的提交");
+  const pushBranch = String(params.push_branch || task.work_branch).trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(pushBranch) || pushBranch.includes("..") || pushBranch.endsWith("/")) {
+    throw new Error("目标工作分支无效");
+  }
+  if (!unchanged) {
+    await localExecutor.exec("git", ["push", "--set-upstream", "origin", `HEAD:${pushBranch}`], {
+      cwd: task.worktree_path,
+      env: { GIT_TERMINAL_PROMPT: "0" },
+    });
+  }
   await stopTask({
     db,
     killSession: (session) => killSession(localExecutor, session),
     writeManifest,
   }, id);
   return { ...publicTask(getOwnedTask(db, id)!), head_commit: head };
+}
+
+async function readExecutionKnowledge(params: Record<string, any>) {
+  const task = getOwnedTask(db, Number(params.runner_task_id));
+  if (!task?.worktree_path) throw new Error("Runner Task worktree 不存在");
+  const indexed = indexRepositoryProtocol(task.worktree_path);
+  const requestedId = typeof params.document_id === "string" ? params.document_id.trim() : "";
+  if (requestedId) {
+    const document = indexed.documents.find((item) => item.id === requestedId);
+    if (!document) throw new Error("工程文档不存在");
+    const { content_hash: _contentHash, ...visibleDocument } = document;
+    return { document: visibleDocument };
+  }
+  const documents = indexed.documents.map(({ content: _content, content_hash: _contentHash, ...document }) => document);
+  const headCommit = (await localExecutor.exec("git", ["rev-parse", "HEAD"], {
+    cwd: task.worktree_path,
+  })).trim();
+  return { documents, head_commit: headCommit };
 }
 
 function changeRequestInput(params: Record<string, any>): ChangeRequestInput & Record<string, any> {
@@ -282,6 +277,7 @@ export async function executeRunnerRpc(method: RunnerRpcMethod, rawParams: unkno
     return { ok: true };
   }
   if (method === "execution.prepare-review") return prepareReview(params);
+  if (method === "execution.knowledge") return readExecutionKnowledge(params);
   if (method === "repository.branches") {
     const repository = await ensureRepository(requiredObject(params.repository));
     const result = await branchesForOwnedRepo(ownedRepoEnv, repository.id);
@@ -292,17 +288,19 @@ export async function executeRunnerRpc(method: RunnerRpcMethod, rawParams: unkno
     const input = requiredObject(params.repository);
     const repository = await ensureRepository(input);
     const branch = String(input.default_branch || repository.default_branch || "main");
-    const files = await readRemoteBranchFiles(
+    const manifestFiles = await readRemoteBranchFiles(
       localExecutor,
       repository.mirror_path!,
       branch,
-      REQUIRED_BOOTSTRAP_FILES,
+      [ALIGNYARD_MANIFEST],
     );
-    const manifestText = files[ALIGNYARD_MANIFEST];
+    const manifestText = manifestFiles[ALIGNYARD_MANIFEST];
     if (!manifestText) return { state: "uninitialized", error: null };
     const parsed = parseRepositoryManifest(manifestText);
     if (!parsed.manifest) return { state: "invalid", error: parsed.errors.join("\n") };
-    const missing = REQUIRED_BOOTSTRAP_FILES.filter((filePath) => files[filePath] == null);
+    const required = requiredBootstrapFiles(parsed.manifest.version);
+    const files = await readRemoteBranchFiles(localExecutor, repository.mirror_path!, branch, required);
+    const missing = required.filter((filePath) => files[filePath] == null);
     return missing.length
       ? { state: "invalid", error: `默认分支缺少初始化文件：${missing.join("、")}` }
       : { state: "ready", error: null };

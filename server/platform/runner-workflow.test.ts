@@ -2,11 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import Database from "better-sqlite3";
 import { initSchema } from "../core/schema.ts";
-import { authenticateExecutionToken } from "../runner/registry.ts";
 import {
   createPlatformRepository,
   createRepositoryInitializationTask,
+  createPlatformTask,
   getPlatformTask,
+  setPlatformRepositoryProtocolState,
 } from "./catalog.ts";
 import {
   createChangeRequestOnRunner,
@@ -15,6 +16,7 @@ import {
   startReviewOnRunner,
   startTaskOnRunner,
   submitTaskForReviewOnRunner,
+  taskKnowledgeOnRunner,
 } from "./runner-workflow.ts";
 
 function fixture() {
@@ -60,6 +62,9 @@ function fixture() {
         base_commit: "base-sha",
         head_commit: "head-sha",
       };
+      if (method === "execution.knowledge") return params.document_id
+        ? { document: { id: params.document_id, title: "仓库概览", content: "# 仓库概览" } }
+        : { documents: [{ id: "doc.shared.overview", title: "仓库概览", path: ".alignyard/docs/shared/overview.md" }] };
       if (method === "change-request.create") return { number: 7, url: "https://github.com/team/example/pull/7", state: "open" };
       if (method === "change-request.merge") return { number: 7, url: "https://github.com/team/example/pull/7", state: "merged" };
       if (method === "repository.refresh-protocol") return { state: "ready", error: null };
@@ -70,33 +75,25 @@ function fixture() {
 }
 
 test("Runner workflow completes author, review, pull request and merge without cloud checkout", async () => {
-  const { db, repository, task, calls, env } = fixture();
+  const { db, task, calls, env } = fixture();
   const author = { id: 1, name: "Author" };
   const reviewer = { id: 2, name: "Reviewer" };
 
-  const started = await startTaskOnRunner(env, task.key, "https://alignyard.example.com", author, "codex");
+  const started = await startTaskOnRunner(env, task.key, author, "codex");
   assert.equal(started.runtime_created, true);
   assert.equal(started.task.runner_id, "author-runner");
-  assert.ok(calls.find((call) => call.method === "execution.start")?.params.env.AY_PLATFORM_TOKEN);
+  assert.equal(calls.find((call) => call.method === "execution.start")?.params.env, undefined);
   assert.equal((db.prepare("SELECT COUNT(*) AS count FROM repos").get() as { count: number }).count, 0);
-
-  db.prepare(
-    "UPDATE platform_task_repositories SET manifest_status='valid',base_commit='base-sha',head_commit='head-sha' " +
-      "WHERE task_id=? AND repository_id=?",
-  ).run(task.id, repository.id);
-  db.prepare(
-    "INSERT INTO platform_artifacts (task_id,repository_id,document_id,kind,scope,path,title,base_commit,head_commit) " +
-      "VALUES (?,?,?,'doc','shared','.alignyard/docs/shared/overview.md','仓库概览','base-sha','head-sha')",
-  ).run(task.id, repository.id, "overview");
 
   const submitted = await submitTaskForReviewOnRunner(env, task.key, author, {
     reviewer: "Reviewer", reviewer_user_id: 2, submitted_by: "Author", submitted_by_user_id: 1,
   });
   assert.equal(submitted.status, "review");
   assert.ok(submitted.repositories[0].remote_pushed_at);
+  assert.ok(calls.some((call) => call.method === "execution.prepare-review"));
 
   const reviewStarted = await startReviewOnRunner(
-    env, task.key, "https://alignyard.example.com", reviewer, "claude",
+    env, task.key, reviewer, "claude",
   );
   assert.equal(reviewStarted.task.review?.status, "in_progress");
   assert.equal(reviewStarted.task.runner_id, "reviewer-runner");
@@ -108,6 +105,9 @@ test("Runner workflow completes author, review, pull request and merge without c
   const approved = await decideReviewOnRunner(env, task.key, reviewer, "approved");
   assert.equal(approved.status, "approved");
   assert.equal(approved.runner_id, "author-runner");
+  const reviewerPreparation = calls.filter((call) => call.method === "execution.prepare-review").at(-1)!;
+  assert.equal(reviewerPreparation.params.allow_unchanged, true);
+  assert.equal(reviewerPreparation.params.push_branch, "change/ay-001/author");
 
   const withRequest = await createChangeRequestOnRunner(env, task.key, author);
   assert.equal(withRequest.pr_state, "open");
@@ -137,51 +137,108 @@ test("a lost start response retries the same execution id and deterministic work
 
   const actor = { id: 1, name: "Author" };
   await assert.rejects(
-    startTaskOnRunner(env, task.key, "https://alignyard.example.com", actor, "codex"),
+    startTaskOnRunner(env, task.key, actor, "codex"),
     /response lost/,
   );
   const failedCall = calls.find((call) => call.method === "execution.start")!;
   assert.match(failedCall.params.work_branch, /^change\/ay-001\//);
   assert.equal((db.prepare("SELECT COUNT(*) AS count FROM platform_runner_executions").get() as { count: number }).count, 1);
-  assert.equal((db.prepare("SELECT COUNT(*) AS count FROM platform_execution_tokens").get() as { count: number }).count, 0);
 
-  const retried = await startTaskOnRunner(env, task.key, "https://alignyard.example.com", actor, "codex");
+  const retried = await startTaskOnRunner(env, task.key, actor, "codex");
   assert.equal(retried.task.runtime_task_id, 77);
   const startCalls = calls.filter((call) => call.method === "execution.start");
   assert.equal(startCalls.length, 2);
   assert.equal(startCalls[0].params.execution_id, startCalls[1].params.execution_id);
   assert.equal(startCalls[0].params.work_branch, startCalls[1].params.work_branch);
-  assert.equal((db.prepare("SELECT COUNT(*) AS count FROM platform_execution_tokens").get() as { count: number }).count, 1);
 });
 
-test("changes requested resumes the sticky Author execution with a fresh sync token", async () => {
-  const { db, repository, task, calls, env } = fixture();
+test("changes requested resumes the sticky Author execution and delivers feedback", async () => {
+  const { task, calls, env } = fixture();
   const author = { id: 1, name: "Author" };
   const reviewer = { id: 2, name: "Reviewer" };
-  await startTaskOnRunner(env, task.key, "https://alignyard.example.com", author, "codex");
-  const firstStart = calls.find((call) => call.method === "execution.start")!;
-  const firstToken = firstStart.params.env.AY_PLATFORM_TOKEN as string;
-
-  db.prepare(
-    "UPDATE platform_task_repositories SET manifest_status='valid',base_commit='base-sha',head_commit='head-sha' " +
-      "WHERE task_id=? AND repository_id=?",
-  ).run(task.id, repository.id);
-  db.prepare(
-    "INSERT INTO platform_artifacts (task_id,repository_id,document_id,kind,scope,path,title,base_commit,head_commit) " +
-      "VALUES (?,?,?,'doc','shared','.alignyard/docs/shared/overview.md','仓库概览','base-sha','head-sha')",
-  ).run(task.id, repository.id, "overview");
+  await startTaskOnRunner(env, task.key, author, "codex");
   await submitTaskForReviewOnRunner(env, task.key, author, {
     reviewer: "Reviewer", reviewer_user_id: 2, submitted_by: "Author", submitted_by_user_id: 1,
   });
-  assert.equal(authenticateExecutionToken(db, firstToken), null);
 
   await decideReviewOnRunner(env, task.key, reviewer, "changes_requested", "请补测试");
-  const resumed = await startTaskOnRunner(env, task.key, "https://alignyard.example.com", author, "codex");
+  const resumed = await startTaskOnRunner(env, task.key, author, "codex");
   assert.equal(resumed.runtime_created, false);
-  const resumeCall = calls.find((call) => call.method === "execution.resume")!;
-  const resumedToken = resumeCall.params.env.AY_PLATFORM_TOKEN as string;
-  assert.notEqual(resumedToken, firstToken);
-  assert.equal(authenticateExecutionToken(db, firstToken), null);
-  assert.equal(authenticateExecutionToken(db, resumedToken)?.task_key, task.key);
-  assert.equal((db.prepare("SELECT COUNT(*) AS count FROM platform_execution_tokens").get() as { count: number }).count, 1);
+  assert.ok(calls.some((call) => call.method === "execution.resume"));
+  assert.match(calls.find((call) => call.method === "execution.message")?.params.message || "", /请补测试/);
+});
+
+test("ordinary Task produces a reviewed design baseline and stops before PR creation", async () => {
+  const { db, repository, calls, env } = fixture();
+  setPlatformRepositoryProtocolState(db, repository.id, "ready");
+  const task = createPlatformTask(db, {
+    title: "统一登录行为",
+    description: "把原始需求整理成可实现的知识设计包",
+    owner: "Author",
+    owner_user_id: 1,
+    repositories: [{ repository_id: repository.id, mode: "editable" }],
+  });
+  const author = { id: 1, name: "Author" };
+  const reviewer = { id: 2, name: "Reviewer" };
+
+  await startTaskOnRunner(env, task.key, author, "codex");
+  const start = calls.filter((call) => call.method === "execution.start").at(-1)!;
+  assert.match(start.params.prompt, /本次默认目标不是编码/);
+  assert.match(start.params.prompt, /直接在当前会话向用户提问/);
+  assert.match(start.params.prompt, /Plan 是可选的/);
+
+  await submitTaskForReviewOnRunner(env, task.key, author, {
+    reviewer: "Reviewer", reviewer_user_id: 2, submitted_by: "Author", submitted_by_user_id: 1,
+  });
+  const approved = await decideReviewOnRunner(env, task.key, reviewer, "approved");
+  assert.equal(approved.status, "approved");
+  assert.equal(approved.repositories[0].design_commit, "head-sha");
+  await assert.rejects(
+    createChangeRequestOnRunner(env, task.key, author),
+    /普通 Task 已形成设计基线/,
+  );
+});
+
+test("ordinary Task submission depends on Runner validation and commit preparation", async () => {
+  const { repository, calls, env } = fixture();
+  const db = env.db;
+  setPlatformRepositoryProtocolState(db, repository.id, "ready");
+  const task = createPlatformTask(db, {
+    title: "调整登录实现",
+    owner: "Author",
+    owner_user_id: 1,
+    repositories: [{ repository_id: repository.id, mode: "editable" }],
+  });
+  const author = { id: 1, name: "Author" };
+  await startTaskOnRunner(env, task.key, author, "codex");
+
+  const submitted = await submitTaskForReviewOnRunner(env, task.key, author, {
+    reviewer: "Reviewer", reviewer_user_id: 2, submitted_by: "Author", submitted_by_user_id: 1,
+  });
+  assert.equal(submitted.status, "review");
+  assert.equal(calls.filter((call) => call.method === "execution.prepare-review").length, 1);
+});
+
+test("engineering documents are read transiently from the requesting participant's Runner", async () => {
+  const { task, calls, env } = fixture();
+  const author = { id: 1, name: "Author" };
+  const reviewer = { id: 2, name: "Reviewer" };
+  await startTaskOnRunner(env, task.key, author, "codex");
+
+  const listing = await taskKnowledgeOnRunner(env, task.key, author) as { documents: Array<{ id: string }> };
+  assert.equal(listing.documents[0].id, "doc.shared.overview");
+  const authorCall = calls.filter((call) => call.method === "execution.knowledge").at(-1)!;
+  assert.equal(authorCall.runnerId, "author-runner");
+
+  await submitTaskForReviewOnRunner(env, task.key, author, {
+    reviewer: "Reviewer", reviewer_user_id: 2, submitted_by: "Author", submitted_by_user_id: 1,
+  });
+  await assert.rejects(taskKnowledgeOnRunner(env, task.key, reviewer), /先启动自己的 Agent 工作区/);
+  await startReviewOnRunner(env, task.key, reviewer, "claude");
+  const document = await taskKnowledgeOnRunner(env, task.key, reviewer, "doc.shared.overview") as {
+    document: { content: string };
+  };
+  assert.equal(document.document.content, "# 仓库概览");
+  const reviewerCall = calls.filter((call) => call.method === "execution.knowledge").at(-1)!;
+  assert.equal(reviewerCall.runnerId, "reviewer-runner");
 });

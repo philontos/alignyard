@@ -4,10 +4,8 @@ import Database from "better-sqlite3";
 import { initSchema } from "../core/schema.ts";
 import {
   authenticateRunnerToken,
-  authenticateExecutionToken,
   claimRunnerPairing,
   createRunnerPairing,
-  createExecutionToken,
   listUserRunners,
   revokeRunner,
   updateRunnerHello,
@@ -38,27 +36,6 @@ test("a pairing code is single-use and yields an opaque Runner credential", () =
     name: "duplicate", os: "darwin", arch: "arm64",
   }, new Date("2026-01-01T00:02:00Z")), null);
   assert.doesNotMatch(JSON.stringify(db.prepare("SELECT * FROM platform_runners").get()), new RegExp(claimed.token));
-});
-
-test("Agent execution credentials are hashed, Task-scoped and expire", () => {
-  const db = memoryDb();
-  db.prepare(
-    "INSERT INTO platform_tasks (task_key,title,owner,current_assignee,runner_execution_id) " +
-      "VALUES ('AY-001','Task','Phil','Phil','rex_1')",
-  ).run();
-  db.prepare(
-    "INSERT INTO platform_runner_executions " +
-      "(id,task_id,runner_id,actor,actor_user_id,role,agent,status) " +
-      "VALUES ('rex_1',1,'runner-1','Phil',1,'author','codex','running')",
-  ).run();
-  const token = createExecutionToken(db, "rex_1", "ay-001", new Date("2026-01-01T00:00:00Z"));
-  assert.deepEqual(authenticateExecutionToken(db, token, new Date("2026-01-01T12:00:00Z")), {
-    execution_id: "rex_1", task_key: "AY-001",
-  });
-  assert.equal(authenticateExecutionToken(db, token, new Date("2026-01-02T00:00:01Z")), null);
-  db.prepare("UPDATE platform_runner_executions SET status='stopped' WHERE id='rex_1'").run();
-  assert.equal(authenticateExecutionToken(db, token, new Date("2026-01-01T12:00:00Z")), null);
-  assert.doesNotMatch(JSON.stringify(db.prepare("SELECT * FROM platform_execution_tokens").get()), new RegExp(token));
 });
 
 test("expired pairing codes cannot register a Runner", () => {

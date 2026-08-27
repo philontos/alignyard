@@ -33,11 +33,10 @@ Alignyard 只有两个 CLI：`alignyard-runner` 管理用户本地 Runner，`ay`
 | 命令 | 语义 |
 |---|---|
 | `ay init [repository]` | 幂等创建最小 `.alignyard/` 骨架，不覆盖已有文件 |
-| `ay new <doc|spec|adr> <slug> --scope <scope> [--title TITLE]` | 从模板创建文档 |
+| `ay new <doc|spec|adr|plan> <slug> --scope <scope> [--title TITLE]` | 从模板创建文档或可选技术方案 |
 | `ay validate [repository] [--json]` | 校验 manifest、模板、Skill、路径、章节、ID 和 relations |
-| `ay sync [repository] --platform URL --task KEY --repository-id ID [--base-commit COMMIT]` | 校验并上传 Task-scoped 工程知识快照 |
 
-`ay sync` 可以读取 `AY_PLATFORM_URL`、`AY_TASK_KEY`、`AY_REPOSITORY_ID`、`AY_BASE_COMMIT`。Runner 通过 `AY_PLATFORM_TOKEN_FILE` 传递短期 execution token；`ay` 读取文件内容后发送认证头。token 文件不得加入 Repository 或 shell profile。
+`ay` 只操作当前 Repository，不连接 Platform，也不上传知识或摘要。用户提交 Review 时，Runner 会再次运行 `ay validate`、检查 worktree 与提交并 push 当前工作分支。
 
 ## Platform 配置
 
@@ -62,6 +61,6 @@ Alignyard 只有两个 CLI：`alignyard-runner` 管理用户本地 Runner，`ay`
 | `~/.alignyard/runner.json` | Platform URL、Runner ID、设备 token 与名称；权限 `0600` |
 | `ALIGNYARD_RUNNER_CONFIG` | 测试时覆盖配置文件路径 |
 | `ALIGNYARD_RUNNER_BIN` | 安装 LaunchAgent 时覆盖 launcher 路径 |
-| `ALIGNYARD_DATA_DIR` | Runner SQLite、mirror、worktree 和 execution secret 根目录 |
+| `ALIGNYARD_DATA_DIR` | Runner SQLite、mirror 和 worktree 根目录 |
 
 Launcher 扩充固定 PATH，以发现常见 Homebrew 与系统命令，但不会修改用户 shell profile。Agent、Git 和 forge 登录仍由用户自己维护。

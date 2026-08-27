@@ -1,6 +1,6 @@
 # Alignyard
 
-Alignyard 是一套云端协作平台与用户本地 Runner。云端负责用户、Repository、Task、Review、Prompt 和工程知识；Git checkout、worktree、tmux、Agent CLI 与 `gh`/`glab` 始终在用户自己的 Mac 上运行。
+Alignyard 是面向 AI-native 团队的核心工程意图与架构约束协作平台。`.alignyard/` 保存 AI 不能随意重新决定的产品意图、系统边界、长期取舍和变更契约；代码、类型、测试与运行行为继续承载具体实现事实。Platform 只负责用户、Repository/Task/Review 状态和流程框架，不保存工程知识、摘要或 Git diff；Git checkout、worktree、tmux、Agent CLI 与 `gh`/`glab` 始终在用户自己的 Mac 上运行。普通 Task 默认先形成经过审核的最小充分设计包，编码是可接入但非必选的后续能力。
 
 ## 架构
 
@@ -44,6 +44,7 @@ npm run runner -- start
 
 ```bash
 npm run ay -- validate .
+npm run ay -- new plan <slug> --scope <scope> --title '<中文标题>'
 ```
 
 ## 部署

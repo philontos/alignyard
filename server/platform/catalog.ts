@@ -56,9 +56,9 @@ export interface PlatformTaskRepository extends PlatformRepository {
   base_commit: string | null;
   work_branch: string | null;
   head_commit: string | null;
+  design_commit: string | null;
+  design_approved_at: string | null;
   assignee: string | null;
-  manifest_status: string;
-  last_reported_at: string | null;
   remote_pushed_at: string | null;
 }
 
@@ -92,22 +92,6 @@ export interface PlatformTaskExecution {
   updated_at: string;
 }
 
-export interface PlatformArtifact {
-  id: number;
-  task_id: number;
-  repository_id: number;
-  repository_name: string;
-  task_key: string;
-  kind: string;
-  path: string;
-  title: string | null;
-  change_kind: string | null;
-  review_status: string;
-  base_commit: string | null;
-  head_commit: string | null;
-  updated_at: string;
-}
-
 export interface PlatformTask {
   id: number;
   key: string;
@@ -136,7 +120,6 @@ export interface PlatformTask {
   created_at: string;
   updated_at: string;
   repositories: PlatformTaskRepository[];
-  artifacts: PlatformArtifact[];
   review: PlatformTaskReview | null;
   executions: PlatformTaskExecution[];
 }
@@ -234,25 +217,15 @@ export function createPlatformRepository(db: DB, input: Record<string, unknown>)
   }
 }
 
-type TaskRow = Omit<PlatformTask, "key" | "repositories" | "artifacts" | "review" | "executions"> & { task_key: string };
-
-function artifactsForTask(db: DB, taskId: number): PlatformArtifact[] {
-  return db.prepare(
-    "SELECT a.id,a.task_id,a.repository_id,r.name AS repository_name,t.task_key," +
-      "a.kind,a.path,a.title,a.change_kind,a.review_status,a.base_commit,a.head_commit,a.updated_at " +
-      "FROM platform_artifacts a " +
-      "JOIN platform_repositories r ON r.id=a.repository_id " +
-      "JOIN platform_tasks t ON t.id=a.task_id " +
-      "WHERE a.task_id=? ORDER BY a.kind,r.name,a.path",
-  ).all(taskId) as PlatformArtifact[];
-}
+type TaskRow = Omit<PlatformTask, "key" | "repositories" | "review" | "executions"> & { task_key: string };
 
 function repositoriesForTask(db: DB, taskId: number): PlatformTaskRepository[] {
   const rows = db.prepare(
     "SELECT r.id,r.name,r.git_url,r.default_branch,r.protocol_initialized,r.protocol_state,r.protocol_error," +
       "r.created_by,r.created_by_user_id,r.created_at,r.updated_at," +
-      "tr.mode,tr.base_branch,tr.base_commit,tr.work_branch,tr.head_commit,tr.assignee," +
-      "tr.manifest_status,tr.last_reported_at,tr.remote_pushed_at " +
+      "tr.mode,tr.base_branch,tr.base_commit,tr.work_branch,tr.head_commit,tr.design_commit," +
+      "tr.design_approved_at,tr.assignee," +
+      "tr.remote_pushed_at " +
       "FROM platform_task_repositories tr " +
       "JOIN platform_repositories r ON r.id=tr.repository_id " +
       "WHERE tr.task_id=? ORDER BY CASE tr.mode WHEN 'editable' THEN 0 ELSE 1 END,r.name",
@@ -317,7 +290,6 @@ function shapeTask(db: DB, row: TaskRow): PlatformTask {
     created_at: row.created_at,
     updated_at: row.updated_at,
     repositories: repositoriesForTask(db, row.id),
-    artifacts: artifactsForTask(db, row.id),
     review: reviewForTask(db, row.id),
     executions: executionsForTask(db, row.id),
   };
@@ -520,13 +492,17 @@ export function recordPlatformTaskPush(
   db: DB,
   key: string,
   headCommit: string,
+  repositoryId?: number,
 ): PlatformTask | undefined {
   const task = getPlatformTask(db, key);
   if (!task) return undefined;
+  const where = repositoryId == null
+    ? "task_id=? AND mode='editable'"
+    : "task_id=? AND repository_id=? AND mode='editable'";
   db.prepare(
-    "UPDATE platform_task_repositories SET head_commit=?,remote_pushed_at=datetime('now')," +
-      "last_reported_at=datetime('now') WHERE task_id=? AND mode='editable'",
-  ).run(headCommit, task.id);
+    "UPDATE platform_task_repositories SET head_commit=?,remote_pushed_at=datetime('now') " +
+      `WHERE ${where}`,
+  ).run(headCommit, task.id, ...(repositoryId == null ? [] : [repositoryId]));
   return getPlatformTask(db, key);
 }
 
@@ -586,6 +562,11 @@ export function decidePlatformTaskReview(
   if (decision === "changes_requested" && !reviewFeedback) {
     throw new PlatformValidationError("请填写需要修改的内容");
   }
+  if (decision === "approved" && task.repositories.some(
+    (repository) => repository.mode === "editable" && !repository.head_commit,
+  )) {
+    throw new PlatformValidationError("所有 editable Repository 都必须先有已推送的 Review 提交");
+  }
   db.transaction(() => {
     db.prepare(
       "UPDATE platform_task_reviews SET status=?,feedback=?,feedback_delivered_at=NULL," +
@@ -595,9 +576,10 @@ export function decidePlatformTaskReview(
       "UPDATE platform_tasks SET status=?,current_assignee=?,current_assignee_user_id=?," +
         "updated_at=datetime('now') WHERE id=?",
     ).run(decision === "approved" ? "approved" : "draft", task.owner, task.owner_user_id, task.id);
-    if (decision === "changes_requested" && task.task_type === "repository_init") {
+    if (decision === "approved") {
       db.prepare(
-        "UPDATE platform_task_repositories SET manifest_status='waiting' WHERE task_id=? AND mode='editable'",
+        "UPDATE platform_task_repositories SET design_commit=head_commit," +
+          "design_approved_at=datetime('now') WHERE task_id=? AND mode='editable'",
       ).run(task.id);
     }
   })();
@@ -642,14 +624,23 @@ export function updatePlatformTaskCommits(
   db: DB,
   key: string,
   commits: { base_commit?: string | null; head_commit?: string | null },
+  repositoryId?: number,
 ): PlatformTask | undefined {
   const task = getPlatformTask(db, key);
   if (!task) return undefined;
+  const where = repositoryId == null
+    ? "task_id=? AND mode='editable'"
+    : "task_id=? AND repository_id=? AND mode='editable'";
   db.prepare(
     "UPDATE platform_task_repositories SET base_commit=COALESCE(?,base_commit)," +
-      "head_commit=COALESCE(?,head_commit),last_reported_at=datetime('now') " +
-      "WHERE task_id=? AND mode='editable'",
-  ).run(commits.base_commit ?? null, commits.head_commit ?? null, task.id);
+      "head_commit=COALESCE(?,head_commit) " +
+      `WHERE ${where}`,
+  ).run(
+    commits.base_commit ?? null,
+    commits.head_commit ?? null,
+    task.id,
+    ...(repositoryId == null ? [] : [repositoryId]),
+  );
   return getPlatformTask(db, key);
 }
 
@@ -800,7 +791,7 @@ export function createRepositoryInitializationTask(
     title: `Initialize Alignyard · ${repository.name}`,
     description:
       `为 ${repository.name} 建立版本化工程知识：运行 ay init，按 alignyard-knowledge Skill ` +
-      "盘点仓库事实并梳理 scopes、架构、稳定接口与维护流程等基础 Docs，运行 ay validate、ay sync，提交 Review 后合并到默认分支。",
+      "盘点仓库事实并梳理 scopes、架构、稳定接口与维护流程等基础 Docs；提交 Review 时由 Runner 执行 ay validate，随后推送工作分支并进入人工审核。",
     owner,
     owner_user_id: ownerUserId,
     repositories: [{ repository_id: repository.id, mode: "editable", base_branch: repository.default_branch }],
@@ -825,7 +816,7 @@ export function deletePlatformRepository(db: DB, repositoryId: number): Platform
   return repository;
 }
 
-/** Remove one platform Task and its current knowledge snapshot. Runtime and
+/** Remove one platform Task and its collaboration metadata. Runtime and
  * forge resources are cleaned by the workflow layer before this local
  * transaction runs. An unfinished Repository Init releases its repository so
  * a fresh initialization Task can be created. */
@@ -833,14 +824,9 @@ export function deletePlatformTask(db: DB, key: string): PlatformTask | undefine
   const task = getPlatformTask(db, key);
   if (!task) return undefined;
   db.transaction(() => {
-    db.prepare(
-      "DELETE FROM platform_execution_tokens WHERE execution_id IN " +
-        "(SELECT id FROM platform_runner_executions WHERE task_id=?)",
-    ).run(task.id);
     db.prepare("DELETE FROM platform_runner_executions WHERE task_id=?").run(task.id);
     db.prepare("DELETE FROM platform_task_executions WHERE task_id=?").run(task.id);
     db.prepare("DELETE FROM platform_task_reviews WHERE task_id=?").run(task.id);
-    db.prepare("DELETE FROM platform_artifacts WHERE task_id=?").run(task.id);
     db.prepare("DELETE FROM platform_task_repositories WHERE task_id=?").run(task.id);
     db.prepare("DELETE FROM platform_tasks WHERE id=?").run(task.id);
     if (task.task_type === "repository_init" && task.pr_state !== "merged") {
@@ -861,18 +847,6 @@ export function updatePlatformTaskStatus(db: DB, key: string, status: unknown): 
   const task = getPlatformTask(db, key);
   if (!task) return undefined;
   if (task.status === status) return task;
-
-  if (task.task_type === "repository_init" && status === "review") {
-    const editable = task.repositories.find((repository) => repository.mode === "editable");
-    const hasSharedOverview = task.artifacts.some(
-      (artifact) => artifact.kind === "doc" && artifact.path === ".alignyard/docs/shared/overview.md",
-    );
-    if (!editable || editable.manifest_status !== "valid" || !hasSharedOverview) {
-      throw new PlatformValidationError(
-        "初始化 Task 需要先完成 ay validate、ay sync，并提供 .alignyard/docs/shared/overview.md",
-      );
-    }
-  }
 
   if (status === "completed") {
     if (task.pr_state !== "merged") {
@@ -901,19 +875,9 @@ export function updatePlatformTaskStatus(db: DB, key: string, status: unknown): 
   ).run(status, status, key.toUpperCase()).changes;
   if (changed && task.task_type === "repository_init" && status === "draft") {
     db.prepare(
-      "UPDATE platform_task_repositories SET manifest_status='waiting' WHERE task_id=? AND mode='editable'",
+      "UPDATE platform_task_repositories SET design_commit=NULL,design_approved_at=NULL " +
+        "WHERE task_id=? AND mode='editable'",
     ).run(task.id);
   }
   return changed ? getPlatformTask(db, key) : undefined;
-}
-
-export function listPlatformArtifacts(db: DB): PlatformArtifact[] {
-  return db.prepare(
-    "SELECT a.id,a.task_id,a.repository_id,r.name AS repository_name,t.task_key," +
-      "a.kind,a.path,a.title,a.change_kind,a.review_status,a.base_commit,a.head_commit,a.updated_at " +
-      "FROM platform_artifacts a " +
-      "JOIN platform_repositories r ON r.id=a.repository_id " +
-      "JOIN platform_tasks t ON t.id=a.task_id " +
-      "ORDER BY a.updated_at DESC,a.id DESC",
-  ).all() as PlatformArtifact[];
 }

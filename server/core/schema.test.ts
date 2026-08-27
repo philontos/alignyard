@@ -106,14 +106,13 @@ test("initSchema migrates binary Repository state and title-based init Tasks", (
   );
 });
 
-test("initSchema stores synchronized knowledge content without adding it to repository metadata", () => {
+test("initSchema does not create a Platform knowledge store", () => {
   const db = new Database(":memory:");
   initSchema(db, opts(false));
-  const columns = (db.prepare("PRAGMA table_info(platform_artifacts)").all() as { name: string }[])
-    .map((column) => column.name);
-  for (const name of ["document_id", "scope", "owners", "relations", "content", "content_hash"]) {
-    assert.ok(columns.includes(name), `missing platform_artifacts.${name}`);
-  }
+  const names = (db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('platform_artifacts','platform_execution_tokens')",
+  ).all() as { name: string }[]).map((row) => row.name);
+  assert.deepEqual(names, []);
 });
 
 test("initSchema keeps only the Runner-local ownership anchor on fresh databases", () => {
@@ -163,12 +162,16 @@ test("initSchema tears down removed feature schema", () => {
   db.exec("CREATE TABLE repos (id INTEGER PRIMARY KEY, project_path TEXT)");
   db.exec("CREATE TABLE hosts (id INTEGER PRIMARY KEY, session TEXT)");
   db.exec("CREATE TABLE presets (id INTEGER PRIMARY KEY, name TEXT)");
+  db.exec("CREATE TABLE platform_artifacts (id INTEGER PRIMARY KEY, content TEXT)");
+  db.exec("CREATE TABLE platform_execution_tokens (token_hash TEXT PRIMARY KEY)");
   db.prepare("INSERT INTO presets (name) VALUES ('legacy')").run();
 
   initSchema(db, opts(false));
 
   const presets = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='presets'").get();
   assert.equal(presets, undefined, "presets table should be dropped");
+  assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='platform_artifacts'").get(), undefined);
+  assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='platform_execution_tokens'").get(), undefined);
   const cols = (db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map((c) => c.name);
   assert.ok(!cols.includes("preset_id"), "tasks.preset_id should be dropped");
   assert.ok(!cols.includes("skills"), "tasks.skills should be dropped");

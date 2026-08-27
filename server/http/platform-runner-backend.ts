@@ -11,6 +11,7 @@ import {
   startReviewOnRunner,
   startTaskOnRunner,
   submitTaskForReviewOnRunner,
+  taskKnowledgeOnRunner,
 } from "../platform/runner-workflow.js";
 import type { PlatformRouteBackend } from "./platform-routes.js";
 
@@ -38,11 +39,12 @@ export const platformRunnerBackend: PlatformRouteBackend = {
   refreshRepository: (repositoryId, actor, runnerId) =>
     refreshRepositoryOnRunner(workflowEnv, repositoryId, actor, runnerId),
   deleteTask: (key, actor) => deleteTaskOnRunner(workflowEnv, key, actor),
-  startTask: (key, platformUrl, actor, agent, runnerId) =>
-    startTaskOnRunner(workflowEnv, key, platformUrl, actor, agent, runnerId),
+  startTask: (key, actor, agent, runnerId) =>
+    startTaskOnRunner(workflowEnv, key, actor, agent, runnerId),
   submitReview: (key, actor, input) => submitTaskForReviewOnRunner(workflowEnv, key, actor, input),
-  startReview: (key, platformUrl, actor, agent, runnerId) =>
-    startReviewOnRunner(workflowEnv, key, platformUrl, actor, agent, runnerId),
+  taskKnowledge: (key, actor, documentId) => taskKnowledgeOnRunner(workflowEnv, key, actor, documentId),
+  startReview: (key, actor, agent, runnerId) =>
+    startReviewOnRunner(workflowEnv, key, actor, agent, runnerId),
   decideReview: (key, actor, decision, feedback) =>
     decideReviewOnRunner(workflowEnv, key, actor, decision, feedback),
   createChangeRequest: (key, actor) => createChangeRequestOnRunner(workflowEnv, key, actor),
