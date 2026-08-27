@@ -844,7 +844,7 @@ export function createRepositoryUpdateTask(
     title: `Update Alignyard · ${repository.name}`,
     description:
       `将 ${repository.name} 的 Alignyard 知识框架从 v${repository.framework_version} 更新到最新版：` +
-      "由 ay update 合并协议并替换 Skill、README 和模板，再由 Agent 按新版框架整理现有知识；知识正文只通过人工 Review 决定是否改变。",
+      "由 ay update 合并协议并替换 Skill、README 和模板，Agent 按实际 diff 核对结构迁移；默认保留知识正文，只有协议兼容性要求或用户明确提出时才做最小修改。",
     owner,
     owner_user_id: ownerUserId,
     repositories: [{ repository_id: repository.id, mode: "editable", base_branch: repository.default_branch }],

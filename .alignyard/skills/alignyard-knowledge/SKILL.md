@@ -10,7 +10,7 @@ Use this repository's `.alignyard/repository.yaml` as the routing contract and `
 ## Choose the workflow
 
 - **Repository bootstrap:** use when `.alignyard` was just initialized or the user asks to establish the initial knowledge framework.
-- **Framework update:** use after `ay update` replaces Alignyard-managed framework files and asks for a semantic review of existing knowledge.
+- **Framework update:** use to upgrade Alignyard-managed files and protocol structure while preserving repository knowledge content.
 - **Task work:** use for ordinary requirement discussion, implementation, or documentation changes in an initialized repository.
 
 ## Repository bootstrap
@@ -38,10 +38,10 @@ Use this repository's `.alignyard/repository.yaml` as the routing contract and `
 
 ## Framework update
 
-1. Run `ay update --check` before applying an available update, then run `ay update`. Treat `.alignyard/README.md`, the default templates, and this Skill as Alignyard-managed framework files; keep repository-specific instructions in the Constitution or ordinary knowledge documents.
-2. Preserve every existing Doc, Spec, ADR, Plan, stable document ID, scope, relation, source, and governing reference unless repository evidence or an explicit user decision requires a semantic change. The update command migrates structure; it does not rewrite knowledge content.
-3. Read the updated Constitution and Overview, then review existing knowledge against the current framework. Remove code-recoverable detail and stale process narration; retain verified intent, boundaries, invariants, stable contracts, and durable decisions.
-4. Ask the user before changing consequential intent or architecture. Run `ay validate`, commit the complete `.alignyard/` diff, and wait for human Review.
+1. Run `ay update --check` first. Record the before/after protocol and framework versions and classify every planned path as a managed-file replacement, manifest merge, or missing fixed structure. Stop and ask the user if an existing knowledge document would be overwritten or a change does not fit those categories.
+2. Run `ay update`, read the updated Skill, and inspect the actual `.alignyard/` Git diff. Treat the update as a framework migration, not a semantic knowledge review. Preserve every existing Doc, Spec, ADR, Plan, knowledge body, stable document ID, scope, relation, source, and governing reference by default.
+3. Change repository knowledge content only when protocol compatibility explicitly requires it or the user explicitly asks for it. Keep the change minimal and ask before changing consequential product intent, public contracts, architecture boundaries, or compatibility. Perform optional cleanup through ordinary Task work, not opportunistically during an update.
+4. Run `ay validate`, then run `ay update --check` again and require no pending changes. Confirm all changes are under `.alignyard/`, commit them, ensure `git status --short` is empty, summarize the actual migration and any justified semantic change, and wait for human Review.
 
 ## Task work
 

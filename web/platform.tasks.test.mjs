@@ -266,6 +266,10 @@ test("document clicks open an Alignyard full-page worktree file and diff browser
   assert.match(html, /css\/platform-worktree\.css/);
   assert.match(html, /id="worktree-browser"[\s\S]*id="worktree-tab-files"[\s\S]*id="worktree-tab-changes"[\s\S]*id="worktree-browser-tree"/);
   assert.match(script, /data-open-worktree-changes/);
+  assert.match(script, /data-open-review-diff/);
+  assert.match(script, /相对 \$\{escapeHtml\(diffBaseLabel\)\} 的完整变更/);
+  assert.match(script, /function currentParticipantHasWorktree\(task\)/);
+  assert.match(script, /A Reviewer must never borrow the Author's worktree/);
   assert.match(script, /openTaskWorktreeBrowser\(workspaceTask, \{ tab: "changes" \}\)/);
   assert.match(worktree, /operation, \.\.\.\(path \? \{ path \} : \{\}\)/);
   assert.match(worktree, /worktree-browser-content/);

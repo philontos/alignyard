@@ -155,11 +155,13 @@ function participantExecution(
     ? task.review.reviewer_user_id === actor.id
     : task.review?.reviewer === actor.name;
   if (!isOwner && !isReviewer) throw new PlatformWorkflowError(403, "只有 Task 参与者可以读取 worktree");
+  const role = task.status === "review" && isReviewer ? "reviewer" : isOwner ? "author" : "reviewer";
   const row = env.db.prepare(
     "SELECT id FROM platform_runner_executions WHERE task_id=? " +
       "AND (actor_user_id=? OR (actor_user_id IS NULL AND actor=?)) " +
+      "AND role=? " +
       "AND status<>'cleaned' ORDER BY created_at DESC,id DESC LIMIT 1",
-  ).get(task.id, actor.id, actor.name) as { id: string } | undefined;
+  ).get(task.id, actor.id, actor.name, role) as { id: string } | undefined;
   const execution = row ? getPlatformRunnerExecution(env.db, row.id) : undefined;
   if (!execution?.runner_task_id) {
     throw new PlatformWorkflowError(409, "请先启动自己的 Agent 工作区，再读取对应 worktree");
@@ -194,9 +196,12 @@ export async function taskWorktreeOnRunner(
   if (request.operation === "file" && typeof request.path !== "string") {
     throw new PlatformWorkflowError(400, "请选择要读取的文件");
   }
+  const repository = editableRepository(task);
   return callExecution(env, execution, "execution.inspect-worktree", {
     operation: request.operation,
     ...(typeof request.path === "string" ? { path: request.path } : {}),
+    ...(repository.base_commit ? { diff_base_commit: repository.base_commit } : {}),
+    diff_base_label: repository.base_branch,
   });
 }
 

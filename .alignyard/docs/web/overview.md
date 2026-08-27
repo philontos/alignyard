@@ -23,11 +23,11 @@ relations:
 - 无凭据 Repository 登记、协议/框架版本自动检测，以及 Repository Init/Update 入口。
 - change / repository_init / repository_update Task 创建、筛选、详情和清理。
 - 普通 Task 的知识设计 → Review → changes requested/可开始实现闭环，以及 Repository Init/Update 的 PR/MR → merge 特殊闭环。
-- 从当前用户自己的 Runner worktree 按需读取 Docs、Specs、ADRs、Plans，并展示设计基线；Git diff 仍在 worktree 中通过 Git 与 Agent 阅读。
+- 从当前用户自己的 Runner worktree 按需读取 Docs、Specs、ADRs、Plans，并在全页 worktree 浏览器中展示相对 Task 基线的完整 Git diff。
 - 当前用户 Runner 状态、macOS 安装与重新连接引导。
 - 通过 execution ID 打开的本地 Agent 终端。
 
-Web 不接收 Repository token、设备 token、本机路径或本地 Task ID，也不提供 Platform 侧 diff。Task 页面只能按需请求当前参与者自己的 Runner 解析 `.alignyard/` 文档，正文仅用于当次浏览，不写入 Platform 数据库；Reviewer 需先启动自己的 Review Agent，实际拉取和修改权限由 GitHub/GitLab 决定。
+Web 不接收 Repository token、设备 token、本机路径或本地 Task ID，也不在 Platform 计算或保存 diff。Task 页面只能按需请求当前参与者自己的 Runner 解析 `.alignyard/` 文档与生成 Git diff，响应仅用于当次浏览，不写入 Platform 数据库；Reviewer 需先启动自己的 Review Agent，实际拉取和修改权限由 GitHub/GitLab 决定。Review 页面明确展示相对 Task 创建时基线分支与 commit 的完整变更入口，Reviewer worktree 从 Author 分支拉取也不能改变该对比基线。
 
 ## Runner 安装引导
 

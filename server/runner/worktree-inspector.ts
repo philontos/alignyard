@@ -16,6 +16,9 @@ export type WorktreeOperation = "tree" | "file" | "changes" | "diff";
 export interface WorktreeInspectRequest {
   operation: WorktreeOperation;
   path?: string;
+  /** Platform-owned immutable Task baseline. Browser input is never forwarded here. */
+  diff_base_commit?: string;
+  diff_base_label?: string;
 }
 
 interface WorktreeRevision {
@@ -101,7 +104,26 @@ function nulFields(text: string, truncated = false): string[] {
   return fields;
 }
 
-async function revision(runner: LocalExecutor, task: Task): Promise<WorktreeRevision> {
+async function revision(
+  runner: LocalExecutor,
+  task: Task,
+  request: WorktreeInspectRequest,
+): Promise<WorktreeRevision> {
+  const requestedBase = String(request.diff_base_commit || "").trim();
+  if (requestedBase) {
+    if (!/^[0-9a-f]{40,64}$/i.test(requestedBase)) {
+      throw new WorktreeInspectError("invalidBase", "Task 记录的 Diff 基线无效");
+    }
+    try {
+      await git(runner, task.worktree_path, ["cat-file", "-e", `${requestedBase}^{commit}`]);
+    } catch {
+      throw new WorktreeInspectError("baseMissing", "Task 记录的 Diff 基线不在当前 worktree 中，请重新准备 Review 工作区");
+    }
+    return {
+      label: String(request.diff_base_label || task.base_branch || "Task 基线"),
+      commit: requestedBase,
+    };
+  }
   const base = String(task.base_commit || "").trim();
   if (/^[0-9a-f]{40,64}$/i.test(base)) {
     try {
@@ -199,9 +221,9 @@ function parseNameStatus(text: string): WorktreeChange[] {
   return changes;
 }
 
-async function changes(runner: LocalExecutor, task: Task) {
+async function changes(runner: LocalExecutor, task: Task, request: WorktreeInspectRequest) {
   const currentHead = await head(runner, task);
-  const base = await revision(runner, task);
+  const base = await revision(runner, task, request);
   const tracked = await git(runner, task.worktree_path, [
     "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--find-renames", "--name-status", "-z", base.commit, "--",
   ]);
@@ -290,10 +312,10 @@ export async function inspectTaskWorktree(
       generated_at: generatedAt(),
     };
   }
-  if (request.operation === "changes") return changes(runner, task);
+  if (request.operation === "changes") return changes(runner, task, request);
 
   if (request.operation === "diff" && !request.path) {
-    const changed = await changes(runner, task);
+    const changed = await changes(runner, task, request);
     return completeDiff(runner, task, changed);
   }
 
@@ -316,7 +338,7 @@ export async function inspectTaskWorktree(
   }
   if (request.operation !== "diff") throw new WorktreeInspectError("invalidOperation", "不支持的 worktree 操作");
 
-  const changed = await changes(runner, task);
+  const changed = await changes(runner, task, request);
   const change = changed.files.find((file) => file.path === relative || file.oldPath === relative);
   if (!change) throw new WorktreeInspectError("fileUnchanged", "文件相对 Task 基线没有变化");
   if (change.status === "?") {

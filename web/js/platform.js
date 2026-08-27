@@ -80,6 +80,31 @@ function taskAssignedToCurrentUser(task) {
     : task.current_assignee === currentUserName();
 }
 
+function taskReviewerIsCurrentUser(task) {
+  if (!state.currentUser || !task.review) return false;
+  return task.review.reviewer_user_id != null
+    ? Number(task.review.reviewer_user_id) === state.currentUser.id
+    : task.review.reviewer === currentUserName();
+}
+
+function currentParticipantExecution(task) {
+  const role = task.status === "review" && taskReviewerIsCurrentUser(task)
+    ? "reviewer"
+    : taskBelongsToCurrentUser(task) ? "author" : taskReviewerIsCurrentUser(task) ? "reviewer" : null;
+  if (!role) return null;
+  return [...(task.executions || [])].reverse().find((execution) => execution.role === role
+    && execution.runtime_task_id
+    && execution.status !== "cleaned") || null;
+}
+
+function currentParticipantHasWorktree(task) {
+  if (currentParticipantExecution(task)) return true;
+  // Compatibility for local runtime rows created before Platform Runner
+  // executions existed. A Reviewer must never borrow the Author's worktree.
+  return taskBelongsToCurrentUser(task) && !task.runner_execution_id
+    && Boolean(task.runtime_task_id && task.runtime_has_worktree);
+}
+
 const statusLabels = {
   draft: "草稿",
   review: "待审核",
@@ -985,10 +1010,10 @@ function initTaskActions(task) {
   const repository = task.repositories.find((item) => item.mode === "editable");
   const requestLabel = taskChangeRequestLabel(task);
   const actions = [];
-  if (task.runtime_task_id && task.runtime_has_worktree) {
+  if (currentParticipantHasWorktree(task)) {
     actions.push(`<button class="button secondary mobile-agent-action" type="button" data-open-agent>打开 Agent</button>`);
   }
-  if (task.status === "draft" && (!task.runtime_task_id || !task.runtime_has_worktree)) {
+  if (task.status === "draft" && !currentParticipantHasWorktree(task)) {
     actions.push(`<div class="task-agent-launch"><div class="agent-picker" data-agent-picker><input type="hidden" data-author-agent value="codex"><button class="agent-picker-trigger" type="button" data-agent-picker-trigger aria-haspopup="listbox" aria-expanded="false"><span data-agent-picker-label>Codex</span><i aria-hidden="true"></i></button><div class="agent-picker-menu" data-agent-picker-menu role="listbox" aria-label="选择 Agent" hidden><button class="selected" type="button" role="option" aria-selected="true" data-agent-value="codex"><span>Codex</span><i aria-hidden="true">✓</i></button><button type="button" role="option" aria-selected="false" data-agent-value="claude"><span>Claude Code</span><i aria-hidden="true">✓</i></button><button type="button" role="option" aria-selected="false" data-agent-value="kimi"><span>Kimi CLI</span><i aria-hidden="true">✓</i></button></div></div><button class="button primary" type="button" data-run-init>启动 Agent</button></div>`);
   } else if (task.status === "draft") {
     if (!task.runtime_alive) actions.push(`<button class="button secondary" type="button" data-run-init>继续 Agent</button>`);
@@ -1100,6 +1125,16 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
     ? `Reviewer 已要求修改，Task 已退回 ${escapeHtml(task.owner)}。继续 Agent 时会恢复 Author 工作区并传入本轮反馈。`
     : `由 ${escapeHtml(task.review?.submitted_by || "")} 于 ${escapeHtml(formatDate(task.review?.submitted_at))} 分派；当前状态：${escapeHtml(task.review?.status || "")}。工作分支已推送到远端，reviewer 可在右侧选择 Agent 进入对应 worktree。`;
   const reviewHandoff = task.review ? `<section class="detail-workflow"><strong>Review · ${escapeHtml(task.review.reviewer)}</strong><p>${reviewSummary}</p>${reviewFeedback}</section>` : "";
+  const participantHasWorktree = currentParticipantHasWorktree(task);
+  const editableRepository = task.repositories.find((item) => item.mode === "editable");
+  const diffBaseLabel = editableRepository?.base_branch || "默认分支";
+  const diffBaseCommit = editableRepository?.base_commit ? String(editableRepository.base_commit).slice(0, 10) : "Task 创建时基线";
+  const reviewDiff = task.status === "review" ? `<section class="review-diff-card">
+    <div><span>REVIEW DIFF</span><strong>相对 ${escapeHtml(diffBaseLabel)} 的完整变更</strong><p>基线 ${escapeHtml(diffBaseCommit)}；包含新增、修改与删除。Diff 由当前 Reviewer 的 Runner 从本地 worktree 实时生成，Platform 不保存副本。</p></div>
+    ${participantHasWorktree
+      ? `<button class="button secondary" type="button" data-open-review-diff>打开完整 Diff</button>`
+      : `<small>${taskReviewerIsCurrentUser(task) ? "请先在右侧选择 Agent 并开始 Review，Runner 准备 worktree 后即可查看。" : `等待 ${escapeHtml(task.review?.reviewer || "Reviewer")} 准备 Review worktree。`}</small>`}
+  </section>` : "";
   const displayTitle = taskDisplayTitle(task);
   const description = isRepositoryLifecycleTask(task)
     ? ""
@@ -1107,9 +1142,9 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
   const workspaceTask = { ...task, display_title: displayTitle };
   $("#task-detail").innerHTML = `<div class="detail-top"><div class="detail-title-row"><button class="drawer-close" id="drawer-close" type="button" aria-label="返回 Task 列表">返回</button><span class="task-key">${escapeHtml(task.key)}</span><h1>${escapeHtml(displayTitle)}</h1>${taskContextHelp(task)}</div>${description}</div>
     <div class="detail-meta">${statusPill(task.status, task)}<span>负责人：${escapeHtml(task.owner)}</span><span>当前处理人：${escapeHtml(task.current_assignee || task.owner)}</span><span>${task.completed_at ? `完成于 ${escapeHtml(formatDate(task.completed_at))}` : `创建于 ${escapeHtml(formatDate(task.created_at))}`}</span></div>
-    ${workflowNote}${reviewHandoff}${isRepositoryLifecycleTask(task) ? "" : commandList}
+    ${workflowNote}${reviewHandoff}${reviewDiff}${isRepositoryLifecycleTask(task) ? "" : commandList}
     <section class="detail-section"><div class="detail-section-head"><h2>Repositories · ${task.repositories.length}</h2><span class="protocol-badge">peer worktrees</span></div><div class="detail-repos">${task.repositories.map(detailRepository).join("")}</div></section>
-    <section class="detail-section"><div class="detail-section-head"><h2>工程文档</h2>${task.runtime_task_id && task.runtime_has_worktree ? `<button class="text-button review-changes" type="button" data-open-worktree-changes>查看变更</button>` : ""}</div><p class="detail-section-note">Platform 通过你的 Runner 自动解析当前 worktree 中的 .alignyard/；点击文档进入完整 worktree 浏览页。</p><div id="worktree-knowledge"><div class="detail-empty">${task.runtime_task_id && task.runtime_has_worktree ? "正在从当前 Runner worktree 解析 .alignyard/…" : "启动 Agent 后，这里会自动展示对应 worktree 中的工程文档。"}</div></div></section>
+    <section class="detail-section"><div class="detail-section-head"><h2>工程文档</h2>${participantHasWorktree ? `<button class="text-button review-changes" type="button" data-open-worktree-changes>浏览 worktree</button>` : ""}</div><p class="detail-section-note">Platform 通过你的 Runner 自动解析当前 worktree 中的 .alignyard/；点击文档进入完整 worktree 浏览页。</p><div id="worktree-knowledge"><div class="detail-empty">${participantHasWorktree ? "正在从当前 Runner worktree 解析 .alignyard/…" : task.status === "review" && taskReviewerIsCurrentUser(task) ? "开始 Review 后，这里会展示 Reviewer worktree 中的工程文档。" : "启动 Agent 后，这里会自动展示对应 worktree 中的工程文档。"}</div></div></section>
     <div class="detail-actions">${taskNextAction(task)}</div>`;
   if (preservedKnowledge) $("#worktree-knowledge")?.replaceWith(preservedKnowledge);
   if (manualWorkflowOpen && $(".manual-workflow")) $(".manual-workflow").open = true;
@@ -1122,8 +1157,9 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
   });
   wireAgentPicker($("#task-detail"));
   $$('[data-copy-command]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => copyCommand(commands[Number(button.dataset.copyCommand)])));
-  if (task.runtime_task_id && task.runtime_has_worktree) void loadWorktreeKnowledge(workspaceTask);
+  if (participantHasWorktree) void loadWorktreeKnowledge(workspaceTask);
   $('[data-open-worktree-changes]', $("#task-detail"))?.addEventListener("click", () => openTaskWorktreeBrowser(workspaceTask, { tab: "changes" }));
+  $('[data-open-review-diff]', $("#task-detail"))?.addEventListener("click", () => openTaskWorktreeBrowser(workspaceTask, { tab: "changes" }));
   $$('[data-set-status]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => setTaskStatus(task.key, button.dataset.setStatus)));
   $$('[data-submit-review]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => openReviewDialog(task)));
   $$('[data-review-decision]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => {
@@ -1344,7 +1380,7 @@ async function loadData({ silent = false } = {}) {
         openTaskDetail(selectedKey, { refreshChangeRequest: false });
       } else {
         state.selectedTask = nextSelectedTask;
-        if (nextSelectedTask.runtime_task_id && nextSelectedTask.runtime_has_worktree) {
+        if (currentParticipantHasWorktree(nextSelectedTask)) {
           void loadWorktreeKnowledge({ ...nextSelectedTask, display_title: taskDisplayTitle(nextSelectedTask) });
         }
       }

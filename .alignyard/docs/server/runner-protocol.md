@@ -78,6 +78,7 @@ Web 创建一次性 pairing code，并展示从当前 Platform origin 下载 boo
 
 - Author 的 `execution.prepare-review` 必须通过 `ay validate`、worktree clean、有新 commit，并成功 push 后才停止 session。Reviewer 批准时允许 HEAD 保持不变；若有新提交则 push 回 Author 工作分支。
 - `execution.knowledge` 只索引该 execution 的本地 worktree；列表不含正文，指定 document ID 才返回正文，Platform 不持久化响应。
+- `execution.inspect-worktree` 的 Review diff 使用 Platform 从 Task Repository 元数据提供的不可变 `base_commit` 与分支标签，不使用 Reviewer worktree 自身的 checkout 起点；Runner 校验 commit 存在后实时生成完整新增、修改和删除 diff，Platform 只转发响应。
 - Reviewer execution 使用 Reviewer 自己的在线 Runner 和独立 branch。approve 时若 Reviewer 修改过内容，同样执行 prepare-review 并 push 回 Author 工作分支。
 - changes requested 会关闭 Reviewer execution、恢复 Author execution，并通过 Prompt 提醒 Author fetch/reconcile Reviewer 已 push 的修改。
 - approve 会把每个 editable Repository 已推送的 Review HEAD 固化为 `design_commit`。普通 Task 到此停在可开始实现；Repository Init 继续使用 `change-request.*`。

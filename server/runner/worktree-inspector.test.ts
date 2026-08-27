@@ -107,6 +107,7 @@ test("worktree browser diffs committed, deleted and untracked files against immu
     fs.writeFileSync(path.join(current.dir, ".alignyard", "docs", "overview.md"), "# 仓库概览\n\n更新内容。\n");
     await git(current.dir, "add", ".alignyard/docs/overview.md");
     await git(current.dir, "commit", "-m", "update docs");
+    const authorHead = await git(current.dir, "rev-parse", "HEAD");
     fs.rmSync(path.join(current.dir, "README.md"));
     fs.writeFileSync(path.join(current.dir, ".alignyard", "docs", "new.md"), "# 新文档\n");
 
@@ -146,6 +147,22 @@ test("worktree browser diffs committed, deleted and untracked files against immu
     });
     assert.equal(added.kind, "diff");
     if (added.kind === "diff") assert.match(added.content || "", /\+# 新文档/);
+
+    // Reviewer worktrees start from Author HEAD. The Platform-supplied Task
+    // baseline must still make the complete review Diff relative to main.
+    current.task.base_commit = authorHead;
+    current.task.base_branch = "change/ay-001/test";
+    const reviewChanges = await inspectTaskWorktree(runner, current.task, {
+      operation: "changes",
+      diff_base_commit: current.base,
+      diff_base_label: "main",
+    });
+    assert.equal(reviewChanges.kind, "changes");
+    if (reviewChanges.kind === "changes") {
+      assert.equal(reviewChanges.revision.commit, current.base);
+      assert.equal(reviewChanges.revision.label, "main");
+      assert.ok(reviewChanges.files.some((file) => file.path === ".alignyard/docs/overview.md"));
+    }
   } finally {
     fs.rmSync(current.dir, { recursive: true, force: true });
   }

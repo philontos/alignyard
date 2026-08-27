@@ -71,7 +71,7 @@ ay update .
 ay validate .
 ```
 
-`--check` 只返回待创建、替换或合并的路径。`ay update` 将 manifest 合并到当前协议与框架版本，替换 Alignyard 管理的 README、默认模板和 Skill，并补齐缺失的 Constitution 和 scope 目录；它不覆盖已有 Docs、Specs、ADRs、Plans，也不改文档 ID 与关系。更新后仍需 Agent 按新版 Skill Review 现有知识，知识语义变化必须作为普通 Git diff 进入人工 Review。重复运行无变化；Repository 声明的框架版本高于当前 `ay` 时必须先升级 Runner，不能用旧工具降级。
+`--check` 只返回待创建、替换或合并的路径。`ay update` 将 manifest 合并到当前协议与框架版本，替换 Alignyard 管理的 README、默认模板和 Skill，并补齐缺失的 Constitution 和 scope 目录；它不覆盖已有 Docs、Specs、ADRs、Plans，也不改文档 ID 与关系。Update Agent 必须按实际 Git diff 核对管理文件替换、manifest 合并和固定结构补齐，默认不精简、复核或重写知识正文；只有协议兼容性明确要求或用户明确提出时才做最小语义修改。完成前再次运行 `ay update --check` 并确认无待应用变化。知识维护通过普通 Task 单独发起。重复运行无变化；Repository 声明的框架版本高于当前 `ay` 时必须先升级 Runner，不能用旧工具降级。
 
 Runner 从默认分支执行 `repository.refresh-protocol`，比较 Repository 与自身内置的框架版本。Platform 只记录版本和 `uninitialized`、`invalid`、`outdated`、`ready` 状态元数据；Web 自动刷新并为 `outdated` Repository 提供 Update Task。真正的更新发生在用户 Runner 创建的 Task worktree，沿用 Agent、Review、PR/MR 和合并链路，Platform 不保存升级后的知识副本。
 
@@ -86,7 +86,7 @@ Runner 从默认分支执行 `repository.refresh-protocol`，比较 Repository �
 3. 要求 HEAD 相对 Task 基线存在新提交；
 4. 将 HEAD push 到 Task 工作分支，随后 Platform 只记录 branch、base/head commit、Review 参与人和状态。
 
-Reviewer 通过自己的 Runner 和 GitHub/GitLab 权限拉取工作分支，在独立 worktree 中使用 Git diff 与 Agent 阅读、修改和审核完整内容。删除文件等变化天然由 Git diff 表达，Platform 不实现第二套 diff 或 tombstone。Reviewer 修改并批准时，Runner 对 Reviewer worktree 执行同一组检查，并将结果 push 回 Task 工作分支。
+Reviewer 通过自己的 Runner 和 GitHub/GitLab 权限拉取工作分支，在独立 worktree 中使用 Git diff 与 Agent 阅读、修改和审核完整内容。Task 页面可要求该 Runner 以 Task 创建时记录的默认分支 commit 为不可变基线生成完整 diff；Reviewer worktree 从 Author 分支 checkout 不会把 Author HEAD 错当成审核基线。删除文件等变化天然由 Git diff 表达，Platform 只转发当次响应，不实现第二套 diff、持久化副本或 tombstone。Reviewer 修改并批准时，Runner 对 Reviewer worktree 执行同一组检查，并将结果 push 回 Task 工作分支。
 
 Task 页面可以经当前用户自己的 execution 调用 `execution.knowledge`。Runner 临时索引该 worktree：列表只返回协议文档元数据，用户选择文档后才返回正文。响应只用于当前页面呈现，不写入 Platform SQLite、日志或缓存；未启动自己 execution 的参与者不能借用其他人的 worktree 读取内容。
 

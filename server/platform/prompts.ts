@@ -45,16 +45,16 @@ export function repositoryUpdatePrompt(task: PlatformTask): string {
   const repository = editableRepository(task);
   return `你正在执行 Alignyard 平台的知识框架更新 Task ${task.key}。
 
-目标：在 ${repository.name} 的当前 Task worktree 中，将 .alignyard 升级到当前 Runner 内置的最新版知识框架，再按新版 Skill 对现有知识做一次最小、可评审的语义整理。框架更新不能成为重写 Repository 知识的借口。
+目标：在 ${repository.name} 的当前 Task worktree 中，将 Alignyard 管理的 Skill、模板和协议结构升级到当前 Runner 内置的最新版本。默认保持 Repository 知识正文不变；只有新版协议兼容性明确要求，或用户明确提出时，才做最小语义修改。框架更新不是一次知识重写或顺带整理任务。
 
 请自主完成以下流程：
-1. 运行 ay update --check .，阅读将合并的协议结构和将替换的 Alignyard 管理文件；然后运行 ay update .。
-2. 完整阅读更新后的 .alignyard/skills/alignyard-knowledge/SKILL.md、repository.yaml、Constitution 和 Overview。
-3. 确认 ay update 只更新 README、默认模板、Skill、协议版本和缺失的固定结构；必须保留已有 scopes、Docs、Specs、ADRs、Plans、稳定文档 ID、relations、sources 和 governing 引用。
-4. 按新版框架 Review 现有知识：删除能从代码直接获得的局部细节和陈旧过程记录；保留已经核实的产品意图、架构边界、稳定接口、不变量和长期取舍。只有仓库证据或用户明确决定支持时才修改知识正文。
-5. 如果可能改变产品意图、公共接口、架构边界或兼容性，直接在当前会话询问用户，不自行推断。
-6. 不修改业务源码。运行 ay validate .，修复全部结构问题，提交所有 .alignyard/ 变化，并确认 git status --short 为空。
-7. 总结框架版本变化、自动替换的管理文件、保留的知识资产、语义调整及验证结果，然后等待用户提交人工 Review。
+1. 运行 ay update --check .，记录输出中的更新前后 protocol_version、framework_version 和计划变更路径。先不要写文件。
+2. 检查预览结果并将变化分为三类：Alignyard 管理文件替换、repository.yaml 结构合并、缺失固定结构补齐。若预览会覆盖已有 Docs、Specs、ADRs、Plans，或出现无法归入这三类的变化，停止并在当前会话询问用户。
+3. 运行 ay update .，然后完整阅读更新后的 .alignyard/skills/alignyard-knowledge/SKILL.md，并检查 repository.yaml 与实际 git diff -- .alignyard。以实际 diff 为准，不能只根据命令说明假定更新安全。
+4. 必须保留已有 scopes、Docs、Specs、ADRs、Plans、稳定文档 ID、relations、sources、governing 和知识正文。只有协议兼容性明确要求或用户明确要求时才做最小语义修改；涉及产品意图、公共接口、架构边界或兼容性时，先询问用户，不自行推断。
+5. 确认全部变化都位于 .alignyard/，不修改业务源码。运行 ay validate . 并修复全部结构问题；随后再次运行 ay update --check .，必须确认已无待应用变化。
+6. 提交全部 .alignyard/ 变化，再确认 git status --short 为空。不要把业务源码或无关文件带入提交。
+7. 总结更新前后版本、管理文件替换、结构迁移、保留的知识资产、任何必要的语义修改及其依据、验证结果，然后等待用户提交人工 Review。
 
 语言要求：Skill 可以使用英文；Docs、Specs、ADRs、Plans 的 title、章节标题和正文使用简体中文。代码标识符、命令、路径和产品名保持原样。
 

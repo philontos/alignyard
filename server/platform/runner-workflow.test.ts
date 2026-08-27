@@ -219,7 +219,9 @@ test("Repository update starts an Agent with the framework update workflow", asy
   assert.equal(started.task.task_type, "repository_update");
   const start = calls.filter((call) => call.method === "execution.start").at(-1)!;
   assert.match(start.params.prompt, /ay update --check/);
-  assert.match(start.params.prompt, /不能成为重写 Repository 知识的借口/);
+  assert.match(start.params.prompt, /默认保持 Repository 知识正文不变/);
+  assert.match(start.params.prompt, /以实际 diff 为准/);
+  assert.match(start.params.prompt, /再次运行 ay update --check/);
   assert.match(start.params.prompt, /不修改业务源码/);
 });
 
@@ -293,4 +295,23 @@ test("worktree files and diffs are inspected on the requesting participant's Run
   const completeDiff = calls.filter((item) => item.method === "execution.inspect-worktree").at(-1)!;
   assert.equal(completeDiff.params.operation, "diff");
   assert.equal(completeDiff.params.path, undefined);
+  assert.equal(completeDiff.params.diff_base_commit, "base-sha");
+  assert.equal(completeDiff.params.diff_base_label, "main");
+});
+
+test("a self-reviewer must prepare a reviewer worktree instead of borrowing the Author worktree", async () => {
+  const { task, env } = fixture();
+  const actor = { id: 1, name: "Author" };
+  await startTaskOnRunner(env, task.key, actor, "codex");
+  await submitTaskForReviewOnRunner(env, task.key, actor, {
+    reviewer: "Author",
+    reviewer_user_id: 1,
+    submitted_by: "Author",
+    submitted_by_user_id: 1,
+  });
+
+  await assert.rejects(
+    taskWorktreeOnRunner(env, task.key, actor, { operation: "changes" }),
+    /请先启动自己的 Agent 工作区/,
+  );
 });
