@@ -63,27 +63,24 @@ export function repositoryUpdatePrompt(task: PlatformTask): string {
 
 export function knowledgeDesignPrompt(task: PlatformTask): string {
   const repository = editableRepository(task);
+  const description = task.description?.trim();
+  const requirement = description || "当前 Task 只有标题，尚无足以确定范围的需求描述。开始工作前先询问用户希望解决的问题、目标和边界，不要根据标题自行展开。";
   return `你正在执行 Alignyard 知识设计 Task ${task.key}：${task.title}。
 
-原始需求：
-${task.description || "以 Task 标题和当前用户在会话中的补充为原始需求。"}
+需求：
+${requirement}
 
-当前 Repository：${repository.name}
+Repository：${repository.name}
 工作分支：${repository.work_branch}
 基线分支：${repository.base_branch}
 
-本次默认目标不是编码，而是形成经过人类 Review 后可以稳定指导后续实现的最小充分设计包。.alignyard/ 只保存 AI 不能随意重新决定的核心工程意图与架构约束；函数级机制和普通实现细节继续留在代码、类型和测试中。请完整阅读 .alignyard/skills/alignyard-knowledge/SKILL.md，并按以下顺序自主推进：
-1. 阅读 repository.yaml 的 overview 与 constitution 固定入口，再按 Task 目标、scope 和 relations 读取相关 Docs、Specs、ADRs 与已有 Plans。检查仓库证据，但不要修改业务源码。
-2. 判断本次变化真正需要新增或更新哪些文档：明确的新能力或边界变化通常需要一份精简 Spec；小修正、纯文档整理或已有 Spec 已完整覆盖时，可以只更新现有文档。不要为了流程形式强制创建主 Spec。原始飞书或其他链接只能放入 sources 供追溯，后续以确认后的仓库文档为准。
-3. 仅在存在长期技术取舍及明显替代方案时新增或更新 ADR。根据复杂度判断是否需要 Plan；Plan 是可选的，但一旦创建，governing 必须包含 constitution，并只引用真正约束本次实现的 Docs、Specs、ADRs。新产品行为或边界变化通常应有 Spec；现有知识已经明确意图时不强制创建。Plan 还需明确修改范围、保持不变、实施步骤、验证方案和文档更新。
-4. 如果缺少的信息可能改变产品意图、公共接口、架构边界、兼容性或修改范围，直接在当前会话向用户提问，等待回答后继续；不要自行推断，也不要创建额外的决策记录实体。把确认结论直接写入最终 Spec、ADR、Plan 或 Docs。
-5. 仅当需求会改变长期有效的架构事实、边界或稳定接口时，才在正常 .alignyard/docs/ 路径起草目标状态 Docs。当前 Task 分支就是待发布状态，不创建 temp-docs 或其他副本；默认分支上的 Docs 仍代表当前事实。
-6. 复查设计包是否最小充分、一致、可直接交给 Codex/Claude 实现：保留会阻止整体设计漂移的内容，删除可由源码直接推导的细节，并检查 governing、应该修改和保持不变的范围、未决问题与验收标准。
-7. 运行 ay validate .，修复全部结构问题。只提交本次必要的 .alignyard/ 变更，确保 git status --short 为空。用户点击“提交 Review”时，Runner 会重新校验当前 worktree、检查提交并推送工作分支；不要向 Platform 上传工程知识。
+请先完整阅读并遵循 .alignyard/skills/alignyard-knowledge/SKILL.md，再通过 repository.yaml 定位本 Task 相关的工程知识。
 
-完成后总结新增或更新的权威文档、适用约束、主动省略的实现细节、已经向用户确认的关键问题、仍存在的非阻塞问题和验证结果。若改变了任何 governing 文档，必须点名说明改变的核心意图及原因，然后等待用户在 Alignyard 提交人工 Review。
+本 Task 默认只形成最小充分、可供人工 Review 并指导后续实现的工程知识设计，不修改业务源码。若缺失信息可能影响产品意图、公共接口、架构边界、兼容性或修改范围，直接询问用户，不要自行推断。
 
-边界：除非用户明确扩展当前 Task 要求实现，否则不要修改业务源码、不要 push、不要创建或合并 PR/MR。Review、push 与设计基线记录由 Alignyard 在人工确认后完成。`;
+完成时运行 ay validate .，只提交必要的 .alignyard/ 变更并确保 git status --short 为空。总结修改的权威文档、关键约束、已确认问题和验证结果，然后等待用户在 Alignyard 提交 Review。
+
+边界：不要 push，不要创建或合并 PR/MR，不要修改 ${repository.base_branch}。Review、push 与设计基线记录由 Alignyard 在人工确认后完成。`;
 }
 
 export function taskReviewPrompt(task: PlatformTask): string {

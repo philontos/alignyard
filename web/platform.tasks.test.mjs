@@ -159,7 +159,7 @@ test("Repository lifecycle workspace closes runtime, Review, PR, and merge behin
   assert.match(styles, /\.sidebar\s*\{[^}]*width:\s*var\(--sidebar-width\)/);
   assert.match(styles, /\.main\s*\{[^}]*margin-left:\s*var\(--sidebar-width\)/);
   assert.match(styles, /\.drawer-backdrop\.task-workspace-mode\s*\{[^}]*inset:\s*var\(--topbar-height\) 0 0 var\(--sidebar-width\)/);
-  assert.match(styles, /\.drawer-backdrop\.task-workspace-mode \.task-drawer\s*\{[^}]*flex:\s*0 0 clamp\(404px,calc\(42% - 36px\),584px\)[^}]*padding:\s*14px/);
+  assert.match(styles, /\.drawer-backdrop\.task-workspace-mode \.task-drawer\s*\{[^}]*flex:\s*0 0 clamp\(360px,calc\(36% - 24px\),500px\)[^}]*padding:\s*14px/);
   assert.match(styles, /\.agent-workspace-empty\s*\{[^}]*align-items:\s*center[^}]*justify-content:\s*center/);
   assert.match(styles, /\.agent-workspace-close,\.mobile-agent-action\s*\{\s*display:\s*none/);
   assert.doesNotMatch(styles, /\.agent-workspace\s*\{[^}]*position:\s*fixed/);

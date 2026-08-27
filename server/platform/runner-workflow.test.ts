@@ -20,6 +20,7 @@ import {
   taskKnowledgeOnRunner,
   taskWorktreeOnRunner,
 } from "./runner-workflow.ts";
+import { knowledgeDesignPrompt } from "./prompts.ts";
 
 function fixture() {
   const db = new Database(":memory:");
@@ -191,9 +192,11 @@ test("ordinary Task produces a reviewed design baseline and stops before PR crea
 
   await startTaskOnRunner(env, task.key, author, "codex");
   const start = calls.filter((call) => call.method === "execution.start").at(-1)!;
-  assert.match(start.params.prompt, /本次默认目标不是编码/);
-  assert.match(start.params.prompt, /直接在当前会话向用户提问/);
-  assert.match(start.params.prompt, /Plan 是可选的/);
+  assert.match(start.params.prompt, /把原始需求整理成可实现的知识设计包/);
+  assert.match(start.params.prompt, /请先完整阅读并遵循 \.alignyard\/skills\/alignyard-knowledge\/SKILL\.md/);
+  assert.match(start.params.prompt, /直接询问用户，不要自行推断/);
+  assert.doesNotMatch(start.params.prompt, /Plan 是可选的|不要为了流程形式强制创建主 Spec/);
+  assert.ok(start.params.prompt.length < 1_200);
 
   await submitTaskForReviewOnRunner(env, task.key, author, {
     reviewer: "Reviewer", reviewer_user_id: 2, submitted_by: "Author", submitted_by_user_id: 1,
@@ -205,6 +208,22 @@ test("ordinary Task produces a reviewed design baseline and stops before PR crea
     createChangeRequestOnRunner(env, task.key, author),
     /普通 Task 已形成设计基线/,
   );
+});
+
+test("ordinary Task prompt asks for the requirement when only a title exists", () => {
+  const { db, repository } = fixture();
+  setPlatformRepositoryProtocolState(db, repository.id, "ready");
+  const task = createPlatformTask(db, {
+    title: "harness",
+    owner: "Author",
+    owner_user_id: 1,
+    repositories: [{ repository_id: repository.id, mode: "editable" }],
+  });
+
+  const prompt = knowledgeDesignPrompt(task);
+  assert.match(prompt, /当前 Task 只有标题/);
+  assert.match(prompt, /开始工作前先询问用户希望解决的问题、目标和边界/);
+  assert.doesNotMatch(prompt, /以 Task 标题.*为原始需求/);
 });
 
 test("Repository update starts an Agent with the framework update workflow", async () => {
