@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { RunnerCapabilities } from "./protocol.js";
+import { runnerVersion } from "./version.js";
 
 const pexec = promisify(execFile);
 
@@ -21,6 +22,7 @@ export async function runnerCapabilities(): Promise<RunnerCapabilities> {
     ["git", "tmux", "ssh", "codex", "claude", "kimi", "gh", "glab"].map(available),
   );
   return {
+    version: runnerVersion(),
     git,
     tmux,
     ssh,

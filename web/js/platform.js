@@ -775,19 +775,25 @@ async function openWorktreeKnowledgeDocument(task, documentId, button) {
   }
 }
 
-async function loadWorktreeKnowledge(task, button) {
+async function loadWorktreeKnowledge(task) {
   const target = $("#worktree-knowledge");
   if (!target) return;
-  button.disabled = true;
+  const taskKey = task.key;
   target.innerHTML = `<div class="detail-empty">正在从当前 Runner worktree 解析 .alignyard/…</div>`;
   try {
     const result = await api(`/api/platform/tasks/${encodeURIComponent(task.key)}/knowledge`);
+    if (state.selectedTask?.key !== taskKey || target !== $("#worktree-knowledge")) return;
+    if (!result.documents.length) {
+      target.innerHTML = `<div class="detail-empty">当前 worktree 中还没有符合 .alignyard/ 协议的工程文档。</div>`;
+      return;
+    }
     target.innerHTML = `<div class="worktree-knowledge-list">${result.documents.map((document) => `<button type="button" class="worktree-knowledge-row" data-knowledge-document="${escapeHtml(document.id)}"><span class="artifact-kind ${knowledgeKind(document.kind)}">${escapeHtml(knowledgeKind(document.kind).slice(0, 4))}</span><span><strong>${escapeHtml(document.title)}</strong><small>${escapeHtml(document.path)}</small></span></button>`).join("")}</div><section id="worktree-knowledge-preview" class="worktree-knowledge-preview"><div class="detail-empty">选择文档后在这里阅读；内容不会保存到 Platform。</div></section>`;
     $$('[data-knowledge-document]', target).forEach((item) => item.addEventListener("click", () => openWorktreeKnowledgeDocument(task, item.dataset.knowledgeDocument, item)));
+    const first = $('[data-knowledge-document]', target);
+    if (first) void openWorktreeKnowledgeDocument(task, first.dataset.knowledgeDocument, first);
   } catch (error) {
+    if (state.selectedTask?.key !== taskKey || target !== $("#worktree-knowledge")) return;
     target.innerHTML = `<div class="detail-empty error">${escapeHtml(error.message)}</div>`;
-  } finally {
-    if (button.isConnected) button.disabled = false;
   }
 }
 
@@ -957,7 +963,7 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
     <div class="detail-meta">${statusPill(task.status, task)}<span>负责人：${escapeHtml(task.owner)}</span><span>当前处理人：${escapeHtml(task.current_assignee || task.owner)}</span><span>${task.completed_at ? `完成于 ${escapeHtml(formatDate(task.completed_at))}` : `创建于 ${escapeHtml(formatDate(task.created_at))}`}</span></div>
     ${workflowNote}${reviewHandoff}${task.task_type === "repository_init" ? "" : commandList}
     <section class="detail-section"><div class="detail-section-head"><h2>Repositories · ${task.repositories.length}</h2><span class="protocol-badge">peer worktrees</span></div><div class="detail-repos">${task.repositories.map(detailRepository).join("")}</div></section>
-    <section class="detail-section"><div class="detail-section-head"><h2>工程文档</h2><button class="button secondary compact" type="button" data-load-knowledge>从当前 worktree 读取</button></div><p class="detail-section-note">Platform 不保存知识；这里只按需解析你自己的 Runner worktree，实际权限由 GitHub / GitLab 决定。</p><div id="worktree-knowledge"><div class="detail-empty">启动自己的 Agent 工作区后，可以按需读取符合 .alignyard/ 协议的文档。</div></div></section>
+    <section class="detail-section"><div class="detail-section-head"><h2>工程文档</h2></div><p class="detail-section-note">Platform 通过你的 Runner 自动解析当前 worktree 中的 .alignyard/；文档仍只保存在 Repository 中。</p><div id="worktree-knowledge"><div class="detail-empty">${task.runtime_task_id && task.runtime_has_worktree ? "正在从当前 Runner worktree 解析 .alignyard/…" : "启动 Agent 后，这里会自动展示对应 worktree 中的工程文档。"}</div></div></section>
     <div class="detail-actions">${taskNextAction(task)}</div>`;
   $("#task-drawer").hidden = false;
   $("#drawer-close").addEventListener("click", closeTaskDetail);
@@ -968,7 +974,7 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
   });
   wireAgentPicker($("#task-detail"));
   $$('[data-copy-command]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => copyCommand(commands[Number(button.dataset.copyCommand)])));
-  $('[data-load-knowledge]', $("#task-detail"))?.addEventListener("click", (event) => loadWorktreeKnowledge(task, event.currentTarget));
+  if (task.runtime_task_id && task.runtime_has_worktree) void loadWorktreeKnowledge(task);
   $$('[data-set-status]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => setTaskStatus(task.key, button.dataset.setStatus)));
   $$('[data-submit-review]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => openReviewDialog(task)));
   $$('[data-review-decision]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => {

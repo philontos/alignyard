@@ -25,6 +25,12 @@ ln -sfn "$install_root/bin/alignyard-runner" "$bin_dir/alignyard-runner"
 ln -sfn "$install_root/bin/ay" "$bin_dir/ay"
 
 echo "Installing Alignyard Runner $version..."
-ALIGNYARD_RUNNER_BIN="$install_root/bin/alignyard-runner" \
-  "$install_root/bin/alignyard-runner" install --platform "$platform" --code "$code"
+if [ -f "${ALIGNYARD_RUNNER_CONFIG:-$HOME/.alignyard/runner.json}" ]; then
+  echo "Existing Runner configuration found; keeping its pairing."
+  ALIGNYARD_RUNNER_BIN="$bin_dir/alignyard-runner" \
+    "$bin_dir/alignyard-runner" service-install
+else
+  ALIGNYARD_RUNNER_BIN="$bin_dir/alignyard-runner" \
+    "$bin_dir/alignyard-runner" install --platform "$platform" --code "$code"
+fi
 echo "Runner installed. Logs: $HOME/.alignyard/logs"

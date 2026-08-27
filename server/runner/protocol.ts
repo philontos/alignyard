@@ -21,6 +21,8 @@ export const RUNNER_RPC_METHODS = [
 export type RunnerRpcMethod = typeof RUNNER_RPC_METHODS[number];
 
 export interface RunnerCapabilities {
+  /** Optional for protocol-v1 compatibility with Runners released before version reporting. */
+  version?: string;
   git: boolean;
   tmux: boolean;
   ssh: boolean;
@@ -114,7 +116,8 @@ function text(value: unknown, max = 8_192): value is string {
 
 function capabilities(value: unknown): value is RunnerCapabilities {
   if (!record(value) || !record(value.agents) || !record(value.forge)) return false;
-  return [value.git, value.tmux, value.ssh, value.agents.codex, value.agents.claude,
+  return (value.version == null || text(value.version, 64))
+    && [value.git, value.tmux, value.ssh, value.agents.codex, value.agents.claude,
     value.agents.kimi, value.forge.gh, value.forge.glab].every((item) => typeof item === "boolean");
 }
 

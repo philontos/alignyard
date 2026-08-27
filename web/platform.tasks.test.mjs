@@ -239,12 +239,28 @@ test("Task completion is a terminal state after reviewed changes are merged", ()
 test("Task detail reads protocol documents transiently from the participant's worktree", () => {
   assert.doesNotMatch(html, /platform-codeview|code-modal|cv-tab-files/);
   assert.doesNotMatch(script, /openTaskCodeContext|data-open-task-changes|data-artifact-path/);
-  assert.match(script, /data-load-knowledge/);
+  assert.doesNotMatch(script, /data-load-knowledge/);
+  assert.match(script, /task\.runtime_task_id && task\.runtime_has_worktree/);
+  assert.match(script, /void loadWorktreeKnowledge\(task\)/);
+  assert.match(script, /void openWorktreeKnowledgeDocument\(task, first\.dataset\.knowledgeDocument, first\)/);
   assert.match(script, /\/api\/platform\/tasks\/\$\{encodeURIComponent\(task\.key\)\}\/knowledge/);
   assert.match(script, /renderKnowledgeMarkdown/);
   assert.match(script, /内容不会保存到 Platform/);
   assert.match(platformRoutes, /app\.get\("\/api\/platform\/tasks\/:key\/knowledge"/);
   assert.doesNotMatch(platformRoutes, /\/api\/platform\/artifacts|\/api\/platform\/tasks\/:key\/sync/);
+});
+
+test("Runner onboarding monitors versions and offers a local upgrade command", () => {
+  const runner = fs.readFileSync(new URL("./js/features/runner-onboarding.js", import.meta.url), "utf8");
+  assert.match(runner, /capabilities\?\.version/);
+  assert.match(runner, /downloads\/runner\/stable\/\$\{key\}\/manifest\.json/);
+  assert.match(runner, /alignyard-runner upgrade/);
+  assert.match(html, /工程文档仍保存在 Repository 中/);
+});
+
+test("Task actions stay at the bottom of short detail panes", () => {
+  assert.match(styles, /#task-detail\s*\{[^}]*display:\s*flex[^}]*min-height:\s*100%[^}]*flex-direction:\s*column/);
+  assert.match(styles, /\.detail-actions\s*\{[^}]*margin-top:\s*auto[^}]*padding-top:\s*22px/);
 });
 
 test("manual workflow commands keep copy controls readable without the browser focus frame", () => {

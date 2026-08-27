@@ -12,6 +12,8 @@ import {
   type RunnerConfig,
 } from "./config.js";
 import { RunnerClient } from "./client.js";
+import { upgradeRunner } from "./upgrade.js";
+import { runnerVersion } from "./version.js";
 
 const pexec = promisify(execFile);
 
@@ -75,8 +77,9 @@ async function pairRunner(input: Record<string, string>): Promise<RunnerConfig> 
 async function installLaunchAgent(): Promise<string> {
   if (process.platform !== "darwin") throw new Error("首版 Runner 自动安装仅支持 macOS");
   const home = os.homedir();
-  const command = process.env.ALIGNYARD_RUNNER_BIN?.trim()
-    || path.join(home, ".local", "bin", "alignyard-runner");
+  // Launch through the stable symlink so changing a release never leaves the
+  // background service pinned to its old version-specific directory.
+  const command = path.join(home, ".local", "bin", "alignyard-runner");
   if (!fs.existsSync(command)) throw new Error(`找不到 Alignyard Runner 启动器：${command}`);
   const target = path.join(home, "Library", "LaunchAgents", "com.alignyard.runner.plist");
   fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -98,6 +101,7 @@ Usage:
   alignyard-runner start
   alignyard-runner status
   alignyard-runner doctor
+  alignyard-runner upgrade
 `;
 }
 
@@ -115,6 +119,11 @@ export async function runRunnerCli(argv: string[], out = console.log, err = cons
       if (command === "install") out(`LaunchAgent：${await installLaunchAgent()}`);
       return 0;
     }
+    if (command === "service-install") {
+      if (!readRunnerConfig()) throw new Error(`Runner 尚未配对；配置路径 ${runnerConfigPath()}`);
+      out(`LaunchAgent：${await installLaunchAgent()}`);
+      return 0;
+    }
     if (command === "doctor") {
       out(JSON.stringify(await runnerCapabilities(), null, 2));
       return 0;
@@ -122,7 +131,24 @@ export async function runRunnerCli(argv: string[], out = console.log, err = cons
     const config = readRunnerConfig();
     if (!config) throw new Error(`Runner 尚未配对；请先运行 alignyard-runner pair（配置路径 ${runnerConfigPath()}）`);
     if (command === "status") {
-      out(JSON.stringify({ configured: true, runner_id: config.runner_id, name: config.name, platform_url: config.platform_url }, null, 2));
+      out(JSON.stringify({
+        configured: true,
+        version: runnerVersion(),
+        runner_id: config.runner_id,
+        name: config.name,
+        platform_url: config.platform_url,
+      }, null, 2));
+      return 0;
+    }
+    if (command === "upgrade") {
+      const result = await upgradeRunner(config);
+      if (!result.updated) {
+        out(`Runner 已是最新版本：${result.to}`);
+        return 0;
+      }
+      out(`Runner 已升级：${result.from} → ${result.to}`);
+      out(`LaunchAgent：${await installLaunchAgent()}`);
+      out("旧版本已保留在 ~/.alignyard/app，可用于手动回退。");
       return 0;
     }
     if (command === "start") {

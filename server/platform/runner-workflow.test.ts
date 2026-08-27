@@ -82,7 +82,10 @@ test("Runner workflow completes author, review, pull request and merge without c
   const started = await startTaskOnRunner(env, task.key, author, "codex");
   assert.equal(started.runtime_created, true);
   assert.equal(started.task.runner_id, "author-runner");
-  assert.equal(calls.find((call) => call.method === "execution.start")?.params.env, undefined);
+  const authorStart = calls.find((call) => call.method === "execution.start")!;
+  assert.equal(authorStart.params.env, undefined);
+  assert.equal(authorStart.params.base_branch, "main", "the selected base branch is dispatched to the Runner");
+  assert.equal(authorStart.params.repository.git_url, "git@github.com:team/example.git");
   assert.equal((db.prepare("SELECT COUNT(*) AS count FROM repos").get() as { count: number }).count, 0);
 
   const submitted = await submitTaskForReviewOnRunner(env, task.key, author, {

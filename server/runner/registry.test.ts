@@ -54,6 +54,7 @@ test("Runner hello updates capabilities and revocation is owner scoped", () => {
   });
   assert.ok(claimed);
   const updated = updateRunnerHello(db, claimed.runner.id, 1, {
+    version: "0.1.1",
     git: true,
     tmux: true,
     ssh: true,
@@ -62,6 +63,7 @@ test("Runner hello updates capabilities and revocation is owner scoped", () => {
   }, true);
   assert.equal(updated?.status, "online");
   assert.equal((updated?.capabilities as any).agents.codex, true);
+  assert.equal((updated?.capabilities as any).version, "0.1.1");
   assert.equal(listUserRunners(db, 1).length, 1);
   assert.equal(revokeRunner(db, claimed.runner.id, 999), false);
   assert.equal(revokeRunner(db, claimed.runner.id, 1), true);

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { parsePlatformRunnerMessage, parseRunnerInboundMessage } from "./protocol.ts";
 
 const capabilities = {
+  version: "0.1.1",
   git: true,
   tmux: true,
   ssh: true,
@@ -16,6 +17,12 @@ test("Runner inbound parser requires a complete typed hello", () => {
   })));
   assert.equal(parseRunnerInboundMessage(JSON.stringify({
     type: "runner.hello", protocol_version: 1, capabilities: { git: true },
+  })), null);
+  assert.ok(parseRunnerInboundMessage(JSON.stringify({
+    type: "runner.hello", protocol_version: 1, capabilities: { ...capabilities, version: undefined },
+  })), "protocol-v1 Runners released before version reporting remain compatible");
+  assert.equal(parseRunnerInboundMessage(JSON.stringify({
+    type: "runner.hello", protocol_version: 1, capabilities: { ...capabilities, version: 42 },
   })), null);
 });
 

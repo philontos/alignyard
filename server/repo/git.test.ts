@@ -130,6 +130,26 @@ test("can create a task whose base branch is already checked out in another work
   }
 });
 
+test("task dispatch refreshes the selected remote branch before creating its worktree", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sw-git-latest-"));
+  try {
+    const { seed, mirror } = await scaffold(root);
+    fs.writeFileSync(path.join(seed, "latest.txt"), "latest remote state\n");
+    await git(seed, "add", ".");
+    await git(seed, "commit", "-m", "advance selected base");
+    await git(seed, "push", "origin", "feat/base");
+    const expected = (await git(seed, "rev-parse", "feat/base")).trim();
+
+    const worktree = path.join(root, "wt-latest");
+    await addWorktreeFromBranch(localExecutor, mirror, worktree, "feat/101-new", "feat/base");
+
+    assert.equal((await git(worktree, "rev-parse", "HEAD")).trim(), expected);
+    assert.equal(fs.readFileSync(path.join(worktree, "latest.txt"), "utf8"), "latest remote state\n");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("falls back to the local head when the base branch is not on origin (unpushed)", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sw-git-"));
   try {
