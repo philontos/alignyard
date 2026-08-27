@@ -367,6 +367,19 @@ test("opening a Task automatically opens its active Agent session on every viewp
   assert.match(script, /if \(taskHasActiveAgentSession\(task\)[\s\S]*openPlatformAgentWorkspace\(workspaceTask\)/);
 });
 
+test("background polling keeps an open Task stable when platform metadata is unchanged", () => {
+  const loadData = script.match(/async function loadData[\s\S]*?\n}\n\nlet googleIdentityPromise/)?.[0] || "";
+  assert.match(script, /function sameData\(left, right\)/);
+  assert.match(loadData, /const tasksChanged = firstLoad \|\| !sameData\(state\.tasks, tasks\)/);
+  assert.match(loadData, /if \(tasksChanged\) renderTasks\(\)/);
+  assert.match(loadData, /else if \(!sameData\(previousSelectedTask, nextSelectedTask\)\)/);
+  assert.doesNotMatch(loadData, /renderAll\(\)/);
+  assert.match(script, /const preservedScrollTop = preservingView \? drawer\.scrollTop : 0/);
+  assert.match(script, /\$\("#worktree-knowledge"\)\?\.replaceWith\(preservedKnowledge\)/);
+  assert.match(script, /target\.dataset\.knowledgeFingerprint === fingerprint/);
+  assert.match(script, /result\.protocol_error && target\.dataset\.hasDocuments === "true"/);
+});
+
 test("empty Tasks and Repositories use a low-contrast patterned board", () => {
   assert.match(styles, /\.task-list\.is-empty\s*\{[^}]*radial-gradient[^}]*22px 22px/);
   assert.match(styles, /\.repository-list\.is-empty\s*\{[^}]*radial-gradient[^}]*22px 22px/);

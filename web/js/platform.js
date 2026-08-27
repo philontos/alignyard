@@ -31,6 +31,7 @@ const repositoryProtocolChecks = new Map();
 let automaticProtocolRefreshActive = false;
 let stateMutationEpoch = 0;
 let repositoryTaskLaunch = null;
+let platformDataLoaded = false;
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -38,6 +39,10 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   })[character]);
+}
+
+function sameData(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 async function api(path, options = {}) {
@@ -866,10 +871,26 @@ async function loadWorktreeKnowledge(task) {
   const target = $("#worktree-knowledge");
   if (!target) return;
   const taskKey = task.key;
-  target.innerHTML = `<div class="detail-empty">正在从当前 Runner worktree 解析 .alignyard/…</div>`;
+  const sameTask = target.dataset.taskKey === taskKey;
+  if (sameTask && target.dataset.loading === "true") return;
+  if (!sameTask) {
+    target.dataset.taskKey = taskKey;
+    delete target.dataset.knowledgeFingerprint;
+    delete target.dataset.hasDocuments;
+    target.innerHTML = `<div class="detail-empty">正在从当前 Runner worktree 解析 .alignyard/…</div>`;
+  }
+  target.dataset.loading = "true";
   try {
     const result = await api(`/api/platform/tasks/${encodeURIComponent(task.key)}/knowledge`);
     if (state.selectedTask?.key !== taskKey || target !== $("#worktree-knowledge")) return;
+    // An Agent can briefly leave the protocol invalid while atomically rewriting
+    // several files. Keep the last complete list instead of flashing an empty
+    // state during that transient window.
+    if (result.protocol_error && target.dataset.hasDocuments === "true") return;
+    const fingerprint = JSON.stringify({ documents: result.documents, protocol_error: result.protocol_error || null });
+    if (target.dataset.knowledgeFingerprint === fingerprint) return;
+    target.dataset.knowledgeFingerprint = fingerprint;
+    target.dataset.hasDocuments = String(result.documents.length > 0);
     if (!result.documents.length) {
       target.innerHTML = `<div class="detail-empty">当前 worktree 中还没有符合 .alignyard/ 协议的工程文档。</div>`;
       return;
@@ -878,7 +899,11 @@ async function loadWorktreeKnowledge(task) {
     $$('[data-knowledge-path]', target).forEach((item) => item.addEventListener("click", () => openTaskWorktreeBrowser(task, { path: item.dataset.knowledgePath })));
   } catch (error) {
     if (state.selectedTask?.key !== taskKey || target !== $("#worktree-knowledge")) return;
-    target.innerHTML = `<div class="detail-empty error">${escapeHtml(error.message)}</div>`;
+    if (!target.dataset.knowledgeFingerprint) {
+      target.innerHTML = `<div class="detail-empty error">${escapeHtml(error.message)}</div>`;
+    }
+  } finally {
+    if (target === $("#worktree-knowledge")) target.dataset.loading = "false";
   }
 }
 
@@ -1053,8 +1078,13 @@ function taskLocalCommands(task) {
 function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
   const task = state.tasks.find((item) => item.key === key);
   if (!task) return;
+  const drawer = $("#task-drawer");
+  const preservingView = state.selectedTask?.key === key && !drawer.hidden;
+  const preservedScrollTop = preservingView ? drawer.scrollTop : 0;
+  const preservedKnowledge = preservingView ? $("#worktree-knowledge") : null;
+  const manualWorkflowOpen = preservingView && Boolean($(".manual-workflow")?.open);
   const shouldRefreshChangeRequest = refreshChangeRequest == null
-    ? state.selectedTask?.key !== key || $("#task-drawer").hidden
+    ? state.selectedTask?.key !== key || drawer.hidden
     : refreshChangeRequest;
   if (shouldRefreshChangeRequest && task.pr_number && task.pr_state === "open") {
     state.pendingActions.add(`${key}:refresh-change-request`);
@@ -1081,7 +1111,9 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
     <section class="detail-section"><div class="detail-section-head"><h2>Repositories · ${task.repositories.length}</h2><span class="protocol-badge">peer worktrees</span></div><div class="detail-repos">${task.repositories.map(detailRepository).join("")}</div></section>
     <section class="detail-section"><div class="detail-section-head"><h2>工程文档</h2>${task.runtime_task_id && task.runtime_has_worktree ? `<button class="text-button review-changes" type="button" data-open-worktree-changes>查看变更</button>` : ""}</div><p class="detail-section-note">Platform 通过你的 Runner 自动解析当前 worktree 中的 .alignyard/；点击文档进入完整 worktree 浏览页。</p><div id="worktree-knowledge"><div class="detail-empty">${task.runtime_task_id && task.runtime_has_worktree ? "正在从当前 Runner worktree 解析 .alignyard/…" : "启动 Agent 后，这里会自动展示对应 worktree 中的工程文档。"}</div></div></section>
     <div class="detail-actions">${taskNextAction(task)}</div>`;
-  $("#task-drawer").hidden = false;
+  if (preservedKnowledge) $("#worktree-knowledge")?.replaceWith(preservedKnowledge);
+  if (manualWorkflowOpen && $(".manual-workflow")) $(".manual-workflow").open = true;
+  drawer.hidden = false;
   $("#drawer-close").addEventListener("click", closeTaskDetail);
   const contextHelp = $(".task-context-help", $("#task-detail"));
   contextHelp?.addEventListener("mouseleave", () => {
@@ -1112,6 +1144,9 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
   if (shouldRefreshChangeRequest && task.pr_number && task.pr_state === "open") {
     void refreshTaskChangeRequest(key, task.pr_state);
   }
+  if (preservingView) requestAnimationFrame(() => {
+    if (state.selectedTask?.key === key && !drawer.hidden) drawer.scrollTop = preservedScrollTop;
+  });
 }
 
 function closeTaskDetail() {
@@ -1286,15 +1321,33 @@ async function loadData({ silent = false } = {}) {
       runnerOnboarding.enabled() ? api("/api/runners") : Promise.resolve([]),
     ]);
     if (loadEpoch !== stateMutationEpoch) return;
+    const firstLoad = !platformDataLoaded;
+    const repositoriesChanged = firstLoad || !sameData(state.repositories, repositories);
+    const tasksChanged = firstLoad || !sameData(state.tasks, tasks);
+    const selectedKey = state.selectedTask?.key;
+    const previousSelectedTask = selectedKey
+      ? state.tasks.find((task) => task.key === selectedKey)
+      : null;
     state.repositories = repositories;
     state.tasks = tasks;
     state.members = members;
-    renderAll();
+    platformDataLoaded = true;
+    if (tasksChanged) renderTasks();
+    if (repositoriesChanged) renderRepositories();
     runnerOnboarding.setRunners(runners);
     void refreshRepositoryProtocolsAutomatically();
-    const selectedKey = state.selectedTask?.key;
-    if (selectedKey && !$("#task-drawer").hidden && state.tasks.some((task) => task.key === selectedKey)) {
-      openTaskDetail(selectedKey, { refreshChangeRequest: false });
+    if (selectedKey && !$("#task-drawer").hidden) {
+      const nextSelectedTask = state.tasks.find((task) => task.key === selectedKey);
+      if (!nextSelectedTask) {
+        closeTaskDetail();
+      } else if (!sameData(previousSelectedTask, nextSelectedTask)) {
+        openTaskDetail(selectedKey, { refreshChangeRequest: false });
+      } else {
+        state.selectedTask = nextSelectedTask;
+        if (nextSelectedTask.runtime_task_id && nextSelectedTask.runtime_has_worktree) {
+          void loadWorktreeKnowledge({ ...nextSelectedTask, display_title: taskDisplayTitle(nextSelectedTask) });
+        }
+      }
     }
   } catch (error) {
     if (!silent) {
