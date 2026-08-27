@@ -29,6 +29,7 @@ const state = {
 const taskBranchRequests = new Map();
 const repositoryProtocolChecks = new Map();
 const lifecycleChangeRequestChecks = new Map();
+const LIFECYCLE_CHANGE_REQUEST_REFRESH_MS = 30_000;
 let automaticProtocolRefreshActive = false;
 let automaticChangeRequestRefreshActive = false;
 let stateMutationEpoch = 0;
@@ -900,7 +901,7 @@ async function refreshLifecycleChangeRequestsAutomatically() {
   );
   if (!tasks.length) return;
   automaticChangeRequestRefreshActive = true;
-  tasks.forEach((task) => lifecycleChangeRequestChecks.set(task.key, now + 30_000));
+  tasks.forEach((task) => lifecycleChangeRequestChecks.set(task.key, now + LIFECYCLE_CHANGE_REQUEST_REFRESH_MS));
   let changed = false;
   await Promise.all(tasks.map(async (task) => {
     const operationKey = `${task.key}:refresh-change-request`;
@@ -917,11 +918,12 @@ async function refreshLifecycleChangeRequestsAutomatically() {
         if (repositoryIndex >= 0) state.repositories[repositoryIndex] = result.repository;
       }
       changed = changed || !sameData(previous, result.task);
-      lifecycleChangeRequestChecks.set(task.key, Date.now() + 5 * 60_000);
-    } catch {
+      lifecycleChangeRequestChecks.set(task.key, Date.now() + LIFECYCLE_CHANGE_REQUEST_REFRESH_MS);
+    } catch (error) {
       // A missing or offline local Runner is expected. Retry shortly without
       // turning background forge synchronization into a visible page error.
-      lifecycleChangeRequestChecks.set(task.key, Date.now() + 30_000);
+      console.warn(`无法自动同步 ${task.key} 的远端合并请求状态`, error);
+      lifecycleChangeRequestChecks.set(task.key, Date.now() + LIFECYCLE_CHANGE_REQUEST_REFRESH_MS);
     } finally {
       state.pendingActions.delete(operationKey);
     }
@@ -1027,6 +1029,7 @@ function initWorkflowStage(task) {
   if (task.workflow_error || task.runtime_error) return { key: "error", label: "需要处理", note: task.workflow_error || task.runtime_error };
   if (task.pr_state === "merged") return { key: "error", label: `等待完成${action}`, note: `${requestLabel} 已合并，正在确认默认分支上的 Alignyard 文件。` };
   if (task.status === "approved" && task.pr_state === "open") return { key: "pr", label: `${requestLabel} 待合并`, note: `Review 已批准，${requestLabel} 已创建，等待人工确认合并。` };
+  if (task.status === "approved" && task.pr_state === "closed") return { key: "approved", label: `${requestLabel} 已关闭`, note: `原 ${requestLabel} 已在远端关闭；确认工作分支后可以重新创建。` };
   if (task.status === "approved") return { key: "approved", label: "Review 已通过", note: `平台状态已流转完成；确认后可单独创建 ${requestLabel}。` };
   if (task.status === "review") return { key: "review", label: "等待 Review", note: `工作分支已推送并分派给 ${task.review?.reviewer || task.current_assignee || "reviewer"}。` };
   if (task.status === "draft" && task.pr_state === "open") return { key: "paused", label: "要求修改", note: `${requestLabel} 保持打开；继续 Agent 修改后重新提交 Review。` };
@@ -1078,8 +1081,9 @@ function initTaskActions(task) {
     const repository = task.repositories.find((item) => item.mode === "editable");
     const commit = repository?.design_commit ? String(repository.design_commit).slice(0, 10) : "已审核提交";
     actions.push(`<div class="design-ready"><strong>设计已确认，可以开始实现</strong><span>继续使用远端工作分支；设计基线 ${escapeHtml(commit)}。</span></div>`);
-  } else if (task.status === "approved" && task.pr_state === "none" && taskBelongsToCurrentUser(task)) {
-    actions.push(`<button class="button primary" type="button" data-init-pr ${pendingAction(task, "pull-request") ? "disabled" : ""}>${pendingAction(task, "pull-request") ? `正在创建 ${requestLabel}…` : `创建 ${requestLabel}`}</button>`);
+  } else if (task.status === "approved" && ["none", "closed"].includes(task.pr_state) && taskBelongsToCurrentUser(task)) {
+    const retry = task.pr_state === "closed";
+    actions.push(`<button class="button primary" type="button" data-init-pr ${pendingAction(task, "pull-request") ? "disabled" : ""}>${pendingAction(task, "pull-request") ? `正在创建 ${requestLabel}…` : `${retry ? "重新创建" : "创建"} ${requestLabel}`}</button>`);
   } else if (task.status === "approved" && task.pr_state === "open" && taskBelongsToCurrentUser(task)) {
     actions.push(`<a class="button secondary link" href="${escapeHtml(task.pr_url)}" target="_blank" rel="noreferrer">查看 ${requestLabel} #${task.pr_number}</a>`);
     const confirming = pendingAction(task, "refresh-change-request");
@@ -1164,7 +1168,11 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
   const shouldRefreshChangeRequest = refreshChangeRequest == null
     ? state.selectedTask?.key !== key || drawer.hidden
     : refreshChangeRequest;
-  if (shouldRefreshChangeRequest && task.pr_number && task.pr_state === "open") {
+  const shouldStartChangeRequestRefresh = shouldRefreshChangeRequest
+    && task.pr_number
+    && task.pr_state === "open"
+    && !state.pendingActions.has(`${key}:refresh-change-request`);
+  if (shouldStartChangeRequestRefresh) {
     state.pendingActions.add(`${key}:refresh-change-request`);
   }
   state.selectedTask = task;
@@ -1230,7 +1238,7 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
     || platformAgentWorkspaceIsOpen()) {
     openPlatformAgentWorkspace(workspaceTask);
   }
-  if (shouldRefreshChangeRequest && task.pr_number && task.pr_state === "open") {
+  if (shouldStartChangeRequestRefresh) {
     void refreshTaskChangeRequest(key, task.pr_state);
   }
   if (preservingView) requestAnimationFrame(() => {
@@ -1370,7 +1378,13 @@ async function initWorkflowAction(key, action, button, successMessage) {
     }
     renderAll();
     openTaskDetail(key);
-    toast(successMessage);
+    const lifecycleAction = updated.task_type === "repository_update" ? "更新" : "初始化";
+    const message = action === "merge"
+      ? result.repository?.protocol_state === "outdated"
+        ? `${requestLabel} 已合并，本次${lifecycleAction}已完成；Repository 仍有更高版本可更新`
+        : `${requestLabel} 已合并，Repository 已完成${lifecycleAction}`
+      : successMessage;
+    toast(updated.workflow_error ? `${message}；${updated.workflow_error}` : message);
   } catch (error) {
     toast(error.message, "error");
     await loadData({ silent: true });

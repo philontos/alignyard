@@ -503,12 +503,27 @@ async function finishMergedTask(env: RunnerWorkflowEnv, task: PlatformTask, exec
     repository = { ...repository, ...refreshed };
   }
   const completed = updatePlatformTaskStatus(env.db, task.key, "completed") || task;
+  const cleanupWarnings: string[] = [];
   for (const item of completed.executions.filter((item) => item.runner_execution_id)) {
     const remote = getPlatformRunnerExecution(env.db, item.runner_execution_id!);
-    if (!remote?.runner_task_id || !env.gateway.isOnline(remote.runner_id)) continue;
-    await callExecution(env, remote, "execution.cleanup").catch(() => {});
-    updatePlatformRunnerExecution(env.db, remote.id, { status: "cleaned" });
+    if (!remote?.runner_task_id) continue;
+    if (!env.gateway.isOnline(remote.runner_id)) {
+      cleanupWarnings.push(`${remote.actor} 的 Runner 离线`);
+      continue;
+    }
+    try {
+      await callExecution(env, remote, "execution.cleanup");
+      updatePlatformRunnerExecution(env.db, remote.id, { status: "cleaned", error: null });
+    } catch (error) {
+      const message = errorMessage(error);
+      updatePlatformRunnerExecution(env.db, remote.id, { status: "failed", error: message });
+      cleanupWarnings.push(`${remote.actor}：${message}`);
+    }
   }
+  const cleanupWarning = cleanupWarnings.length
+    ? `本机 Agent/worktree 清理未完成：${cleanupWarnings.join("；")}`
+    : null;
+  setPlatformTaskWorkflowError(env.db, task.key, cleanupWarning);
   return { task: taskFor(env, task.key), repository };
 }
 

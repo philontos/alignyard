@@ -135,7 +135,9 @@ export async function createChangeRequest(
   input: ChangeRequestInput & { title: string; body: string },
 ): Promise<ChangeRequestInfo> {
   const existing = await findChangeRequest(kind, input);
-  if (existing) return existing;
+  // A closed PR/MR is terminal. Reusing it would leave an approved Task with
+  // no action, so create a fresh request from the still-owned work branch.
+  if (existing && existing.state !== "closed") return existing;
 
   let output = "";
   try {
@@ -160,11 +162,13 @@ export async function createChangeRequest(
     // concurrent caller may have won. Reconcile with the forge before failing.
     const reconciled = await findChangeRequest(kind, input);
     const fromError = infoFromText(kind, commandError(error));
-    if (reconciled || fromError) return reconciled || fromError!;
+    if (reconciled && reconciled.state !== "closed") return reconciled;
+    if (fromError) return fromError;
     throw error;
   }
 
-  const created = await findChangeRequest(kind, input) || infoFromText(kind, output);
+  const reconciled = await findChangeRequest(kind, input);
+  const created = reconciled && reconciled.state !== "closed" ? reconciled : infoFromText(kind, output);
   if (!created) throw new Error(`${changeRequestLabel(kind)} 创建后未找到`);
   return created;
 }

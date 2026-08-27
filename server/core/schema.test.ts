@@ -108,6 +108,58 @@ test("initSchema migrates binary Repository state and title-based init Tasks", (
   );
 });
 
+test("initSchema preserves an existing outdated Repository across restarts", () => {
+  const db = new Database(":memory:");
+  initSchema(db, opts(false));
+  db.prepare(
+    "INSERT INTO platform_repositories " +
+      "(name,git_url,created_by,protocol_initialized,protocol_state,protocol_error,protocol_version,framework_version) " +
+      "VALUES ('repo','git@example/repo','Phil',1,'outdated','v1 可更新至 v2',2,1)",
+  ).run();
+
+  initSchema(db, opts(false));
+
+  assert.deepEqual(
+    db.prepare(
+      "SELECT protocol_initialized,protocol_state,protocol_error,protocol_version,framework_version " +
+        "FROM platform_repositories WHERE name='repo'",
+    ).get(),
+    {
+      protocol_initialized: 1,
+      protocol_state: "outdated",
+      protocol_error: "v1 可更新至 v2",
+      protocol_version: 2,
+      framework_version: 1,
+    },
+  );
+});
+
+test("initSchema never completes a current Repository Task as a startup side effect", () => {
+  const db = new Database(":memory:");
+  initSchema(db, opts(false));
+  const repositoryId = Number(db.prepare(
+    "INSERT INTO platform_repositories " +
+      "(name,git_url,created_by,protocol_initialized,protocol_state) " +
+      "VALUES ('repo','git@example/repo','Phil',1,'ready')",
+  ).run().lastInsertRowid);
+  const taskId = Number(db.prepare(
+    "INSERT INTO platform_tasks " +
+      "(task_key,title,owner,current_assignee,task_type,status,pr_state,merged_at) " +
+      "VALUES ('AY-001','Initialize','Phil','Phil','repository_init','approved','merged',datetime('now'))",
+  ).run().lastInsertRowid);
+  db.prepare(
+    "INSERT INTO platform_task_repositories (task_id,repository_id,mode,base_branch) " +
+      "VALUES (?,?,'editable','main')",
+  ).run(taskId, repositoryId);
+
+  initSchema(db, opts(false));
+
+  assert.deepEqual(
+    db.prepare("SELECT status,completed_at FROM platform_tasks WHERE id=?").get(taskId),
+    { status: "approved", completed_at: null },
+  );
+});
+
 test("initSchema does not create a Platform knowledge store", () => {
   const db = new Database(":memory:");
   initSchema(db, opts(false));

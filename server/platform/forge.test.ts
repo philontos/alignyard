@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { CommandRunner } from "../core/command-runner.ts";
-import { closeChangeRequest, repositoryForgeKind, resolveForge } from "./forge.ts";
+import { closeChangeRequest, createChangeRequest, repositoryForgeKind, resolveForge } from "./forge.ts";
 
 test("forge detection recognizes HTTPS, SSH, and branded self-hosted URLs", () => {
   assert.equal(repositoryForgeKind("git@github.com:team/service.git"), "github");
@@ -78,4 +78,35 @@ test("closing a GitLab MR removes its source branch with local Git", async () =>
   assert.equal(closed.state, "closed");
   assert.ok(calls.includes("glab mr close 42"));
   assert.ok(calls.includes("git push origin --delete change/ay-001/phil"));
+});
+
+test("creating a GitHub PR does not reuse a closed request for the same branch", async () => {
+  const calls: string[] = [];
+  let created = false;
+  const runner: CommandRunner = {
+    kind: "local",
+    async exec(file, args) {
+      calls.push(`${file} ${args.join(" ")}`);
+      if (file === "gh" && args[1] === "view") {
+        return created
+          ? JSON.stringify({ number: 43, url: "https://github.com/example/service/pull/43", state: "OPEN" })
+          : JSON.stringify({ number: 42, url: "https://github.com/example/service/pull/42", state: "CLOSED" });
+      }
+      if (file === "gh" && args[1] === "create") {
+        created = true;
+        return "https://github.com/example/service/pull/43\n";
+      }
+      throw new Error("unexpected command");
+    },
+  };
+
+  const request = await createChangeRequest("github", {
+    runner, cwd: "/worktree", gitUrl: "git@github.com:example/service.git",
+    baseBranch: "main", headBranch: "change/ay-001/phil",
+    title: "Update knowledge", body: "Alignyard Task AY-001",
+  });
+
+  assert.equal(request.number, 43);
+  assert.equal(request.state, "open");
+  assert.equal(calls.filter((call) => call.startsWith("gh pr create ")).length, 1);
 });

@@ -191,7 +191,7 @@ test("Review is an assigned handoff with an optional reviewer Agent and a separa
   assert.match(script, /\/review\/decision/);
   assert.match(script, /JSON\.stringify\(\{ decision, feedback \}\)/);
   assert.match(script, /openChangesRequestedDialog\(task\)/);
-  assert.match(script, /task\.status === "approved" && task\.pr_state === "none"/);
+  assert.match(script, /task\.status === "approved" && \["none", "closed"\]\.includes\(task\.pr_state\)/);
   assert.doesNotMatch(script, /审核通过并创建/);
   assert.match(html, /id="agent-workspace-agent"[\s\S]*Codex[\s\S]*Claude Code[\s\S]*Kimi CLI/);
   assert.match(agent, /canStartReview/);
@@ -227,7 +227,7 @@ test("every Review decision closes the reviewer workspace before the Author cont
   assert.match(decision, /closeTaskDetail\(\)/);
   assert.doesNotMatch(decision, /openTaskDetail\(task\.key\)/);
   const actions = script.match(/function initTaskActions[\s\S]*?\n}\n\nfunction taskLocalCommands/)?.[0] || "";
-  assert.match(actions, /task\.pr_state === "none" && taskBelongsToCurrentUser\(task\)/);
+  assert.match(actions, /\["none", "closed"\]\.includes\(task\.pr_state\) && taskBelongsToCurrentUser\(task\)/);
   const createRequestRoute = platformRoutes.match(/app\.post\("\/api\/platform\/tasks\/:key\/pull-request"[\s\S]*?\n}\);/)?.[0] || "";
   assert.match(createRequestRoute, /requireTaskOwner\(req, req\.params\.key\)/);
 });
@@ -238,13 +238,22 @@ test("opening a Task confirms an open PR or MR once and reflects its remote stat
   assert.match(script, /refreshTaskChangeRequest\(key, task\.pr_state\)/);
   assert.match(script, /refreshLifecycleChangeRequestsAutomatically/);
   assert.match(script, /task\.status !== "completed"[\s\S]*\["open", "merged"\]\.includes\(task\.pr_state\)/);
+  assert.match(script, /LIFECYCLE_CHANGE_REQUEST_REFRESH_MS = 30_000/);
+  assert.match(script, /shouldStartChangeRequestRefresh[\s\S]*!state\.pendingActions\.has/);
   assert.match(script, /openTaskDetail\(selectedKey, \{ refreshChangeRequest: false \}\)/);
   assert.match(script, /正在确认 \$\{requestLabel\} 状态/);
 });
 
+test("a remotely closed PR or MR can be recreated without trapping the approved Task", () => {
+  const actions = script.match(/function initTaskActions[\s\S]*?\n}\n\nfunction closeAgentPicker/)?.[0] || "";
+  assert.match(actions, /\["none", "closed"\]\.includes\(task\.pr_state\)/);
+  assert.match(actions, /"重新创建"/);
+  assert.match(script, /task\.pr_state === "closed"[\s\S]*原 \$\{requestLabel\} 已在远端关闭/);
+});
+
 test("Task completion is a terminal state after reviewed changes are merged", () => {
   assert.match(script, /completed: "已完成"/);
-  assert.match(script, /task\.status === "approved" && task\.pr_state === "none"[\s\S]*data-init-pr/);
+  assert.match(script, /task\.status === "approved" && \["none", "closed"\]\.includes\(task\.pr_state\)[\s\S]*data-init-pr/);
   assert.match(script, /task\.status === "approved" && task\.pr_state === "open"[\s\S]*data-init-merge/);
   assert.match(script, /task\.completed_at \? `完成于/);
   assert.match(styles, /\.status-completed/);

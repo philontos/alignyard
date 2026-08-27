@@ -260,6 +260,31 @@ test("a merged framework Task completes when a newer framework appeared during R
   assert.notEqual(nextUpdate.key, task.key, "the newer framework gets a fresh Update Task");
 });
 
+test("a merged Task reports cleanup failure instead of claiming the execution was cleaned", async () => {
+  const { db, task, env } = fixture();
+  const originalCall = env.gateway.call;
+  env.gateway.call = async (runnerId: string, method: string, params: any) => {
+    if (method === "execution.cleanup") throw new Error("worktree busy");
+    return originalCall(runnerId, method, params);
+  };
+  const author = { id: 1, name: "Author" };
+  const reviewer = { id: 2, name: "Reviewer" };
+  await startTaskOnRunner(env, task.key, author, "codex");
+  await submitTaskForReviewOnRunner(env, task.key, author, {
+    reviewer: "Reviewer", reviewer_user_id: 2, submitted_by: "Author", submitted_by_user_id: 1,
+  });
+  await decideReviewOnRunner(env, task.key, reviewer, "approved");
+  await createChangeRequestOnRunner(env, task.key, author);
+  const merged = await mergeChangeRequestOnRunner(env, task.key, author);
+
+  assert.equal(merged.task.status, "completed");
+  assert.match(merged.task.workflow_error || "", /本机 Agent\/worktree 清理未完成/);
+  const execution = db.prepare(
+    "SELECT status,error FROM platform_runner_executions WHERE task_id=? AND role='author'",
+  ).get(task.id) as { status: string; error: string };
+  assert.deepEqual(execution, { status: "failed", error: "worktree busy" });
+});
+
 test("ordinary Task submission depends on Runner validation and commit preparation", async () => {
   const { repository, calls, env } = fixture();
   const db = env.db;

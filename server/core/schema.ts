@@ -386,9 +386,9 @@ function normalizePlatformProtocolWorkflow(db: DB) {
 
     UPDATE platform_repositories
     SET protocol_state = CASE
+      WHEN protocol_state IN ('initializing','ready','outdated','invalid') THEN protocol_state
       WHEN protocol_initialized=1 THEN 'ready'
-      WHEN protocol_state NOT IN ('uninitialized','initializing','ready','outdated','invalid') THEN 'uninitialized'
-      ELSE protocol_state
+      ELSE 'uninitialized'
     END;
 
     UPDATE platform_repositories
@@ -424,15 +424,6 @@ function normalizePlatformTaskStatuses(db: DB) {
       ELSE 'draft'
     END
     WHERE status NOT IN ('draft', 'review', 'approved', 'completed');
-
-    UPDATE platform_tasks
-    SET status='completed',completed_at=COALESCE(completed_at,merged_at,updated_at)
-    WHERE status='approved' AND task_type='repository_init' AND pr_state='merged'
-      AND EXISTS (
-        SELECT 1 FROM platform_task_repositories ptr
-        JOIN platform_repositories pr ON pr.id=ptr.repository_id
-        WHERE ptr.task_id=platform_tasks.id AND ptr.mode='editable' AND pr.protocol_state='ready'
-      );
 
     UPDATE platform_tasks
     SET completed_at=COALESCE(completed_at,merged_at,updated_at)
