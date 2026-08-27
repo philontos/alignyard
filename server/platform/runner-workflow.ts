@@ -493,8 +493,12 @@ async function finishMergedTask(env: RunnerWorkflowEnv, task: PlatformTask, exec
   let repository = editableRepository(task);
   if (["repository_init", "repository_update"].includes(task.task_type)) {
     const refreshed = await refreshProtocolOnRunner(env, task, execution);
-    if (refreshed.protocol_state !== "ready") {
-      throw new PlatformWorkflowError(409, refreshed.protocol_error || "合并后默认分支尚未通过初始化检查");
+    // A framework release can advance while an Init or Update Task is under
+    // Review. The merged Task is still complete when the default branch has a
+    // valid protocol; keep the Repository outdated so a subsequent Update can
+    // move it to the newer framework instead of trapping the merged Task.
+    if (!["ready", "outdated"].includes(refreshed.protocol_state)) {
+      throw new PlatformWorkflowError(409, refreshed.protocol_error || "合并后默认分支上的 Alignyard 协议无效");
     }
     repository = { ...repository, ...refreshed };
   }

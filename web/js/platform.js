@@ -28,7 +28,9 @@ const state = {
 
 const taskBranchRequests = new Map();
 const repositoryProtocolChecks = new Map();
+const lifecycleChangeRequestChecks = new Map();
 let automaticProtocolRefreshActive = false;
+let automaticChangeRequestRefreshActive = false;
 let stateMutationEpoch = 0;
 let repositoryTaskLaunch = null;
 let platformDataLoaded = false;
@@ -884,6 +886,55 @@ async function refreshRepositoryProtocolsAutomatically() {
   if (changed) renderRepositories();
 }
 
+async function refreshLifecycleChangeRequestsAutomatically() {
+  if (automaticChangeRequestRefreshActive || !state.currentUser) return;
+  const now = Date.now();
+  const tasks = state.tasks.filter((task) =>
+    isRepositoryLifecycleTask(task)
+    && taskBelongsToCurrentUser(task)
+    && task.status !== "completed"
+    && task.pr_number
+    && ["open", "merged"].includes(task.pr_state)
+    && !state.pendingActions.has(`${task.key}:refresh-change-request`)
+    && now >= (lifecycleChangeRequestChecks.get(task.key) || 0)
+  );
+  if (!tasks.length) return;
+  automaticChangeRequestRefreshActive = true;
+  tasks.forEach((task) => lifecycleChangeRequestChecks.set(task.key, now + 30_000));
+  let changed = false;
+  await Promise.all(tasks.map(async (task) => {
+    const operationKey = `${task.key}:refresh-change-request`;
+    state.pendingActions.add(operationKey);
+    try {
+      const result = await api(`/api/platform/tasks/${encodeURIComponent(task.key)}/change-request/refresh`, {
+        method: "POST",
+        body: "{}",
+      });
+      const previous = state.tasks.find((item) => item.key === task.key);
+      replacePlatformTask(result.task);
+      if (result.repository) {
+        const repositoryIndex = state.repositories.findIndex((item) => item.id === result.repository.id);
+        if (repositoryIndex >= 0) state.repositories[repositoryIndex] = result.repository;
+      }
+      changed = changed || !sameData(previous, result.task);
+      lifecycleChangeRequestChecks.set(task.key, Date.now() + 5 * 60_000);
+    } catch {
+      // A missing or offline local Runner is expected. Retry shortly without
+      // turning background forge synchronization into a visible page error.
+      lifecycleChangeRequestChecks.set(task.key, Date.now() + 30_000);
+    } finally {
+      state.pendingActions.delete(operationKey);
+    }
+  }));
+  automaticChangeRequestRefreshActive = false;
+  if (changed) {
+    renderAll();
+    if (state.selectedTask) {
+      state.selectedTask = state.tasks.find((task) => task.key === state.selectedTask.key) || null;
+    }
+  }
+}
+
 function knowledgeKind(kind) {
   const normalized = String(kind || "docs").toLowerCase();
   if (normalized === "adr") return "adr";
@@ -965,10 +1016,12 @@ function initWorkflowStage(task) {
   const repository = task.repositories.find((item) => item.mode === "editable");
   const requestLabel = taskChangeRequestLabel(task);
   const action = task.task_type === "repository_update" ? "更新" : "初始化";
-  if (task.pr_state === "merged" && repository?.protocol_state === "ready") {
+  if (task.pr_state === "merged" && task.status === "completed") {
     const note = task.workflow_error
       ? `Repository 已完成${action}；本地清理提示：${task.workflow_error}`
-      : `${requestLabel} 已合并，Repository 已完成${action}。`;
+      : repository?.protocol_state === "outdated"
+        ? `${requestLabel} 已合并，本次${action}已完成；Repository 仍有更高版本可更新。`
+        : `${requestLabel} 已合并，Repository 已完成${action}。`;
     return { key: "merged", label: "已合并", note };
   }
   if (task.workflow_error || task.runtime_error) return { key: "error", label: "需要处理", note: task.workflow_error || task.runtime_error };
@@ -1372,6 +1425,7 @@ async function loadData({ silent = false } = {}) {
     if (repositoriesChanged) renderRepositories();
     runnerOnboarding.setRunners(runners);
     void refreshRepositoryProtocolsAutomatically();
+    void refreshLifecycleChangeRequestsAutomatically();
     if (selectedKey && !$("#task-drawer").hidden) {
       const nextSelectedTask = state.tasks.find((task) => task.key === selectedKey);
       if (!nextSelectedTask) {
@@ -1584,7 +1638,8 @@ if (await initializeAuthentication()) await loadData();
 setInterval(() => {
   if (runnerOnboarding.enabled()) void runnerOnboarding.refresh();
   void refreshRepositoryProtocolsAutomatically();
-  if (state.currentUser && state.tasks.some((task) => isRepositoryLifecycleTask(task) && task.pr_state !== "merged")) {
+  void refreshLifecycleChangeRequestsAutomatically();
+  if (state.currentUser && state.tasks.some((task) => isRepositoryLifecycleTask(task) && task.status !== "completed")) {
     loadData({ silent: true });
   }
 }, 4000);

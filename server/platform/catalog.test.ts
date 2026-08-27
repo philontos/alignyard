@@ -234,7 +234,7 @@ test("an approved Repository Init with an open change request can return to draf
   assert.equal(draft?.pr_number, 42);
 });
 
-test("Repository Init completes only after its change request is merged and Repository is ready", () => {
+test("Repository Init completes only after its change request is merged and Repository protocol is valid", () => {
   const db = memoryDb();
   const repository = createPlatformRepository(db, {
     name: "new-service", git_url: "git@example/new-service", created_by: "Phil",
@@ -244,12 +244,13 @@ test("Repository Init completes only after its change request is merged and Repo
 
   assert.throws(() => updatePlatformTaskStatus(db, task.key, "completed"), /合并请求已合入/);
   markPlatformPullRequestMerged(db, task.key);
-  assert.throws(() => updatePlatformTaskStatus(db, task.key, "completed"), /Repository 就绪/);
-  setPlatformRepositoryProtocolState(db, repository.id, "ready");
+  assert.throws(() => updatePlatformTaskStatus(db, task.key, "completed"), /默认分支协议有效/);
+  setPlatformRepositoryProtocolState(db, repository.id, "outdated", "有更高版本可更新");
 
   const completed = updatePlatformTaskStatus(db, task.key, "completed");
   assert.equal(completed?.status, "completed");
   assert.ok(completed?.completed_at);
+  assert.equal(completed?.repositories[0].protocol_state, "outdated");
 });
 
 test("platform Task records its runtime, commits, workflow error, and pull request", () => {

@@ -236,6 +236,8 @@ test("opening a Task confirms an open PR or MR once and reflects its remote stat
   assert.match(script, /change-request\/refresh/);
   assert.match(script, /shouldRefreshChangeRequest/);
   assert.match(script, /refreshTaskChangeRequest\(key, task\.pr_state\)/);
+  assert.match(script, /refreshLifecycleChangeRequestsAutomatically/);
+  assert.match(script, /task\.status !== "completed"[\s\S]*\["open", "merged"\]\.includes\(task\.pr_state\)/);
   assert.match(script, /openTaskDetail\(selectedKey, \{ refreshChangeRequest: false \}\)/);
   assert.match(script, /正在确认 \$\{requestLabel\} 状态/);
 });

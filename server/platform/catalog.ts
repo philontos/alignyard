@@ -907,8 +907,8 @@ export function updatePlatformTaskStatus(db: DB, key: string, status: unknown): 
     }
     if (["repository_init", "repository_update"].includes(task.task_type)) {
       const editable = task.repositories.find((repository) => repository.mode === "editable");
-      if (editable?.protocol_state !== "ready") {
-        throw new PlatformValidationError("Repository 框架 Task 只有在 Repository 就绪后才能完成");
+      if (!editable || !["ready", "outdated"].includes(editable.protocol_state)) {
+        throw new PlatformValidationError("Repository 框架 Task 只有在默认分支协议有效后才能完成");
       }
     }
   }

@@ -225,6 +225,41 @@ test("Repository update starts an Agent with the framework update workflow", asy
   assert.match(start.params.prompt, /不修改业务源码/);
 });
 
+test("a merged framework Task completes when a newer framework appeared during Review", async () => {
+  const { db, repository, calls, env } = fixture();
+  setPlatformRepositoryProtocolState(db, repository.id, "outdated", "v0 可更新至 v1", {
+    protocol_version: 2,
+    framework_version: 0,
+  });
+  const task = createRepositoryUpdateTask(db, repository.id, "Author", 1);
+  const originalCall = env.gateway.call;
+  env.gateway.call = async (runnerId: string, method: string, params: any) => {
+    if (method === "repository.refresh-protocol") {
+      calls.push({ runnerId, method, params });
+      return {
+        state: "outdated", error: "v1 可更新至 v2",
+        protocol_version: 2, framework_version: 1,
+      };
+    }
+    return originalCall(runnerId, method, params);
+  };
+
+  const author = { id: 1, name: "Author" };
+  const reviewer = { id: 2, name: "Reviewer" };
+  await startTaskOnRunner(env, task.key, author, "codex");
+  await submitTaskForReviewOnRunner(env, task.key, author, {
+    reviewer: "Reviewer", reviewer_user_id: 2, submitted_by: "Author", submitted_by_user_id: 1,
+  });
+  await decideReviewOnRunner(env, task.key, reviewer, "approved");
+  await createChangeRequestOnRunner(env, task.key, author);
+  const merged = await mergeChangeRequestOnRunner(env, task.key, author);
+
+  assert.equal(merged.task.status, "completed");
+  assert.equal(merged.repository.protocol_state, "outdated");
+  const nextUpdate = createRepositoryUpdateTask(db, repository.id, "Author", 1);
+  assert.notEqual(nextUpdate.key, task.key, "the newer framework gets a fresh Update Task");
+});
+
 test("ordinary Task submission depends on Runner validation and commit preparation", async () => {
   const { repository, calls, env } = fixture();
   const db = env.db;
