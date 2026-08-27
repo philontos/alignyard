@@ -902,6 +902,15 @@ function taskNextAction(task) {
   return initTaskActions(task);
 }
 
+function taskHasActiveAgentSession(task) {
+  return Boolean(
+    task?.runner_execution_id
+    && task.runtime_task_id
+    && task.runtime_session
+    && task.runtime_alive
+  );
+}
+
 function initWorkflowStage(task) {
   const repository = task.repositories.find((item) => item.mode === "editable");
   const requestLabel = taskChangeRequestLabel(task);
@@ -1095,7 +1104,9 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
   const requestLabel = taskChangeRequestLabel(task);
   $('[data-init-pr]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "pull-request", event.currentTarget, `${requestLabel} 已创建`));
   $('[data-init-merge]', $("#task-detail"))?.addEventListener("click", (event) => initWorkflowAction(task.key, "merge", event.currentTarget, `${requestLabel} 已合并，Repository 已就绪`));
-  if (!matchMedia("(max-width: 760px)").matches || platformAgentWorkspaceIsOpen()) {
+  if (taskHasActiveAgentSession(task)
+    || !matchMedia("(max-width: 760px)").matches
+    || platformAgentWorkspaceIsOpen()) {
     openPlatformAgentWorkspace(workspaceTask);
   }
   if (shouldRefreshChangeRequest && task.pr_number && task.pr_state === "open") {

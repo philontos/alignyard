@@ -361,6 +361,12 @@ test("polling and read-only Runner errors cannot discard a live Agent terminal",
   assert.doesNotMatch(platformRunnerBackend, /\["failed", "cleaned"\]/);
 });
 
+test("opening a Task automatically opens its active Agent session on every viewport", () => {
+  assert.match(script, /function taskHasActiveAgentSession\(task\)/);
+  assert.match(script, /task\?\.runner_execution_id[\s\S]*task\.runtime_task_id[\s\S]*task\.runtime_session[\s\S]*task\.runtime_alive/);
+  assert.match(script, /if \(taskHasActiveAgentSession\(task\)[\s\S]*openPlatformAgentWorkspace\(workspaceTask\)/);
+});
+
 test("empty Tasks and Repositories use a low-contrast patterned board", () => {
   assert.match(styles, /\.task-list\.is-empty\s*\{[^}]*radial-gradient[^}]*22px 22px/);
   assert.match(styles, /\.repository-list\.is-empty\s*\{[^}]*radial-gradient[^}]*22px 22px/);
