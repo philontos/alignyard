@@ -8,6 +8,7 @@ import { runnerWebSocketUrl, type RunnerConfig } from "./config.js";
 import { executeRunnerRpc } from "./operations.js";
 import { db } from "../core/db.js";
 import { getOwnedTask } from "../core/ownership.js";
+import { utf8TerminalEnvironment } from "./terminal-env.js";
 import {
   RUNNER_PROTOCOL_VERSION,
   isRunnerRpcMethod,
@@ -133,7 +134,7 @@ export class RunnerClient {
           cols: 120,
           rows: 32,
           cwd: os.homedir(),
-          env: process.env as Record<string, string>,
+          env: utf8TerminalEnvironment(),
         });
         this.terminals.set(message.channel, { term });
         term.onData((data) => send(socket, { type: "terminal.data", channel: message.channel, data }));

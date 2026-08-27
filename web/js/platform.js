@@ -6,6 +6,12 @@ import {
 } from "./platform-agent.js";
 import { displayGitUrl, formatRepoDate } from "./core/repo-details.js";
 import { createRunnerOnboarding } from "./features/runner-onboarding.js";
+import {
+  closeTaskWorktreeBrowser,
+  initTaskWorktreeBrowser,
+  openTaskWorktreeBrowser,
+  taskWorktreeBrowserIsOpen,
+} from "./platform-worktree.js";
 
 const state = {
   view: "tasks",
@@ -725,56 +731,6 @@ function knowledgeKind(kind) {
   return "docs";
 }
 
-function knowledgeBody(content) {
-  return String(content || "").replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
-}
-
-function inlineKnowledgeMarkdown(value) {
-  return escapeHtml(value)
-    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-}
-
-function renderKnowledgeMarkdown(content) {
-  const lines = knowledgeBody(content).split(/\r?\n/);
-  const output = [];
-  let code = [];
-  let inCode = false;
-  for (const line of lines) {
-    if (line.startsWith("```")) {
-      if (inCode) {
-        output.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
-        code = [];
-      }
-      inCode = !inCode;
-    } else if (inCode) {
-      code.push(line);
-    } else {
-      const heading = line.match(/^(#{1,4})\s+(.+)$/);
-      if (heading) output.push(`<h${Math.min(4, heading[1].length + 1)}>${inlineKnowledgeMarkdown(heading[2])}</h${Math.min(4, heading[1].length + 1)}>`);
-      else if (/^\s*[-*]\s+/.test(line)) output.push(`<p class="knowledge-list-line">• ${inlineKnowledgeMarkdown(line.replace(/^\s*[-*]\s+/, ""))}</p>`);
-      else if (line.startsWith("> ")) output.push(`<blockquote>${inlineKnowledgeMarkdown(line.slice(2))}</blockquote>`);
-      else if (line.trim()) output.push(`<p>${inlineKnowledgeMarkdown(line)}</p>`);
-    }
-  }
-  if (code.length) output.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
-  return output.join("") || `<p class="detail-empty">文档正文为空。</p>`;
-}
-
-async function openWorktreeKnowledgeDocument(task, documentId, button) {
-  const preview = $("#worktree-knowledge-preview");
-  if (!preview) return;
-  $$('[data-knowledge-document]', $("#task-detail")).forEach((item) => item.classList.toggle("selected", item === button));
-  preview.innerHTML = `<div class="detail-empty">正在从当前 worktree 读取文档…</div>`;
-  try {
-    const result = await api(`/api/platform/tasks/${encodeURIComponent(task.key)}/knowledge?document_id=${encodeURIComponent(documentId)}`);
-    const document = result.document;
-    preview.innerHTML = `<header><span>${escapeHtml(document.id)}</span><strong>${escapeHtml(document.title)}</strong><code>${escapeHtml(document.path)}</code></header><article class="knowledge-document">${renderKnowledgeMarkdown(document.content)}</article>`;
-  } catch (error) {
-    preview.innerHTML = `<div class="detail-empty error">${escapeHtml(error.message)}</div>`;
-  }
-}
-
 async function loadWorktreeKnowledge(task) {
   const target = $("#worktree-knowledge");
   if (!target) return;
@@ -787,10 +743,8 @@ async function loadWorktreeKnowledge(task) {
       target.innerHTML = `<div class="detail-empty">当前 worktree 中还没有符合 .alignyard/ 协议的工程文档。</div>`;
       return;
     }
-    target.innerHTML = `<div class="worktree-knowledge-list">${result.documents.map((document) => `<button type="button" class="worktree-knowledge-row" data-knowledge-document="${escapeHtml(document.id)}"><span class="artifact-kind ${knowledgeKind(document.kind)}">${escapeHtml(knowledgeKind(document.kind).slice(0, 4))}</span><span><strong>${escapeHtml(document.title)}</strong><small>${escapeHtml(document.path)}</small></span></button>`).join("")}</div><section id="worktree-knowledge-preview" class="worktree-knowledge-preview"><div class="detail-empty">选择文档后在这里阅读；内容不会保存到 Platform。</div></section>`;
-    $$('[data-knowledge-document]', target).forEach((item) => item.addEventListener("click", () => openWorktreeKnowledgeDocument(task, item.dataset.knowledgeDocument, item)));
-    const first = $('[data-knowledge-document]', target);
-    if (first) void openWorktreeKnowledgeDocument(task, first.dataset.knowledgeDocument, first);
+    target.innerHTML = `<div class="worktree-knowledge-list">${result.documents.map((document) => `<button type="button" class="worktree-knowledge-row" data-knowledge-path="${escapeHtml(document.path)}"><span class="artifact-kind ${knowledgeKind(document.kind)}">${escapeHtml(knowledgeKind(document.kind).slice(0, 4))}</span><span><strong>${escapeHtml(document.title)}</strong><small>${escapeHtml(document.path)}</small></span><i aria-hidden="true">›</i></button>`).join("")}</div>`;
+    $$('[data-knowledge-path]', target).forEach((item) => item.addEventListener("click", () => openTaskWorktreeBrowser(task, { path: item.dataset.knowledgePath })));
   } catch (error) {
     if (state.selectedTask?.key !== taskKey || target !== $("#worktree-knowledge")) return;
     target.innerHTML = `<div class="detail-empty error">${escapeHtml(error.message)}</div>`;
@@ -963,7 +917,7 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
     <div class="detail-meta">${statusPill(task.status, task)}<span>负责人：${escapeHtml(task.owner)}</span><span>当前处理人：${escapeHtml(task.current_assignee || task.owner)}</span><span>${task.completed_at ? `完成于 ${escapeHtml(formatDate(task.completed_at))}` : `创建于 ${escapeHtml(formatDate(task.created_at))}`}</span></div>
     ${workflowNote}${reviewHandoff}${task.task_type === "repository_init" ? "" : commandList}
     <section class="detail-section"><div class="detail-section-head"><h2>Repositories · ${task.repositories.length}</h2><span class="protocol-badge">peer worktrees</span></div><div class="detail-repos">${task.repositories.map(detailRepository).join("")}</div></section>
-    <section class="detail-section"><div class="detail-section-head"><h2>工程文档</h2></div><p class="detail-section-note">Platform 通过你的 Runner 自动解析当前 worktree 中的 .alignyard/；文档仍只保存在 Repository 中。</p><div id="worktree-knowledge"><div class="detail-empty">${task.runtime_task_id && task.runtime_has_worktree ? "正在从当前 Runner worktree 解析 .alignyard/…" : "启动 Agent 后，这里会自动展示对应 worktree 中的工程文档。"}</div></div></section>
+    <section class="detail-section"><div class="detail-section-head"><h2>工程文档</h2>${task.runtime_task_id && task.runtime_has_worktree ? `<button class="text-button review-changes" type="button" data-open-worktree-changes>查看变更</button>` : ""}</div><p class="detail-section-note">Platform 通过你的 Runner 自动解析当前 worktree 中的 .alignyard/；点击文档进入完整 worktree 浏览页。</p><div id="worktree-knowledge"><div class="detail-empty">${task.runtime_task_id && task.runtime_has_worktree ? "正在从当前 Runner worktree 解析 .alignyard/…" : "启动 Agent 后，这里会自动展示对应 worktree 中的工程文档。"}</div></div></section>
     <div class="detail-actions">${taskNextAction(task)}</div>`;
   $("#task-drawer").hidden = false;
   $("#drawer-close").addEventListener("click", closeTaskDetail);
@@ -974,7 +928,8 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
   });
   wireAgentPicker($("#task-detail"));
   $$('[data-copy-command]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => copyCommand(commands[Number(button.dataset.copyCommand)])));
-  if (task.runtime_task_id && task.runtime_has_worktree) void loadWorktreeKnowledge(task);
+  if (task.runtime_task_id && task.runtime_has_worktree) void loadWorktreeKnowledge(workspaceTask);
+  $('[data-open-worktree-changes]', $("#task-detail"))?.addEventListener("click", () => openTaskWorktreeBrowser(workspaceTask, { tab: "changes" }));
   $$('[data-set-status]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => setTaskStatus(task.key, button.dataset.setStatus)));
   $$('[data-submit-review]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => openReviewDialog(task)));
   $$('[data-review-decision]', $("#task-detail")).forEach((button) => button.addEventListener("click", () => {
@@ -996,6 +951,7 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
 }
 
 function closeTaskDetail() {
+  if (taskWorktreeBrowserIsOpen()) closeTaskWorktreeBrowser();
   if (platformAgentWorkspaceIsOpen()) closePlatformAgentWorkspace();
   $("#task-drawer").hidden = true;
   state.selectedTask = null;
@@ -1342,7 +1298,8 @@ function bindEvents() {
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     const openAgentPicker = $("[data-agent-picker-menu]:not([hidden])")?.closest("[data-agent-picker]");
-    if (openAgentPicker) closeAgentPicker(openAgentPicker);
+    if (taskWorktreeBrowserIsOpen()) closeTaskWorktreeBrowser();
+    else if (openAgentPicker) closeAgentPicker(openAgentPicker);
     else if (platformAgentWorkspaceIsOpen() && matchMedia("(max-width: 760px)").matches) closePlatformAgentWorkspace();
     else if (!$("#confirm-dialog").hidden) closeConfirmDialog(false);
     else if (!$("#repository-detail-dialog").hidden) closeRepositoryDetails();
@@ -1357,6 +1314,7 @@ function bindEvents() {
     onError: (message) => toast(message, "error"),
     onStartReview: startReviewAgent,
   });
+  initTaskWorktreeBrowser({ api, onError: (message) => toast(message, "error") });
 }
 
 bindEvents();

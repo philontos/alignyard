@@ -32,6 +32,7 @@ import {
   repositoryRevisionPrompt,
   taskReviewPrompt,
 } from "./prompts.js";
+import type { WorktreeInspectRequest } from "../runner/worktree-inspector.js";
 
 type DB = Database.Database;
 
@@ -132,7 +133,7 @@ function runtimeResult(value: unknown): RuntimeResult {
 async function callExecution(
   env: RunnerWorkflowEnv,
   execution: PlatformRunnerExecution,
-  method: "execution.status" | "execution.resume" | "execution.stop" | "execution.cleanup" | "execution.message" | "execution.prepare-review" | "execution.knowledge",
+  method: "execution.status" | "execution.resume" | "execution.stop" | "execution.cleanup" | "execution.message" | "execution.prepare-review" | "execution.knowledge" | "execution.inspect-worktree",
   extra: Record<string, unknown> = {},
 ): Promise<unknown> {
   if (!execution.runner_task_id) throw new PlatformWorkflowError(409, "Runner Task 尚未创建");
@@ -143,18 +144,16 @@ async function callExecution(
   });
 }
 
-export async function taskKnowledgeOnRunner(
+function participantExecution(
   env: RunnerWorkflowEnv,
-  key: string,
+  task: PlatformTask,
   actor: RunnerWorkflowActor,
-  documentId?: unknown,
-): Promise<unknown> {
-  const task = taskFor(env, key);
+): PlatformRunnerExecution {
   const isOwner = task.owner_user_id != null ? task.owner_user_id === actor.id : task.owner === actor.name;
   const isReviewer = task.review?.reviewer_user_id != null
     ? task.review.reviewer_user_id === actor.id
     : task.review?.reviewer === actor.name;
-  if (!isOwner && !isReviewer) throw new PlatformWorkflowError(403, "只有 Task 参与者可以读取工程文档");
+  if (!isOwner && !isReviewer) throw new PlatformWorkflowError(403, "只有 Task 参与者可以读取 worktree");
   const row = env.db.prepare(
     "SELECT id FROM platform_runner_executions WHERE task_id=? " +
       "AND (actor_user_id=? OR (actor_user_id IS NULL AND actor=?)) " +
@@ -162,11 +161,42 @@ export async function taskKnowledgeOnRunner(
   ).get(task.id, actor.id, actor.name) as { id: string } | undefined;
   const execution = row ? getPlatformRunnerExecution(env.db, row.id) : undefined;
   if (!execution?.runner_task_id) {
-    throw new PlatformWorkflowError(409, "请先启动自己的 Agent 工作区，再从对应 worktree 读取工程文档");
+    throw new PlatformWorkflowError(409, "请先启动自己的 Agent 工作区，再读取对应 worktree");
   }
   if (!env.gateway.isOnline(execution.runner_id)) throw new PlatformWorkflowError(409, "当前 Runner 离线");
+  return execution;
+}
+
+export async function taskKnowledgeOnRunner(
+  env: RunnerWorkflowEnv,
+  key: string,
+  actor: RunnerWorkflowActor,
+  documentId?: unknown,
+): Promise<unknown> {
+  const task = taskFor(env, key);
+  const execution = participantExecution(env, task, actor);
   const requested = typeof documentId === "string" && documentId.trim() ? documentId.trim() : undefined;
   return callExecution(env, execution, "execution.knowledge", requested ? { document_id: requested } : {});
+}
+
+export async function taskWorktreeOnRunner(
+  env: RunnerWorkflowEnv,
+  key: string,
+  actor: RunnerWorkflowActor,
+  request: WorktreeInspectRequest,
+): Promise<unknown> {
+  const task = taskFor(env, key);
+  const execution = participantExecution(env, task, actor);
+  if (!request || !["tree", "file", "changes", "diff"].includes(request.operation)) {
+    throw new PlatformWorkflowError(400, "worktree 浏览请求无效");
+  }
+  if (["file", "diff"].includes(request.operation) && typeof request.path !== "string") {
+    throw new PlatformWorkflowError(400, "请选择要读取的文件");
+  }
+  return callExecution(env, execution, "execution.inspect-worktree", {
+    operation: request.operation,
+    ...(typeof request.path === "string" ? { path: request.path } : {}),
+  });
 }
 
 export async function startTaskOnRunner(

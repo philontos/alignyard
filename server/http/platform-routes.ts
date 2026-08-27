@@ -19,6 +19,7 @@ import {
 } from "../platform/catalog.js";
 import { PlatformWorkflowError } from "../platform/errors.js";
 import { authenticatedUser, getPlatformUser } from "../auth/auth.js";
+import type { WorktreeInspectRequest } from "../runner/worktree-inspector.js";
 
 export interface PlatformRouteActor { id: number; name: string }
 
@@ -31,6 +32,7 @@ export interface PlatformRouteBackend {
   startTask(key: string, actor: PlatformRouteActor, agent: ReturnType<typeof asAgentKind>, runnerId?: unknown): Promise<{ task: PlatformTask; runtime_created: boolean }>;
   submitReview(key: string, actor: PlatformRouteActor, input: { reviewer: string; reviewer_user_id: number; submitted_by: string; submitted_by_user_id: number }): Promise<PlatformTask>;
   taskKnowledge(key: string, actor: PlatformRouteActor, documentId?: unknown): Promise<unknown>;
+  taskWorktree(key: string, actor: PlatformRouteActor, request: WorktreeInspectRequest): Promise<unknown>;
   startReview(key: string, actor: PlatformRouteActor, agent: ReturnType<typeof asAgentKind>, runnerId?: unknown): Promise<{ task: PlatformTask; runtime_created: boolean }>;
   decideReview(key: string, actor: PlatformRouteActor, decision: "approved" | "changes_requested", feedback?: unknown): Promise<PlatformTask>;
   createChangeRequest(key: string, actor: PlatformRouteActor): Promise<PlatformTask>;
@@ -168,6 +170,20 @@ app.get("/api/platform/tasks/:key", async (req, res) => {
 app.get("/api/platform/tasks/:key/knowledge", async (req, res) => {
   try {
     res.json(await backend.taskKnowledge(req.params.key, workflowActor(req), req.query.document_id));
+  } catch (error: any) {
+    if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
+    res.status(502).json({ error: String(error?.message || error) });
+  }
+});
+
+app.post("/api/platform/tasks/:key/worktree/inspect", async (req, res) => {
+  try {
+    res.setHeader("cache-control", "no-store");
+    res.json(await backend.taskWorktree(
+      req.params.key,
+      workflowActor(req),
+      req.body as WorktreeInspectRequest,
+    ));
   } catch (error: any) {
     if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
     res.status(502).json({ error: String(error?.message || error) });

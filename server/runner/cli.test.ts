@@ -18,5 +18,9 @@ test("macOS LaunchAgent starts the self-contained Runner as the current user", (
   assert.doesNotMatch(plist, /<string>runner<\/string><string>start<\/string>/);
   assert.match(plist, /RunAtLoad/);
   assert.match(plist, /KeepAlive/);
+  assert.match(plist, /EnvironmentVariables/);
+  assert.match(plist, /<key>LANG<\/key><string>en_US\.UTF-8<\/string>/);
+  assert.match(plist, /<key>LC_ALL<\/key><string>en_US\.UTF-8<\/string>/);
+  assert.match(plist, /<key>LC_CTYPE<\/key><string>en_US\.UTF-8<\/string>/);
   assert.doesNotMatch(plist, /UserName|sudo/);
 });

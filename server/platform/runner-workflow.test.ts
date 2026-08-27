@@ -17,6 +17,7 @@ import {
   startTaskOnRunner,
   submitTaskForReviewOnRunner,
   taskKnowledgeOnRunner,
+  taskWorktreeOnRunner,
 } from "./runner-workflow.ts";
 
 function fixture() {
@@ -65,6 +66,9 @@ function fixture() {
       if (method === "execution.knowledge") return params.document_id
         ? { document: { id: params.document_id, title: "仓库概览", content: "# 仓库概览" } }
         : { documents: [{ id: "doc.shared.overview", title: "仓库概览", path: ".alignyard/docs/shared/overview.md" }] };
+      if (method === "execution.inspect-worktree") return params.operation === "tree"
+        ? { kind: "tree", files: [".alignyard/docs/shared/overview.md"] }
+        : { kind: params.operation, path: params.path };
       if (method === "change-request.create") return { number: 7, url: "https://github.com/team/example/pull/7", state: "open" };
       if (method === "change-request.merge") return { number: 7, url: "https://github.com/team/example/pull/7", state: "merged" };
       if (method === "repository.refresh-protocol") return { state: "ready", error: null };
@@ -244,4 +248,28 @@ test("engineering documents are read transiently from the requesting participant
   assert.equal(document.document.content, "# 仓库概览");
   const reviewerCall = calls.filter((call) => call.method === "execution.knowledge").at(-1)!;
   assert.equal(reviewerCall.runnerId, "reviewer-runner");
+});
+
+test("worktree files and diffs are inspected on the requesting participant's Runner", async () => {
+  const { task, calls, env } = fixture();
+  const author = { id: 1, name: "Author" };
+  const stranger = { id: 3, name: "Stranger" };
+  await startTaskOnRunner(env, task.key, author, "codex");
+
+  const tree = await taskWorktreeOnRunner(env, task.key, author, { operation: "tree" }) as { files: string[] };
+  assert.deepEqual(tree.files, [".alignyard/docs/shared/overview.md"]);
+  const call = calls.filter((item) => item.method === "execution.inspect-worktree").at(-1)!;
+  assert.equal(call.runnerId, "author-runner");
+  assert.equal(call.params.operation, "tree");
+  assert.equal(call.params.execution_id.startsWith("rex_"), true);
+  assert.equal(call.params.worktree_path, undefined, "Platform never sends a local worktree path");
+
+  await assert.rejects(
+    taskWorktreeOnRunner(env, task.key, stranger, { operation: "tree" }),
+    /只有 Task 参与者/,
+  );
+  await assert.rejects(
+    taskWorktreeOnRunner(env, task.key, author, { operation: "diff" }),
+    /请选择要读取的文件/,
+  );
 });

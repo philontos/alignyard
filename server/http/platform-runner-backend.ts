@@ -12,6 +12,7 @@ import {
   startTaskOnRunner,
   submitTaskForReviewOnRunner,
   taskKnowledgeOnRunner,
+  taskWorktreeOnRunner,
 } from "../platform/runner-workflow.js";
 import type { PlatformRouteBackend } from "./platform-routes.js";
 
@@ -43,6 +44,7 @@ export const platformRunnerBackend: PlatformRouteBackend = {
     startTaskOnRunner(workflowEnv, key, actor, agent, runnerId),
   submitReview: (key, actor, input) => submitTaskForReviewOnRunner(workflowEnv, key, actor, input),
   taskKnowledge: (key, actor, documentId) => taskKnowledgeOnRunner(workflowEnv, key, actor, documentId),
+  taskWorktree: (key, actor, request) => taskWorktreeOnRunner(workflowEnv, key, actor, request),
   startReview: (key, actor, agent, runnerId) =>
     startReviewOnRunner(workflowEnv, key, actor, agent, runnerId),
   decideReview: (key, actor, decision, feedback) =>

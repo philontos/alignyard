@@ -8,6 +8,7 @@
   <title>Alignyard · Tasks</title>
   <link rel="stylesheet" href="/vendor/xterm.css" />
   <link rel="stylesheet" href="/css/platform.css" />
+  <link rel="stylesheet" href="/css/platform-worktree.css" />
   <link rel="stylesheet" href="/css/features/runner-onboarding.css" />
 </head>
 <body>
@@ -249,6 +250,32 @@
       </footer>
     </section>
   </div>
+
+
+  <section class="worktree-browser" id="worktree-browser" aria-label="Task worktree 浏览" hidden>
+    <header class="worktree-browser-head">
+      <button class="worktree-browser-back" id="worktree-browser-close" type="button">返回 Task</button>
+      <div class="worktree-browser-heading">
+        <span id="worktree-browser-key">AY-000</span>
+        <strong id="worktree-browser-title">工程文档</strong>
+        <small id="worktree-browser-repository"></small>
+      </div>
+      <code id="worktree-browser-revision"></code>
+      <button class="worktree-browser-refresh" id="worktree-browser-refresh" type="button" aria-label="刷新 worktree">刷新</button>
+    </header>
+    <nav class="worktree-browser-tabs" aria-label="worktree 浏览模式">
+      <button class="active" id="worktree-tab-files" type="button" data-worktree-tab="files">文件</button>
+      <button id="worktree-tab-changes" type="button" data-worktree-tab="changes">变更</button>
+    </nav>
+    <div class="worktree-browser-banner" id="worktree-browser-banner" hidden></div>
+    <div class="worktree-browser-body">
+      <aside class="worktree-browser-tree" id="worktree-browser-tree" aria-label="文件树"></aside>
+      <main class="worktree-browser-main">
+        <header class="worktree-browser-path" id="worktree-browser-path"></header>
+        <article class="worktree-browser-content" id="worktree-browser-content"></article>
+      </main>
+    </div>
+  </section>
 
 
   <div class="toast-region" id="toast-region" aria-live="polite"></div>

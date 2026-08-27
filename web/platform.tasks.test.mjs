@@ -4,6 +4,7 @@ import fs from "node:fs";
 
 const html = fs.readFileSync(new URL("./platform.html", import.meta.url), "utf8");
 const script = fs.readFileSync(new URL("./js/platform.js", import.meta.url), "utf8");
+const worktree = fs.readFileSync(new URL("./js/platform-worktree.js", import.meta.url), "utf8");
 const agent = fs.readFileSync(new URL("./js/platform-agent.js", import.meta.url), "utf8");
 const styles = fs.readFileSync(new URL("./css/platform.css", import.meta.url), "utf8");
 const platformRoutes = fs.readFileSync(new URL("../server/http/platform-routes.ts", import.meta.url), "utf8");
@@ -241,13 +242,27 @@ test("Task detail reads protocol documents transiently from the participant's wo
   assert.doesNotMatch(script, /openTaskCodeContext|data-open-task-changes|data-artifact-path/);
   assert.doesNotMatch(script, /data-load-knowledge/);
   assert.match(script, /task\.runtime_task_id && task\.runtime_has_worktree/);
-  assert.match(script, /void loadWorktreeKnowledge\(task\)/);
-  assert.match(script, /void openWorktreeKnowledgeDocument\(task, first\.dataset\.knowledgeDocument, first\)/);
+  assert.match(script, /void loadWorktreeKnowledge\(workspaceTask\)/);
+  assert.match(script, /data-knowledge-path/);
+  assert.match(script, /openTaskWorktreeBrowser\(task, \{ path: item\.dataset\.knowledgePath \}\)/);
   assert.match(script, /\/api\/platform\/tasks\/\$\{encodeURIComponent\(task\.key\)\}\/knowledge/);
-  assert.match(script, /renderKnowledgeMarkdown/);
-  assert.match(script, /内容不会保存到 Platform/);
+  assert.doesNotMatch(script, /worktree-knowledge-preview|renderKnowledgeMarkdown/);
   assert.match(platformRoutes, /app\.get\("\/api\/platform\/tasks\/:key\/knowledge"/);
   assert.doesNotMatch(platformRoutes, /\/api\/platform\/artifacts|\/api\/platform\/tasks\/:key\/sync/);
+});
+
+test("document clicks open an Alignyard full-page worktree file and diff browser", () => {
+  assert.match(html, /css\/platform-worktree\.css/);
+  assert.match(html, /id="worktree-browser"[\s\S]*id="worktree-tab-files"[\s\S]*id="worktree-tab-changes"[\s\S]*id="worktree-browser-tree"/);
+  assert.match(script, /data-open-worktree-changes/);
+  assert.match(script, /openTaskWorktreeBrowser\(workspaceTask, \{ tab: "changes" \}\)/);
+  assert.match(worktree, /operation, \.\.\.\(path \? \{ path \} : \{\}\)/);
+  assert.match(worktree, /worktree-browser-content/);
+  assert.match(worktree, /markdownHtml/);
+  assert.match(worktree, /renderDiff/);
+  assert.match(worktree, /Platform only authenticates and/);
+  assert.match(platformRoutes, /app\.post\("\/api\/platform\/tasks\/:key\/worktree\/inspect"/);
+  assert.match(platformRoutes, /cache-control", "no-store"/);
 });
 
 test("Runner onboarding monitors versions and offers a local upgrade command", () => {

@@ -24,6 +24,7 @@ import {
   type ChangeRequestInput,
 } from "../platform/forge.js";
 import type { RunnerRpcMethod } from "./protocol.js";
+import { inspectTaskWorktree } from "./worktree-inspector.js";
 import {
   ALIGNYARD_MANIFEST,
   indexRepositoryProtocol,
@@ -232,6 +233,15 @@ async function readExecutionKnowledge(params: Record<string, any>) {
   return { documents, head_commit: headCommit };
 }
 
+async function inspectExecutionWorktree(params: Record<string, any>) {
+  const task = getOwnedTask(db, Number(params.runner_task_id));
+  if (!task?.worktree_path) throw new Error("Runner Task worktree 不存在");
+  return inspectTaskWorktree(localExecutor, task, {
+    operation: params.operation,
+    ...(typeof params.path === "string" ? { path: params.path } : {}),
+  });
+}
+
 function changeRequestInput(params: Record<string, any>): ChangeRequestInput & Record<string, any> {
   const task = getOwnedTask(db, Number(params.runner_task_id));
   if (!task?.worktree_path) throw new Error("Runner Task worktree 不存在");
@@ -278,6 +288,7 @@ export async function executeRunnerRpc(method: RunnerRpcMethod, rawParams: unkno
   }
   if (method === "execution.prepare-review") return prepareReview(params);
   if (method === "execution.knowledge") return readExecutionKnowledge(params);
+  if (method === "execution.inspect-worktree") return inspectExecutionWorktree(params);
   if (method === "repository.branches") {
     const repository = await ensureRepository(requiredObject(params.repository));
     const result = await branchesForOwnedRepo(ownedRepoEnv, repository.id);

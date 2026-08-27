@@ -45,6 +45,12 @@ export function renderLaunchAgent(command: string, home: string): string {
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ProcessType</key><string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>LANG</key><string>en_US.UTF-8</string>
+    <key>LC_ALL</key><string>en_US.UTF-8</string>
+    <key>LC_CTYPE</key><string>en_US.UTF-8</string>
+  </dict>
   <key>StandardOutPath</key><string>${xml(path.join(logDir, "runner.log"))}</string>
   <key>StandardErrorPath</key><string>${xml(path.join(logDir, "runner-error.log"))}</string>
 </dict>
