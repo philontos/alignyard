@@ -14,7 +14,7 @@ Browser ── HTTPS/session ──► Platform + SQLite
 
 ## 组件边界
 
-Platform 负责 Web、Google 登录、Repository 元数据、Task、Review、Prompt、工程知识快照、Runner registry、有限 RPC 和 execution-scoped 终端中继。唯一入口为 `server/platform/main.ts`。
+Platform 负责 Web、Google 登录、Repository 元数据、Task、Review、Prompt、Runner registry、有限 RPC，以及 execution-scoped 终端中继。Repository 与 Task 的具体工程知识始终留在用户 worktree；Platform 只在用户打开对应 Task 时按需解析和呈现 `.alignyard/`。唯一入口为 `server/platform/main.ts`。
 
 Runner 负责本机 Repository mirror、隔离 worktree、tmux、Agent、push 与 PR/MR。唯一入口为 `server/runner/main.ts`。用户机器只建立出站连接，不开放入站端口。
 

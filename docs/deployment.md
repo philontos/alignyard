@@ -31,6 +31,14 @@ cp .env.example .env
 
 脚本执行 `docker compose up -d --build`，等待 `/healthz` 通过。容器只监听宿主机 `127.0.0.1:4500`，应由 Caddy、Nginx 或云负载均衡器终止 HTTPS，并转发 HTTP 与 WebSocket。
 
+GCP 单 VM 部署可以使用仓库内的轻量发布脚本。它只上传当前 Git commit 和已构建的 Runner 制品，不在服务器保存 GitHub 凭据：
+
+```bash
+./scripts/deploy-gcp-vm.sh
+```
+
+默认目标是项目 `p02-internal-services`、区域 `asia-east1-b` 中的 `alignyard-platform-1`；可通过 `ALIGNYARD_GCP_PROJECT`、`ALIGNYARD_GCP_ZONE`、`ALIGNYARD_GCP_INSTANCE` 覆盖。VM 的 `/opt/alignyard/shared/.env` 独立于 release 保存，发布成功后 `/opt/alignyard/current` 指向当前版本。生产 Compose 覆盖文件会启动 Caddy，并根据 `ALIGNYARD_DOMAIN` 自动申请和续签 HTTPS 证书。
+
 SQLite 数据保存在 Docker volume `alignyard-data`。不要运行多个 Platform 副本共享同一个 SQLite 文件；需要横向扩展时再迁移到 PostgreSQL。
 
 ## 4. 反向代理
