@@ -4,6 +4,7 @@ import { asAgentKind } from "../session/agent.js";
 import {
   createPlatformRepository,
   createRepositoryInitializationTask,
+  createRepositoryUpdateTask,
   createPlatformTask,
   deletePlatformRepository,
   getPlatformRepository,
@@ -133,6 +134,19 @@ app.post("/api/platform/repositories/:id/initialize", async (req, res) => {
   try {
     const user = authenticatedUser(req);
     const task = createRepositoryInitializationTask(db, Number(req.params.id), user.name, user.id);
+    const repository = getPlatformRepository(db, Number(req.params.id));
+    res.json({ task: await platformTaskPayload(task), repository, runtime_created: false });
+  } catch (error: any) {
+    if (error instanceof PlatformWorkflowError) return res.status(error.status).json({ error: error.message });
+    if (error instanceof PlatformValidationError) return res.status(409).json({ error: error.message });
+    res.status(500).json({ error: String(error?.message || error) });
+  }
+});
+
+app.post("/api/platform/repositories/:id/update", async (req, res) => {
+  try {
+    const user = authenticatedUser(req);
+    const task = createRepositoryUpdateTask(db, Number(req.params.id), user.name, user.id);
     const repository = getPlatformRepository(db, Number(req.params.id));
     res.json({ task: await platformTaskPayload(task), repository, runtime_created: false });
   } catch (error: any) {

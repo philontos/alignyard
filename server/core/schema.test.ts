@@ -48,12 +48,14 @@ test("initSchema stores compatible protocol state on platform repositories", () 
   assert.ok(columns.includes("protocol_initialized"));
   assert.ok(columns.includes("protocol_state"));
   assert.ok(columns.includes("protocol_error"));
+  assert.ok(columns.includes("protocol_version"));
+  assert.ok(columns.includes("framework_version"));
   db.prepare(
     "INSERT INTO platform_repositories (name,git_url,created_by) VALUES ('repo','git@example/repo','Phil')",
   ).run();
   assert.deepEqual(
-    db.prepare("SELECT protocol_initialized,protocol_state FROM platform_repositories").get(),
-    { protocol_initialized: 0, protocol_state: "uninitialized" },
+    db.prepare("SELECT protocol_initialized,protocol_state,protocol_version,framework_version FROM platform_repositories").get(),
+    { protocol_initialized: 0, protocol_state: "uninitialized", protocol_version: null, framework_version: 0 },
   );
 });
 

@@ -52,3 +52,22 @@ test("ay new refuses undeclared scopes and existing paths", async () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("ay update check previews framework drift before applying an idempotent update", async () => {
+  const root = temporaryRepository();
+  const result = output();
+  try {
+    await runAy(["init", root], result.io);
+    const skill = path.join(root, ".alignyard/skills/alignyard-knowledge/SKILL.md");
+    fs.writeFileSync(skill, "legacy skill\n", "utf8");
+    assert.equal(await runAy(["update", root, "--check"], result.io), 0);
+    assert.match(result.out.at(-1) || "", /"update_available":true/);
+    assert.equal(fs.readFileSync(skill, "utf8"), "legacy skill\n");
+    assert.equal(await runAy(["update", root], result.io), 0);
+    assert.match(fs.readFileSync(skill, "utf8"), /Framework update/);
+    assert.equal(await runAy(["update", root, "--check"], result.io), 0);
+    assert.match(result.out.at(-1) || "", /"update_available":false/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

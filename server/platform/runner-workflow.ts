@@ -29,6 +29,7 @@ import { PlatformWorkflowError } from "./errors.js";
 import {
   knowledgeDesignPrompt,
   repositoryInitializationPrompt,
+  repositoryUpdatePrompt,
   repositoryRevisionPrompt,
   taskReviewPrompt,
 } from "./prompts.js";
@@ -259,7 +260,9 @@ export async function startTaskOnRunner(
       ? repositoryRevisionPrompt(task)
       : task.task_type === "repository_init"
         ? repositoryInitializationPrompt({ task, ayCommand: "ay" })
-        : knowledgeDesignPrompt(task);
+        : task.task_type === "repository_update"
+          ? repositoryUpdatePrompt(task)
+          : knowledgeDesignPrompt(task);
     const started = runtimeResult(await env.gateway.call(runner.id, "execution.start", {
       execution_id: executionId,
       repository: repositoryInput(task),
@@ -439,7 +442,11 @@ function changeRequestParams(task: PlatformTask, execution: PlatformRunnerExecut
     runner_task_id: execution.runner_task_id,
     base_branch: repository.base_branch,
     head_branch: repository.work_branch,
-    title: `[${task.key}] ${task.task_type === "repository_init" ? "Initialize Alignyard knowledge" : task.title}`,
+    title: `[${task.key}] ${task.task_type === "repository_init"
+      ? "Initialize Alignyard knowledge"
+      : task.task_type === "repository_update"
+        ? "Update Alignyard knowledge framework"
+        : task.title}`,
     body: `Alignyard Task: ${task.key}\n\n${task.description || task.title}`,
     number: task.pr_number,
   };
@@ -453,7 +460,7 @@ export async function createChangeRequestOnRunner(
   let task = taskFor(env, key);
   requireTaskOwner(task, actor);
   if (task.status !== "approved") throw new PlatformWorkflowError(409, "Task 需要先通过 Review");
-  if (task.task_type !== "repository_init") {
+  if (!["repository_init", "repository_update"].includes(task.task_type)) {
     throw new PlatformWorkflowError(409, "普通 Task 已形成设计基线；实现与合并闭环将在后续能力中处理");
   }
   const execution = authorRunnerExecution(env, task);
@@ -466,15 +473,20 @@ async function refreshProtocolOnRunner(env: RunnerWorkflowEnv, task: PlatformTas
   const repository = editableRepository(task);
   const result = await env.gateway.call(execution.runner_id, "repository.refresh-protocol", {
     repository: repositoryInput(task),
-  }) as { state: "uninitialized" | "ready" | "invalid"; error: string | null };
-  const refreshed = setPlatformRepositoryProtocolState(env.db, repository.id, result.state, result.error);
+  }) as {
+    state: "uninitialized" | "ready" | "outdated" | "invalid";
+    error: string | null;
+    protocol_version?: number | null;
+    framework_version?: number;
+  };
+  const refreshed = setPlatformRepositoryProtocolState(env.db, repository.id, result.state, result.error, result);
   if (!refreshed) throw new PlatformWorkflowError(404, "Repository 不存在");
   return refreshed;
 }
 
 async function finishMergedTask(env: RunnerWorkflowEnv, task: PlatformTask, execution: PlatformRunnerExecution) {
   let repository = editableRepository(task);
-  if (task.task_type === "repository_init") {
+  if (["repository_init", "repository_update"].includes(task.task_type)) {
     const refreshed = await refreshProtocolOnRunner(env, task, execution);
     if (refreshed.protocol_state !== "ready") {
       throw new PlatformWorkflowError(409, refreshed.protocol_error || "合并后默认分支尚未通过初始化检查");
@@ -540,10 +552,12 @@ export async function refreshRepositoryOnRunner(
   if (!repository) throw new PlatformWorkflowError(404, "Repository 不存在");
   const runner = selectRunner(env, actor, requestedRunnerId);
   const result = await env.gateway.call(runner.id, "repository.refresh-protocol", { repository }) as {
-    state: "uninitialized" | "ready" | "invalid";
+    state: "uninitialized" | "ready" | "outdated" | "invalid";
     error: string | null;
+    protocol_version?: number | null;
+    framework_version?: number;
   };
-  return setPlatformRepositoryProtocolState(env.db, repositoryId, result.state, result.error)!;
+  return setPlatformRepositoryProtocolState(env.db, repositoryId, result.state, result.error, result)!;
 }
 
 export async function repositoryBranchesOnRunner(

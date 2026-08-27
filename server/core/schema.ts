@@ -149,6 +149,8 @@ CREATE TABLE IF NOT EXISTS platform_repositories (
   protocol_initialized INTEGER NOT NULL DEFAULT 0,
   protocol_state TEXT NOT NULL DEFAULT 'uninitialized',
   protocol_error TEXT,
+  protocol_version INTEGER,
+  framework_version INTEGER NOT NULL DEFAULT 0,
   created_by TEXT NOT NULL,
   created_by_user_id INTEGER,
   created_at TEXT DEFAULT (datetime('now')),
@@ -339,6 +341,8 @@ function reconcileColumns(db: DB) {
   addColumn(db, "platform_repositories", "protocol_initialized", "INTEGER NOT NULL DEFAULT 0");
   addColumn(db, "platform_repositories", "protocol_state", "TEXT NOT NULL DEFAULT 'uninitialized'");
   addColumn(db, "platform_repositories", "protocol_error", "TEXT");
+  addColumn(db, "platform_repositories", "protocol_version", "INTEGER");
+  addColumn(db, "platform_repositories", "framework_version", "INTEGER NOT NULL DEFAULT 0");
   addColumn(db, "platform_repositories", "created_by_user_id", "INTEGER");
   addColumn(db, "platform_tasks", "task_type", "TEXT NOT NULL DEFAULT 'change'");
   addColumn(db, "platform_tasks", "owner_user_id", "INTEGER");
@@ -383,7 +387,7 @@ function normalizePlatformProtocolWorkflow(db: DB) {
     UPDATE platform_repositories
     SET protocol_state = CASE
       WHEN protocol_initialized=1 THEN 'ready'
-      WHEN protocol_state NOT IN ('uninitialized','initializing','ready','invalid') THEN 'uninitialized'
+      WHEN protocol_state NOT IN ('uninitialized','initializing','ready','outdated','invalid') THEN 'uninitialized'
       ELSE protocol_state
     END;
 
@@ -399,7 +403,7 @@ function normalizePlatformProtocolWorkflow(db: DB) {
     );
 
     UPDATE platform_repositories
-    SET protocol_initialized=CASE WHEN protocol_state='ready' THEN 1 ELSE 0 END;
+    SET protocol_initialized=CASE WHEN protocol_state IN ('ready','outdated') THEN 1 ELSE 0 END;
   `);
 }
 

@@ -45,15 +45,21 @@ test("switching a primary view closes the expanded Task workspace", () => {
   assert.match(setView, /if \(!\$\("#task-drawer"\)\.hidden\) closeTaskDetail\(\)/);
 });
 
-test("Repositories surface shows protocol workflow state and creates a dedicated init Task", () => {
+test("Repositories surface detects protocol state and creates lifecycle Tasks", () => {
   assert.match(script, /repositoryProtocolState/);
   assert.match(script, /state-\$\{escapeHtml\(protocolState\)\}/);
   assert.match(script, /data-init-repository/);
   assert.match(script, /\/api\/platform\/repositories\/\$\{repositoryId\}\/initialize/);
   assert.match(script, /task\.task_type === "repository_init"/);
+  assert.match(script, /outdated: "可更新"/);
+  assert.match(script, /data-update-repository/);
+  assert.match(script, /\/api\/platform\/repositories\/\$\{repositoryId\}\/update/);
+  assert.match(script, /task\.task_type === "repository_update"/);
+  assert.match(script, /refreshRepositoryProtocolsAutomatically/);
   assert.match(script, /已创建，请选择 Agent 启动/);
   const initializeRoute = platformRoutes.match(/app\.post\("\/api\/platform\/repositories\/:id\/initialize"[\s\S]*?app\.post\("\/api\/platform\/repositories\/:id\/refresh"/)?.[0] || "";
   assert.match(initializeRoute, /createRepositoryInitializationTask/);
+  assert.match(initializeRoute, /createRepositoryUpdateTask/);
   assert.doesNotMatch(initializeRoute, /startRepositoryInitialization/);
   assert.doesNotMatch(html, /notice-card|repo-search|repository-card/);
 });
@@ -92,7 +98,7 @@ test("Task creation keeps one Repository role and leaves edit intent to the user
   assert.match(styles, /\.repo-option\s*\{[^}]*grid-template-columns:\s*24px minmax\(120px,1fr\) 180px/);
 });
 
-test("Repository Init workspace closes runtime, Review, PR, and merge behind explicit actions", () => {
+test("Repository lifecycle workspace closes runtime, Review, PR, and merge behind explicit actions", () => {
   assert.match(script, /data-run-init/);
   assert.match(script, /data-author-agent[\s\S]*Codex[\s\S]*Claude Code[\s\S]*Kimi CLI/);
   const initActions = script.match(/function initTaskActions[\s\S]*?\n}/)?.[0] || "";
@@ -113,7 +119,7 @@ test("Repository Init workspace closes runtime, Review, PR, and merge behind exp
   assert.match(script, /pendingActions/);
   assert.match(script, /正在创建 \$\{requestLabel\}/);
   assert.match(script, /要求修改/);
-  assert.match(script, /重试完成初始化/);
+  assert.match(script, /重试完成\$\{task\.task_type === "repository_update" \? "更新" : "初始化"\}/);
   assert.match(script, /openPlatformAgentWorkspace\(workspaceTask\)/);
   assert.match(script, /mobile-agent-action[^>]+data-open-agent/);
   assert.doesNotMatch(script, /index\.html\?task=/);
@@ -154,9 +160,9 @@ test("Repository Init workspace closes runtime, Review, PR, and merge behind exp
   assert.match(script, /手动模式与诊断命令/);
 });
 
-test("Repository Init presents the Repository name with contextual help and no role badge", () => {
+test("Repository lifecycle Task presents the Repository name with contextual help and no role badge", () => {
   assert.match(script, /function taskDisplayTitle/);
-  assert.match(script, /task\.task_type !== "repository_init"/);
+  assert.match(script, /isRepositoryLifecycleTask\(task\)/);
   assert.match(script, /class="detail-title-row"/);
   assert.match(script, /class="task-context-help"/);
   assert.match(script, /role="tooltip"/);
@@ -191,10 +197,10 @@ test("Review is an assigned handoff with an optional reviewer Agent and a separa
 
 test("ordinary Task approval exposes a design baseline instead of PR actions", () => {
   const actions = script.match(/function initTaskActions[\s\S]*?\n}\n\nfunction taskLocalCommands/)?.[0] || "";
-  assert.match(actions, /task\.status === "approved" && task\.task_type !== "repository_init"/);
+  assert.match(actions, /task\.status === "approved" && !isRepositoryLifecycleTask\(task\)/);
   assert.match(actions, /设计已确认，可以开始实现/);
   assert.match(actions, /repository\.design_commit/);
-  assert.match(script, /status === "approved" && task\?\.task_type !== "repository_init"[\s\S]*"可开始实现"/);
+  assert.match(script, /status === "approved" && !isRepositoryLifecycleTask\(task\)[\s\S]*"可开始实现"/);
 });
 
 test("a returned Repository Init always exposes explicit resumption and Review submission", () => {
@@ -344,6 +350,8 @@ test("Task detail exposes only implemented ay workflow commands", () => {
   assert.match(script, /ay new doc overview --scope shared/);
   assert.match(script, /--title \\"仓库概览\\"/);
   assert.match(script, /ay validate \./);
+  assert.match(script, /ay update --check \./);
+  assert.match(script, /ay update \./);
   assert.doesNotMatch(script, /ay sync|--platform/);
 });
 

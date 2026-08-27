@@ -7,6 +7,7 @@ export const ALIGNYARD_DIR = ".alignyard";
 export const ALIGNYARD_MANIFEST = `${ALIGNYARD_DIR}/repository.yaml`;
 export const ALIGNYARD_PROTOCOL_VERSION = 2 as const;
 export const ALIGNYARD_PROTOCOL_VERSIONS = [1, 2] as const;
+export const ALIGNYARD_FRAMEWORK_VERSION = 1 as const;
 export type AlignyardProtocolVersion = typeof ALIGNYARD_PROTOCOL_VERSIONS[number];
 
 export const KNOWLEDGE_KINDS = ["doc", "spec", "adr", "plan"] as const;
@@ -36,6 +37,7 @@ export interface ProtocolScope {
 
 export interface RepositoryProtocolManifest {
   version: AlignyardProtocolVersion;
+  framework_version: number;
   preset: "basic";
   scopes: ProtocolScope[];
   entrypoints?: {
@@ -74,6 +76,19 @@ export interface CreateProtocolDocumentInput {
   slug: string;
   scope: string;
   title?: string;
+}
+
+export interface FrameworkUpdateChange {
+  path: string;
+  action: "create" | "replace" | "merge";
+}
+
+export interface FrameworkUpdateResult {
+  repository: string;
+  check: boolean;
+  from: { protocol_version: AlignyardProtocolVersion; framework_version: number };
+  to: { protocol_version: typeof ALIGNYARD_PROTOCOL_VERSION; framework_version: typeof ALIGNYARD_FRAMEWORK_VERSION };
+  changes: FrameworkUpdateChange[];
 }
 
 const KIND_DIRS: Record<KnowledgeKind, string> = {
@@ -154,6 +169,19 @@ export function parseRepositoryManifest(text: string): { manifest?: RepositoryPr
   if (!isRecord(raw)) return { errors: ["repository.yaml: 根节点必须是对象"] };
   const version = raw.version as AlignyardProtocolVersion;
   if (!ALIGNYARD_PROTOCOL_VERSIONS.includes(version)) errors.push("repository.yaml: version 必须是 1 或 2");
+  let frameworkVersion = 0;
+  if (raw.framework_version != null) {
+    if (!Number.isInteger(raw.framework_version) || Number(raw.framework_version) < 0) {
+      errors.push("repository.yaml: framework_version 必须是非负整数");
+    } else {
+      frameworkVersion = Number(raw.framework_version);
+      if (frameworkVersion > ALIGNYARD_FRAMEWORK_VERSION) {
+        errors.push(
+          `repository.yaml: framework_version ${frameworkVersion} 高于当前 ay 支持的 ${ALIGNYARD_FRAMEWORK_VERSION}；请先升级 Runner`,
+        );
+      }
+    }
+  }
   if (raw.preset !== "basic") errors.push("repository.yaml: preset 必须是 basic");
   if (!Array.isArray(raw.scopes) || raw.scopes.length === 0) {
     errors.push("repository.yaml: 至少声明一个 scope");
@@ -196,7 +224,16 @@ export function parseRepositoryManifest(text: string): { manifest?: RepositoryPr
 
   return errors.length
     ? { errors }
-    : { manifest: { version, preset: "basic", scopes, ...(entrypoints ? { entrypoints } : {}) }, errors };
+    : {
+        manifest: {
+          version,
+          framework_version: frameworkVersion,
+          preset: "basic",
+          scopes,
+          ...(entrypoints ? { entrypoints } : {}),
+        },
+        errors,
+      };
 }
 
 function markdownFiles(root: string, errors: string[]): string[] {
@@ -427,6 +464,30 @@ const DEFAULT_TEMPLATES: Record<KnowledgeKind, string> = {
   plan: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景与目标\n\n# 依据与约束\n\n# 实现设计\n\n# 修改范围\n\n# 保持不变\n\n# 实施步骤\n\n# 验证方案\n\n# 文档更新\n\n# 未决问题\n`,
 };
 
+const DEFAULT_README = `# Alignyard 工程意图
+
+这个目录是 Repository 中随代码版本管理的核心工程意图与架构约束真源。它只记录未来 AI 不知道时可能造成整体设计漂移的信息；具体函数、局部算法和普通字段传递仍以代码、类型和测试为准。
+
+\`repository.yaml\` 声明协议、知识框架版本、固定入口与逻辑 scopes；Docs 记录当前有效的稳定架构事实，Specs 描述一次变化的意图与边界，ADRs 保存长期取舍，Plans 提供可选的可执行技术方案。文档作者和审核轨迹优先使用 Git commit 与 PR/MR/Alignyard Review，不额外维护一套作者字段。
+
+使用 \`ay new\` 创建文档，在 Review 前运行 \`ay validate\` 并提交全部改动。\`ay update --check\` 可预览框架升级，\`ay update\` 只更新 Alignyard 管理的 Skill、模板和协议结构，不覆盖 Repository 的知识正文。工程文档始终保存在 Repository 和 worktree 中；Platform 不保存副本。
+`;
+
+const DEFAULT_CONSTITUTION = `---
+id: doc.shared.constitution
+title: "工程约束"
+kind: doc
+scope: shared
+relations: []
+sources: []
+governing: []
+---
+
+# 概述
+
+这份文档是 Repository 的固定工程约束入口。初始化时应根据仓库证据补充产品意图、架构边界、需要人工确认的关键不确定性，以及已有机器检查；只记录缺失后可能导致整体设计漂移的信息，具体实现细节留在代码、类型与测试中。缺少依据时直接向用户确认，不自行推断。
+`;
+
 export const DEFAULT_KNOWLEDGE_SKILL = `---
 name: alignyard-knowledge
 description: Bootstrap or maintain repository engineering knowledge under .alignyard when an Alignyard Task requires Docs, Specs, ADRs, scope routing, or knowledge validation.
@@ -439,6 +500,7 @@ Use this repository's \`.alignyard/repository.yaml\` as the routing contract and
 ## Choose the workflow
 
 - **Repository bootstrap:** use when \`.alignyard\` was just initialized or the user asks to establish the initial knowledge framework.
+- **Framework update:** use after \`ay update\` replaces Alignyard-managed framework files and asks for a semantic review of existing knowledge.
 - **Task work:** use for ordinary requirement discussion, implementation, or documentation changes in an initialized repository.
 
 ## Repository bootstrap
@@ -463,6 +525,13 @@ Use this repository's \`.alignyard/repository.yaml\` as the routing contract and
 3. Run an intent-coverage review before validation: ensure core intent, architecture boundaries, stable contracts, invariants, and durable choices are covered, then remove details duplicated from code or tests.
 4. Run \`ay validate\` and resolve every structural error. Passing validation proves protocol structure, not truth, sufficiency, or concision.
 5. Run \`ay validate\`. Report evidence inspected, scopes and documents created, topics intentionally omitted with reasons, unresolved questions, and validation results.
+
+## Framework update
+
+1. Run \`ay update --check\` before applying an available update, then run \`ay update\`. Treat \`.alignyard/README.md\`, the default templates, and this Skill as Alignyard-managed framework files; keep repository-specific instructions in the Constitution or ordinary knowledge documents.
+2. Preserve every existing Doc, Spec, ADR, Plan, stable document ID, scope, relation, source, and governing reference unless repository evidence or an explicit user decision requires a semantic change. The update command migrates structure; it does not rewrite knowledge content.
+3. Read the updated Constitution and Overview, then review existing knowledge against the current framework. Remove code-recoverable detail and stale process narration; retain verified intent, boundaries, invariants, stable contracts, and durable decisions.
+4. Ask the user before changing consequential intent or architecture. Run \`ay validate\`, commit the complete \`.alignyard/\` diff, and wait for human Review.
 
 ## Task work
 
@@ -509,8 +578,8 @@ export function initializeRepositoryProtocol(repositoryRoot: string): { created:
     if (parsed.manifest) targetVersion = parsed.manifest.version;
   }
   const defaultFiles: Record<string, string> = {
-    "repository.yaml": `version: 2\npreset: basic\n\nentrypoints:\n  overview: doc.shared.overview\n  constitution: doc.shared.constitution\n\nscopes:\n  - id: shared\n    title: ${JSON.stringify(title)}\n`,
-    "README.md": `# Alignyard 工程意图\n\n这个目录是 Repository 中随代码版本管理的核心工程意图与架构约束真源。它只记录未来 AI 不知道时可能造成整体设计漂移的信息；具体函数、局部算法和普通字段传递仍以代码、类型和测试为准。\n\n\`repository.yaml\` 声明固定入口与逻辑 scopes；Docs 记录当前有效的稳定架构事实，Specs 描述一次变化的意图与边界，ADRs 保存长期取舍，Plans 提供可选的可执行技术方案。文档作者和审核轨迹优先使用 Git commit 与 PR/MR/Alignyard Review，不额外维护一套作者字段。\n\n使用 \`ay new\` 创建文档，在 Review 前运行 \`ay validate\` 并提交全部改动。工程文档始终保存在 Repository 和 worktree 中；Platform 不保存副本。\n`,
+    "repository.yaml": `version: 2\nframework_version: ${ALIGNYARD_FRAMEWORK_VERSION}\npreset: basic\n\nentrypoints:\n  overview: doc.shared.overview\n  constitution: doc.shared.constitution\n\nscopes:\n  - id: shared\n    title: ${JSON.stringify(title)}\n`,
+    "README.md": DEFAULT_README,
     "templates/doc.md": DEFAULT_TEMPLATES.doc,
     "templates/spec.md": DEFAULT_TEMPLATES.spec,
     "templates/adr.md": DEFAULT_TEMPLATES.adr,
@@ -518,7 +587,7 @@ export function initializeRepositoryProtocol(repositoryRoot: string): { created:
   };
   if (targetVersion === 2) {
     defaultFiles["templates/plan.md"] = DEFAULT_TEMPLATES.plan;
-    defaultFiles["docs/shared/constitution.md"] = `---\nid: doc.shared.constitution\ntitle: "工程约束"\nkind: doc\nscope: shared\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 概述\n\n这份文档是 Repository 的固定工程约束入口。初始化时应根据仓库证据补充产品意图、架构边界、需要人工确认的关键不确定性，以及已有机器检查；只记录缺失后可能导致整体设计漂移的信息，具体实现细节留在代码、类型与测试中。缺少依据时直接向用户确认，不自行推断。\n`;
+    defaultFiles["docs/shared/constitution.md"] = DEFAULT_CONSTITUTION;
   }
   const created: string[] = [];
   const existing: string[] = [];
@@ -540,6 +609,103 @@ export function initializeRepositoryProtocol(repositoryRoot: string): { created:
     fs.mkdirSync(path.join(protocolRoot, directory, "shared"), { recursive: true });
   }
   return { created, existing };
+}
+
+function frameworkFiles(): Record<string, string> {
+  return {
+    [`${ALIGNYARD_DIR}/README.md`]: DEFAULT_README,
+    [`${ALIGNYARD_DIR}/templates/doc.md`]: DEFAULT_TEMPLATES.doc,
+    [`${ALIGNYARD_DIR}/templates/spec.md`]: DEFAULT_TEMPLATES.spec,
+    [`${ALIGNYARD_DIR}/templates/adr.md`]: DEFAULT_TEMPLATES.adr,
+    [`${ALIGNYARD_DIR}/templates/plan.md`]: DEFAULT_TEMPLATES.plan,
+    [`${ALIGNYARD_DIR}/skills/alignyard-knowledge/SKILL.md`]: DEFAULT_KNOWLEDGE_SKILL,
+  };
+}
+
+function upgradedManifest(raw: Record<string, unknown>): string {
+  const { version: _version, framework_version: _framework, preset, entrypoints, scopes, ...rest } = raw;
+  const existingEntrypoints = isRecord(entrypoints) ? entrypoints : {};
+  return YAML.stringify({
+    version: ALIGNYARD_PROTOCOL_VERSION,
+    framework_version: ALIGNYARD_FRAMEWORK_VERSION,
+    preset: preset || "basic",
+    entrypoints: {
+      ...existingEntrypoints,
+      overview: "doc.shared.overview",
+      constitution: "doc.shared.constitution",
+    },
+    scopes,
+    ...rest,
+  }, { lineWidth: 0 });
+}
+
+function writeManagedFile(root: string, relative: string, contents: string): void {
+  const target = path.join(root, relative);
+  if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) {
+    throw new Error(`${relative}: 框架文件不允许是符号链接`);
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, contents, "utf8");
+}
+
+/** Update only Alignyard-managed framework files. Repository knowledge bodies
+ * remain untouched and are reviewed semantically by the Agent in the Task. */
+export function updateRepositoryFramework(
+  repositoryRoot: string,
+  options: { check?: boolean } = {},
+): FrameworkUpdateResult {
+  const root = path.resolve(repositoryRoot);
+  const manifestPath = path.join(root, ALIGNYARD_MANIFEST);
+  if (!fs.existsSync(manifestPath)) throw new Error(`缺少 ${ALIGNYARD_MANIFEST}；请先运行 ay init`);
+  if (fs.lstatSync(manifestPath).isSymbolicLink()) throw new Error(`${ALIGNYARD_MANIFEST}: 不允许符号链接`);
+  const source = fs.readFileSync(manifestPath, "utf8");
+  const parsed = parseRepositoryManifest(source);
+  if (!parsed.manifest) throw new Error(parsed.errors.join("\n"));
+  const raw = YAML.parse(source);
+  if (!isRecord(raw)) throw new Error("repository.yaml: 根节点必须是对象");
+  const manifestContents = upgradedManifest(raw);
+  const changes: FrameworkUpdateChange[] = [];
+  if (source !== manifestContents) changes.push({ path: ALIGNYARD_MANIFEST, action: "merge" });
+
+  for (const [relative, contents] of Object.entries(frameworkFiles())) {
+    const target = path.join(root, relative);
+    if (!fs.existsSync(target)) changes.push({ path: relative, action: "create" });
+    else if (fs.lstatSync(target).isSymbolicLink()) throw new Error(`${relative}: 框架文件不允许是符号链接`);
+    else if (fs.readFileSync(target, "utf8") !== contents) changes.push({ path: relative, action: "replace" });
+  }
+  const constitutionPath = `${ALIGNYARD_DIR}/docs/shared/constitution.md`;
+  const constitutionTarget = path.join(root, constitutionPath);
+  if (!fs.existsSync(constitutionTarget)) changes.push({ path: constitutionPath, action: "create" });
+  else if (fs.lstatSync(constitutionTarget).isSymbolicLink()) {
+    throw new Error(`${constitutionPath}: 框架固定入口不允许是符号链接`);
+  }
+
+  if (!options.check) {
+    for (const [relative, contents] of Object.entries(frameworkFiles())) {
+      writeManagedFile(root, relative, contents);
+    }
+    if (!fs.existsSync(constitutionTarget)) writeManagedFile(root, constitutionPath, DEFAULT_CONSTITUTION);
+    for (const directory of Object.values(KIND_DIRS)) {
+      for (const scope of parsed.manifest.scopes) {
+        fs.mkdirSync(path.join(root, ALIGNYARD_DIR, directory, scope.id), { recursive: true });
+      }
+    }
+    writeManagedFile(root, ALIGNYARD_MANIFEST, manifestContents);
+  }
+
+  return {
+    repository: root,
+    check: options.check === true,
+    from: {
+      protocol_version: parsed.manifest.version,
+      framework_version: parsed.manifest.framework_version,
+    },
+    to: {
+      protocol_version: ALIGNYARD_PROTOCOL_VERSION,
+      framework_version: ALIGNYARD_FRAMEWORK_VERSION,
+    },
+    changes,
+  };
 }
 
 function defaultTitle(slug: string): string {

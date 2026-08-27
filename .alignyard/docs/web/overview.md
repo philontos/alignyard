@@ -9,6 +9,7 @@ relations:
   - doc.shared.development
   - doc.server.http-api
   - doc.server.runner-protocol
+  - spec.server.framework-update
   - adr.shared.platform-runner-separation
 ---
 
@@ -19,9 +20,9 @@ relations:
 ## 能力
 
 - Google 登录、退出和成员选择。
-- 无凭据 Repository 登记、协议 refresh 与 Repository Init。
-- change / repository_init Task 创建、筛选、详情和清理。
-- 普通 Task 的知识设计 → Review → changes requested/可开始实现闭环，以及 Repository Init 的 PR/MR → merge 特殊闭环。
+- 无凭据 Repository 登记、协议/框架版本自动检测，以及 Repository Init/Update 入口。
+- change / repository_init / repository_update Task 创建、筛选、详情和清理。
+- 普通 Task 的知识设计 → Review → changes requested/可开始实现闭环，以及 Repository Init/Update 的 PR/MR → merge 特殊闭环。
 - 从当前用户自己的 Runner worktree 按需读取 Docs、Specs、ADRs、Plans，并展示设计基线；Git diff 仍在 worktree 中通过 Git 与 Agent 阅读。
 - 当前用户 Runner 状态、macOS 安装与重新连接引导。
 - 通过 execution ID 打开的本地 Agent 终端。
@@ -33,6 +34,8 @@ Web 不接收 Repository token、设备 token、本机路径或本地 Task ID，
 `web/js/features/runner-onboarding.js` 管理 Runner indicator、设备列表、pairing code 和安装 dialog；样式位于 `web/css/features/runner-onboarding.css`。
 
 浏览器不能静默安装本机 daemon。页面生成包含当前 origin 和短期 pairing code 的命令，用户复制到 Terminal 明确执行。LaunchAgent 启动 Runner 后，页面轮询在线状态并自动结束引导。
+
+页面读取 stable manifest 比较已安装 Runner 版本，发现旧版时提供 `alignyard-runner upgrade` 命令。Repository 框架检测依赖当前用户在线 Runner；页面加载后自动刷新，并以短周期重试连接中的 Runner、成功后降低刷新频率。检测为 `outdated` 时显示 Update Task 入口，不在浏览器内直接改 Repository。
 
 安装文案必须说明：包内包含 Node runtime；git、tmux、Codex、Claude、Kimi、gh、glab 由用户自行准备。不得把 pairing code 写入日志、localStorage 或工程知识。
 

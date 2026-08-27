@@ -18,6 +18,7 @@ relations:
   - adr.shared.platform-runner-separation
   - adr.shared.knowledge-first-product-boundary
   - spec.shared.knowledge-first-task
+  - spec.server.framework-update
 ---
 
 # 概述
@@ -57,6 +58,7 @@ relations:
 - [HTTP 与 WebSocket](../server/http-api.md)
 - [Runner 安装与协议](../server/runner-protocol.md)
 - [工程知识协议](../server/knowledge-protocol.md)
+- [知识框架版本更新](../../specs/server/framework-update.md)
 - [浏览器应用](../web/overview.md)
 
 ## 信息边界

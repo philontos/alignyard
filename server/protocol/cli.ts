@@ -1,8 +1,10 @@
 import path from "node:path";
 import {
+  ALIGNYARD_FRAMEWORK_VERSION,
   KNOWLEDGE_KINDS,
   createRepositoryDocument,
   initializeRepositoryProtocol,
+  updateRepositoryFramework,
   validateRepositoryProtocol,
   type KnowledgeKind,
 } from "./repository.js";
@@ -24,11 +26,13 @@ const USAGE = `Alignyard knowledge protocol
 
 Usage:
   ay init [repository]
+  ay update [repository] [--check]
   ay new <doc|spec|adr|plan> <slug> --scope <scope> [--title <title>] [--repository <path>]
   ay validate [repository] [--json]
 
 Commands:
   init       Create the minimal .alignyard scaffold without overwriting files
+  update     Update Alignyard-managed Skill, templates, and protocol structure without replacing knowledge
   new        Create one document from the repository template
   validate   Validate the manifest, templates, Skill, documents, and relations
 `;
@@ -37,15 +41,20 @@ interface ParsedArguments {
   positionals: string[];
   values: Partial<Record<OptionName, string>>;
   json: boolean;
+  check: boolean;
   help: boolean;
 }
 
 function parseArguments(args: string[]): ParsedArguments {
-  const parsed: ParsedArguments = { positionals: [], values: {}, json: false, help: false };
+  const parsed: ParsedArguments = { positionals: [], values: {}, json: false, check: false, help: false };
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--json") {
       parsed.json = true;
+      continue;
+    }
+    if (argument === "--check") {
+      parsed.check = true;
       continue;
     }
     if (argument === "--help" || argument === "-h") {
@@ -76,11 +85,12 @@ function assertNoExtraPositionals(parsed: ParsedArguments, expected: number) {
   if (parsed.positionals.length > expected) throw new Error(`参数过多：${parsed.positionals.slice(expected).join(" ")}`);
 }
 
-function assertAllowedOptions(parsed: ParsedArguments, allowed: OptionName[], json = false) {
+function assertAllowedOptions(parsed: ParsedArguments, allowed: OptionName[], options: { json?: boolean; check?: boolean } = {}) {
   const supported = new Set<OptionName>(allowed);
   const unexpected = Object.keys(parsed.values).find((name) => !supported.has(name as OptionName));
   if (unexpected) throw new Error(`当前命令不支持 --${unexpected}`);
-  if (parsed.json && !json) throw new Error("当前命令不支持 --json");
+  if (parsed.json && !options.json) throw new Error("当前命令不支持 --json");
+  if (parsed.check && !options.check) throw new Error("当前命令不支持 --check");
 }
 
 export async function runAy(
@@ -104,7 +114,15 @@ export async function runAy(
       assertNoExtraPositionals(parsed, 1);
       const root = repositoryRoot(parsed);
       const result = initializeRepositoryProtocol(root);
-      io.out(JSON.stringify({ ok: true, repository: root, ...result }));
+      io.out(JSON.stringify({ ok: true, repository: root, framework_version: ALIGNYARD_FRAMEWORK_VERSION, ...result }));
+      return 0;
+    }
+    if (command === "update") {
+      assertAllowedOptions(parsed, ["repository"], { check: true });
+      assertNoExtraPositionals(parsed, 1);
+      const root = repositoryRoot(parsed);
+      const result = updateRepositoryFramework(root, { check: parsed.check });
+      io.out(JSON.stringify({ ok: true, update_available: result.changes.length > 0, ...result }));
       return 0;
     }
     if (command === "new") {
@@ -127,7 +145,7 @@ export async function runAy(
       return 0;
     }
     if (command === "validate") {
-      assertAllowedOptions(parsed, ["repository"], true);
+      assertAllowedOptions(parsed, ["repository"], { json: true });
       assertNoExtraPositionals(parsed, 1);
       const root = repositoryRoot(parsed);
       const result = validateRepositoryProtocol(root);
@@ -137,6 +155,10 @@ export async function runAy(
           repository: root,
           documents: result.documents.length,
           scopes: result.manifest?.scopes.length || 0,
+          protocol_version: result.manifest?.version,
+          framework_version: result.manifest?.framework_version || 0,
+          latest_framework_version: ALIGNYARD_FRAMEWORK_VERSION,
+          update_available: (result.manifest?.framework_version || 0) < ALIGNYARD_FRAMEWORK_VERSION,
         }));
         return 0;
       }

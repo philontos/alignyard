@@ -6,6 +6,7 @@ import { upsertPlatformUser } from "../auth/auth.ts";
 import {
   createPlatformRepository,
   createRepositoryInitializationTask,
+  createRepositoryUpdateTask,
   createPlatformTask,
   decidePlatformTaskReview,
   deletePlatformTask,
@@ -169,6 +170,39 @@ test("Repository initialization is a first-class idempotent Task and gates ordin
   assert.equal(first.repositories.length, 1);
   assert.equal(first.repositories[0].mode, "editable");
   assert.equal(listPlatformRepositories(db)[0].protocol_state, "initializing");
+});
+
+test("Repository framework update is an idempotent lifecycle Task for outdated repositories", () => {
+  const db = memoryDb();
+  const repository = createPlatformRepository(db, {
+    name: "legacy-service",
+    git_url: "git@example.com:team/legacy-service.git",
+    created_by: "Phil",
+  });
+  setPlatformRepositoryProtocolState(db, repository.id, "outdated", "v0 可更新至 v1", {
+    protocol_version: 2,
+    framework_version: 0,
+  });
+
+  const first = createRepositoryUpdateTask(db, repository.id, "Phil");
+  const second = createRepositoryUpdateTask(db, repository.id, "Phil");
+  assert.equal(first.key, second.key);
+  assert.equal(first.task_type, "repository_update");
+  assert.match(first.description || "", /ay update/);
+  assert.equal(first.repositories[0].framework_version, 0);
+  assert.equal(getPlatformRepository(db, repository.id)?.protocol_state, "outdated");
+
+  assert.doesNotThrow(() => createPlatformTask(db, {
+    title: "仍可进行知识设计",
+    owner: "Phil",
+    repositories: [{ repository_id: repository.id, mode: "editable" }],
+  }));
+  assert.throws(
+    () => createRepositoryUpdateTask(db, createPlatformRepository(db, {
+      name: "fresh-service", git_url: "git@example.com:team/fresh-service.git", created_by: "Phil",
+    }).id, "Phil"),
+    /没有可用的 Alignyard 框架更新/,
+  );
 });
 
 test("Platform status transitions do not depend on a stored knowledge snapshot", () => {

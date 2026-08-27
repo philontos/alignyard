@@ -1,16 +1,15 @@
 version: 2
+framework_version: 1
 preset: basic
-
 entrypoints:
   overview: doc.shared.overview
   constitution: doc.shared.constitution
-
 scopes:
   - id: shared
-    title: "共享知识"
+    title: 共享知识
   - id: server
-    title: "后端服务"
+    title: 后端服务
     source: server
   - id: web
-    title: "浏览器应用"
+    title: 浏览器应用
     source: web

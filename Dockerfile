@@ -12,11 +12,11 @@ ENV NODE_ENV=production \
     PORT=4500 \
     ALIGNYARD_DATA_DIR=/data
 WORKDIR /app
+RUN install -d -o node -g node /data
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
 COPY server ./server
 COPY web ./web
-RUN mkdir -p /data && chown -R node:node /app /data
 USER node
 EXPOSE 4500
 VOLUME ["/data"]

@@ -11,6 +11,7 @@ relations:
   - doc.server.cli-configuration
   - doc.server.http-api
   - spec.shared.knowledge-first-task
+  - spec.server.framework-update
 ---
 
 # 概述
@@ -31,7 +32,7 @@ Alignyard 工程知识协议把核心工程意图与架构约束版本化在 `.a
   plans/<scope>/*.md
 ```
 
-服务端兼容 `version: 1` 和 `version: 2`，`ay init` 默认创建 v2；两者都使用 `preset: basic` 并至少声明 `shared`。v2 还必须声明 `entrypoints.overview: doc.shared.overview` 与 `entrypoints.constitution: doc.shared.constitution`。scope ID 使用小写字母、数字和连字符；可选 `source` 必须是仓库内安全相对路径，而且 `ay validate` 会检查路径存在。scope 表示有意义的应用或服务边界，不应机械复制所有目录。
+服务端兼容 `version: 1` 和 `version: 2`，`ay init` 默认创建 v2；两者都使用 `preset: basic` 并至少声明 `shared`。`version` 表示文档结构与校验契约，独立的 `framework_version` 表示 Skill、模板、README 和固定骨架的发布版本；旧 Repository 缺失时按 legacy v0 读取。v2 还必须声明 `entrypoints.overview: doc.shared.overview` 与 `entrypoints.constitution: doc.shared.constitution`。scope ID 使用小写字母、数字和连字符；可选 `source` 必须是仓库内安全相对路径，而且 `ay validate` 会检查路径存在。scope 表示有意义的应用或服务边界，不应机械复制所有目录。
 
 v1 Repository 被平台判定为完成初始化时，默认分支必须包含 manifest、README、三份模板、Skill 和 shared overview；v2 还必须包含 Plan 模板与 `.alignyard/docs/shared/constitution.md`。Runner refresh 根据 manifest version 选择有界基线文件；详细内容仍以 `ay validate` 与人工 Review 为准。
 
@@ -59,6 +60,20 @@ ay new plan <slug> --scope <scope> --title '<中文标题>'
 ```
 
 `ay validate .` 检查 manifest、固定入口、scope source、模板变量、Skill、符号链接、frontmatter、kind/path/scope/ID 一致性、必需章节、重复 ID 与悬空 relations/governing，并要求 shared overview；v2 还要求 constitution。它不判断事实是否准确、是否足够精简，也不会替代人工内容 Review。
+
+## 框架版本更新
+
+`ay init` 只幂等补齐缺失的首次初始化文件，不覆盖已存在框架，也不承担升级。已初始化 Repository 使用：
+
+```sh
+ay update --check .
+ay update .
+ay validate .
+```
+
+`--check` 只返回待创建、替换或合并的路径。`ay update` 将 manifest 合并到当前协议与框架版本，替换 Alignyard 管理的 README、默认模板和 Skill，并补齐缺失的 Constitution 和 scope 目录；它不覆盖已有 Docs、Specs、ADRs、Plans，也不改文档 ID 与关系。更新后仍需 Agent 按新版 Skill Review 现有知识，知识语义变化必须作为普通 Git diff 进入人工 Review。重复运行无变化；Repository 声明的框架版本高于当前 `ay` 时必须先升级 Runner，不能用旧工具降级。
+
+Runner 从默认分支执行 `repository.refresh-protocol`，比较 Repository 与自身内置的框架版本。Platform 只记录版本和 `uninitialized`、`invalid`、`outdated`、`ready` 状态元数据；Web 自动刷新并为 `outdated` Repository 提供 Update Task。真正的更新发生在用户 Runner 创建的 Task worktree，沿用 Agent、Review、PR/MR 和合并链路，Platform 不保存升级后的知识副本。
 
 ## Review 校验与按需阅读
 

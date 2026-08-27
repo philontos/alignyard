@@ -26,6 +26,7 @@ import {
 import type { RunnerRpcMethod } from "./protocol.js";
 import { inspectTaskWorktree } from "./worktree-inspector.js";
 import {
+  ALIGNYARD_FRAMEWORK_VERSION,
   ALIGNYARD_MANIFEST,
   indexRepositoryProtocol,
   parseRepositoryManifest,
@@ -306,15 +307,35 @@ export async function executeRunnerRpc(method: RunnerRpcMethod, rawParams: unkno
       [ALIGNYARD_MANIFEST],
     );
     const manifestText = manifestFiles[ALIGNYARD_MANIFEST];
-    if (!manifestText) return { state: "uninitialized", error: null };
+    if (!manifestText) return {
+      state: "uninitialized", error: null, protocol_version: null, framework_version: 0,
+      latest_framework_version: ALIGNYARD_FRAMEWORK_VERSION,
+    };
     const parsed = parseRepositoryManifest(manifestText);
-    if (!parsed.manifest) return { state: "invalid", error: parsed.errors.join("\n") };
+    if (!parsed.manifest) return {
+      state: "invalid", error: parsed.errors.join("\n"), protocol_version: null, framework_version: 0,
+      latest_framework_version: ALIGNYARD_FRAMEWORK_VERSION,
+    };
     const required = requiredBootstrapFiles(parsed.manifest.version);
     const files = await readRemoteBranchFiles(localExecutor, repository.mirror_path!, branch, required);
     const missing = required.filter((filePath) => files[filePath] == null);
-    return missing.length
-      ? { state: "invalid", error: `默认分支缺少初始化文件：${missing.join("、")}` }
-      : { state: "ready", error: null };
+    if (missing.length) return {
+      state: "invalid",
+      error: `默认分支缺少初始化文件：${missing.join("、")}`,
+      protocol_version: parsed.manifest.version,
+      framework_version: parsed.manifest.framework_version,
+      latest_framework_version: ALIGNYARD_FRAMEWORK_VERSION,
+    };
+    const outdated = parsed.manifest.framework_version < ALIGNYARD_FRAMEWORK_VERSION;
+    return {
+      state: outdated ? "outdated" : "ready",
+      error: outdated
+        ? `Alignyard 知识框架 v${parsed.manifest.framework_version} 可更新至 v${ALIGNYARD_FRAMEWORK_VERSION}`
+        : null,
+      protocol_version: parsed.manifest.version,
+      framework_version: parsed.manifest.framework_version,
+      latest_framework_version: ALIGNYARD_FRAMEWORK_VERSION,
+    };
   }
   if (method === "capabilities.refresh") return { ok: true };
   if (method.startsWith("change-request.")) {

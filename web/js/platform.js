@@ -27,6 +27,8 @@ const state = {
 };
 
 const taskBranchRequests = new Map();
+const repositoryProtocolChecks = new Map();
+let automaticProtocolRefreshActive = false;
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -82,8 +84,13 @@ const protocolStateLabels = {
   uninitialized: "未初始化",
   initializing: "初始化中",
   ready: "已就绪",
+  outdated: "可更新",
   invalid: "初始化无效",
 };
+
+function isRepositoryLifecycleTask(task) {
+  return ["repository_init", "repository_update"].includes(task?.task_type);
+}
 
 function repositoryProtocolState(repository) {
   return repository.protocol_state || (repository.protocol_initialized ? "ready" : "uninitialized");
@@ -172,21 +179,22 @@ async function copyCommand(command) {
 }
 
 function statusPill(status, task = null) {
-  const label = status === "approved" && task?.task_type !== "repository_init"
+  const label = status === "approved" && !isRepositoryLifecycleTask(task)
     ? "可开始实现"
     : statusLabels[status] || status;
   return `<span class="status-pill status-${escapeHtml(status)}"><i></i>${escapeHtml(label)}</span>`;
 }
 
 function taskDisplayTitle(task) {
-  if (task.task_type !== "repository_init") return task.title;
+  if (!isRepositoryLifecycleTask(task)) return task.title;
   return task.repositories.find((repository) => repository.mode === "editable")?.name
-    || task.title.replace(/^Initialize Alignyard\s*·\s*/, "");
+    || task.title.replace(/^(?:Initialize|Update) Alignyard\s*·\s*/, "");
 }
 
 function taskContextHelp(task) {
-  if (task.task_type !== "repository_init" || !task.description) return "";
-  return `<details class="task-context-help"><summary aria-label="查看初始化说明">?</summary><p role="tooltip">${escapeHtml(task.description)}</p></details>`;
+  if (!isRepositoryLifecycleTask(task) || !task.description) return "";
+  const action = task.task_type === "repository_update" ? "更新" : "初始化";
+  return `<details class="task-context-help"><summary aria-label="查看${action}说明">?</summary><p role="tooltip">${escapeHtml(task.description)}</p></details>`;
 }
 
 function repositoryChips(repositories) {
@@ -256,10 +264,18 @@ function renderRepositories() {
       task.task_type === "repository_init" && task.status !== "completed" &&
       task.repositories.some((item) => item.id === repo.id)
     );
+    const updateTask = state.tasks.find((task) =>
+      task.task_type === "repository_update" && task.status !== "completed" &&
+      task.repositories.some((item) => item.id === repo.id)
+    );
     const protocolState = repositoryProtocolState(repo);
     const label = `${protocolStateLabels[protocolState] || protocolState}；点击刷新`;
     const primaryAction = protocolState === "ready"
       ? `<button class="button secondary small" type="button" data-task-from-repo="${repo.id}">＋ Task</button>`
+      : protocolState === "outdated"
+        ? updateTask
+          ? `<button class="button secondary small" type="button" data-task-key="${escapeHtml(updateTask.key)}">${escapeHtml(updateTask.key)}</button>`
+          : `<button class="button secondary small" type="button" data-update-repository="${repo.id}">Update</button>`
       : initTask
         ? `<button class="button secondary small" type="button" data-task-key="${escapeHtml(initTask.key)}">${escapeHtml(initTask.key)}</button>`
         : `<button class="button secondary small" type="button" data-init-repository="${repo.id}">Initialize</button>`;
@@ -275,6 +291,7 @@ function renderRepositories() {
   $$('[data-open-repository]', target).forEach((button) => button.addEventListener("click", () => openRepositoryDetails(Number(button.dataset.openRepository))));
   $$('[data-task-key]', target).forEach((button) => button.addEventListener("click", () => openTaskDetail(button.dataset.taskKey)));
   $$('[data-init-repository]', target).forEach((button) => button.addEventListener("click", () => initializeRepository(Number(button.dataset.initRepository), button)));
+  $$('[data-update-repository]', target).forEach((button) => button.addEventListener("click", () => updateRepository(Number(button.dataset.updateRepository), button)));
   $$('[data-delete-repository]', target).forEach((button) => button.addEventListener("click", () => deleteRepository(Number(button.dataset.deleteRepository), button)));
   $$('[data-refresh-protocol]', target).forEach((button) => button.addEventListener("click", () => refreshProtocol(Number(button.dataset.refreshProtocol), button)));
 }
@@ -413,6 +430,34 @@ async function initializeRepository(repositoryId, button) {
   showGlobalLoading("正在创建初始化 Task…", "正在准备初始化流程，请稍候。");
   try {
     const result = await api(`/api/platform/repositories/${repositoryId}/initialize`, {
+      method: "POST",
+      body: "{}",
+    });
+    const taskIndex = state.tasks.findIndex((task) => task.key === result.task.key);
+    if (taskIndex >= 0) state.tasks[taskIndex] = result.task;
+    else state.tasks.unshift(result.task);
+    const repositoryIndex = state.repositories.findIndex((item) => item.id === repositoryId);
+    if (repositoryIndex >= 0 && result.repository) state.repositories[repositoryIndex] = result.repository;
+    renderAll();
+    setView("tasks");
+    openTaskDetail(result.task.key);
+    toast(`${result.task.key} 已创建，请选择 Agent 启动`);
+  } catch (error) {
+    toast(error.message, "error");
+    await loadData({ silent: true });
+  } finally {
+    hideGlobalLoading();
+    if (button.isConnected) button.disabled = false;
+  }
+}
+
+async function updateRepository(repositoryId, button) {
+  const repository = state.repositories.find((item) => item.id === repositoryId);
+  if (!repository) return;
+  button.disabled = true;
+  showGlobalLoading("正在创建框架更新 Task…", "正在准备 Alignyard 框架更新流程，请稍候。");
+  try {
+    const result = await api(`/api/platform/repositories/${repositoryId}/update`, {
       method: "POST",
       body: "{}",
     });
@@ -723,6 +768,34 @@ async function refreshProtocol(repositoryId, button) {
   }
 }
 
+async function refreshRepositoryProtocolsAutomatically() {
+  if (automaticProtocolRefreshActive || !state.currentUser || !state.repositories.length) return;
+  const now = Date.now();
+  const repositories = state.repositories.filter((repository) =>
+    now >= (repositoryProtocolChecks.get(repository.id) || 0)
+  );
+  if (!repositories.length) return;
+  automaticProtocolRefreshActive = true;
+  repositories.forEach((repository) => repositoryProtocolChecks.set(repository.id, now + 30_000));
+  let changed = false;
+  await Promise.all(repositories.map(async (repository) => {
+    try {
+      const refreshed = await api(`/api/platform/repositories/${repository.id}/refresh`, { method: "POST" });
+      const index = state.repositories.findIndex((item) => item.id === repository.id);
+      if (index >= 0) {
+        state.repositories[index] = refreshed;
+        changed = true;
+      }
+      repositoryProtocolChecks.set(repository.id, Date.now() + 5 * 60_000);
+    } catch {
+      // Runner may still be connecting. The short retry window above keeps this
+      // automatic without turning a missing local Runner into a visible error.
+    }
+  }));
+  automaticProtocolRefreshActive = false;
+  if (changed) renderRepositories();
+}
+
 function knowledgeKind(kind) {
   const normalized = String(kind || "docs").toLowerCase();
   if (normalized === "adr") return "adr";
@@ -774,14 +847,15 @@ function taskNextAction(task) {
 function initWorkflowStage(task) {
   const repository = task.repositories.find((item) => item.mode === "editable");
   const requestLabel = taskChangeRequestLabel(task);
+  const action = task.task_type === "repository_update" ? "更新" : "初始化";
   if (task.pr_state === "merged" && repository?.protocol_state === "ready") {
     const note = task.workflow_error
-      ? `Repository 已完成初始化；本地清理提示：${task.workflow_error}`
-      : `${requestLabel} 已合并，Repository 已完成初始化。`;
+      ? `Repository 已完成${action}；本地清理提示：${task.workflow_error}`
+      : `${requestLabel} 已合并，Repository 已完成${action}。`;
     return { key: "merged", label: "已合并", note };
   }
   if (task.workflow_error || task.runtime_error) return { key: "error", label: "需要处理", note: task.workflow_error || task.runtime_error };
-  if (task.pr_state === "merged") return { key: "error", label: "等待完成初始化", note: `${requestLabel} 已合并，正在确认默认分支上的 Alignyard 文件。` };
+  if (task.pr_state === "merged") return { key: "error", label: `等待完成${action}`, note: `${requestLabel} 已合并，正在确认默认分支上的 Alignyard 文件。` };
   if (task.status === "approved" && task.pr_state === "open") return { key: "pr", label: `${requestLabel} 待合并`, note: `Review 已批准，${requestLabel} 已创建，等待人工确认合并。` };
   if (task.status === "approved") return { key: "approved", label: "Review 已通过", note: `平台状态已流转完成；确认后可单独创建 ${requestLabel}。` };
   if (task.status === "review") return { key: "review", label: "等待 Review", note: `工作分支已推送并分派给 ${task.review?.reviewer || task.current_assignee || "reviewer"}。` };
@@ -794,6 +868,7 @@ function initWorkflowStage(task) {
 function initWorkflowPanel(task) {
   const stage = initWorkflowStage(task);
   const requestLabel = taskChangeRequestLabel(task);
+  const updating = task.task_type === "repository_update";
   const stepState = (name) => {
     const order = ["waiting", "running", "paused", "error", "ready", "review", "approved", "pr", "merged"];
     const positions = { agent: 1, review: 5, pr: 7, merge: 8 };
@@ -803,10 +878,10 @@ function initWorkflowPanel(task) {
     return current > target ? "done" : current === target ? "active" : "pending";
   };
   return `<section class="init-workflow state-${escapeHtml(stage.key)}">
-    <div class="init-workflow-head"><div><span>REPOSITORY INIT</span><strong>${escapeHtml(stage.label)}</strong></div><i></i></div>
+    <div class="init-workflow-head"><div><span>${updating ? "FRAMEWORK UPDATE" : "REPOSITORY INIT"}</span><strong>${escapeHtml(stage.label)}</strong></div><i></i></div>
     <p>${escapeHtml(stage.note || "")}</p>
     <ol class="workflow-steps">
-      <li class="${stepState("agent")}"><i>1</i><span>Agent 初始化</span></li>
+      <li class="${stepState("agent")}"><i>1</i><span>Agent ${updating ? "更新" : "初始化"}</span></li>
       <li class="${stepState("review")}"><i>2</i><span>人工 Review</span></li>
       <li class="${stepState("pr")}"><i>3</i><span>创建 ${requestLabel}</span></li>
       <li class="${stepState("merge")}"><i>4</i><span>确认合并</span></li>
@@ -822,14 +897,14 @@ function initTaskActions(task) {
     actions.push(`<button class="button secondary mobile-agent-action" type="button" data-open-agent>打开 Agent</button>`);
   }
   if (task.status === "draft" && (!task.runtime_task_id || !task.runtime_has_worktree)) {
-    actions.push(`<div class="task-agent-launch"><div class="agent-picker" data-agent-picker><input type="hidden" data-author-agent value="codex"><button class="agent-picker-trigger" type="button" data-agent-picker-trigger aria-haspopup="listbox" aria-expanded="false"><span data-agent-picker-label>Codex</span><i aria-hidden="true"></i></button><div class="agent-picker-menu" data-agent-picker-menu role="listbox" aria-label="选择初始化 Agent" hidden><button class="selected" type="button" role="option" aria-selected="true" data-agent-value="codex"><span>Codex</span><i aria-hidden="true">✓</i></button><button type="button" role="option" aria-selected="false" data-agent-value="claude"><span>Claude Code</span><i aria-hidden="true">✓</i></button><button type="button" role="option" aria-selected="false" data-agent-value="kimi"><span>Kimi CLI</span><i aria-hidden="true">✓</i></button></div></div><button class="button primary" type="button" data-run-init>启动 Agent</button></div>`);
+    actions.push(`<div class="task-agent-launch"><div class="agent-picker" data-agent-picker><input type="hidden" data-author-agent value="codex"><button class="agent-picker-trigger" type="button" data-agent-picker-trigger aria-haspopup="listbox" aria-expanded="false"><span data-agent-picker-label>Codex</span><i aria-hidden="true"></i></button><div class="agent-picker-menu" data-agent-picker-menu role="listbox" aria-label="选择 Agent" hidden><button class="selected" type="button" role="option" aria-selected="true" data-agent-value="codex"><span>Codex</span><i aria-hidden="true">✓</i></button><button type="button" role="option" aria-selected="false" data-agent-value="claude"><span>Claude Code</span><i aria-hidden="true">✓</i></button><button type="button" role="option" aria-selected="false" data-agent-value="kimi"><span>Kimi CLI</span><i aria-hidden="true">✓</i></button></div></div><button class="button primary" type="button" data-run-init>启动 Agent</button></div>`);
   } else if (task.status === "draft") {
     if (!task.runtime_alive) actions.push(`<button class="button secondary" type="button" data-run-init>继续 Agent</button>`);
     actions.push(`<button class="button primary" type="button" data-init-review>提交 Review</button>`);
   } else if (task.status === "review") {
     actions.push(`<button class="button secondary" type="button" data-review-decision="changes_requested">要求修改</button>`);
     actions.push(`<button class="button primary" type="button" data-review-decision="approved">审核通过</button>`);
-  } else if (task.status === "approved" && task.task_type !== "repository_init") {
+  } else if (task.status === "approved" && !isRepositoryLifecycleTask(task)) {
     const repository = task.repositories.find((item) => item.mode === "editable");
     const commit = repository?.design_commit ? String(repository.design_commit).slice(0, 10) : "已审核提交";
     actions.push(`<div class="design-ready"><strong>设计已确认，可以开始实现</strong><span>继续使用远端工作分支；设计基线 ${escapeHtml(commit)}。</span></div>`);
@@ -841,7 +916,7 @@ function initTaskActions(task) {
     actions.push(`<button class="button primary" type="button" data-init-merge ${pendingAction(task, "merge") || confirming ? "disabled" : ""}>${confirming ? `正在确认 ${requestLabel} 状态…` : pendingAction(task, "merge") ? `正在合并 ${requestLabel}…` : `合并 ${requestLabel}`}</button>`);
   } else if (task.status === "approved" && task.pr_state === "merged" && repository?.protocol_state !== "ready") {
     actions.push(`<a class="button secondary link" href="${escapeHtml(task.pr_url)}" target="_blank" rel="noreferrer">查看 ${requestLabel} #${task.pr_number}</a>`);
-    actions.push(`<button class="button primary" type="button" data-init-merge>重试完成初始化</button>`);
+    actions.push(`<button class="button primary" type="button" data-init-merge>重试完成${task.task_type === "repository_update" ? "更新" : "初始化"}</button>`);
   } else if (task.pr_url) {
     actions.push(`<a class="button secondary link" href="${escapeHtml(task.pr_url)}" target="_blank" rel="noreferrer">查看 ${requestLabel} #${task.pr_number}</a>`);
   }
@@ -883,9 +958,13 @@ function wireAgentPicker(root) {
 }
 
 function taskLocalCommands(task) {
-  return task.task_type === "repository_init"
-    ? ["ay init .", "ay new doc overview --scope shared --title \"仓库概览\"", "ay validate ."]
-    : ["ay validate ."];
+  if (task.task_type === "repository_init") {
+    return ["ay init .", "ay new doc overview --scope shared --title \"仓库概览\"", "ay validate ."];
+  }
+  if (task.task_type === "repository_update") {
+    return ["ay update --check .", "ay update .", "ay validate ."];
+  }
+  return ["ay validate ."];
 }
 
 function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
@@ -900,7 +979,7 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
   state.selectedTask = task;
   const commands = taskLocalCommands(task);
   const commandList = commands.map((command, index) => `<div class="detail-command"><span>${escapeHtml(command)}</span><button type="button" data-copy-command="${index}">复制</button></div>`).join("");
-  const workflowNote = task.task_type === "repository_init"
+  const workflowNote = isRepositoryLifecycleTask(task)
     ? `${initWorkflowPanel(task)}<details class="manual-workflow"><summary>手动模式与诊断命令</summary><p>自动 Agent 无法完成时，才需要在保留的 worktree 中执行这些命令。</p>${commandList}</details>`
     : "";
   const reviewFeedback = task.review?.feedback ? `<p><strong>Review 反馈：</strong>${escapeHtml(task.review.feedback)}</p>` : "";
@@ -909,13 +988,13 @@ function openTaskDetail(key, { refreshChangeRequest = null } = {}) {
     : `由 ${escapeHtml(task.review?.submitted_by || "")} 于 ${escapeHtml(formatDate(task.review?.submitted_at))} 分派；当前状态：${escapeHtml(task.review?.status || "")}。工作分支已推送到远端，reviewer 可在右侧选择 Agent 进入对应 worktree。`;
   const reviewHandoff = task.review ? `<section class="detail-workflow"><strong>Review · ${escapeHtml(task.review.reviewer)}</strong><p>${reviewSummary}</p>${reviewFeedback}</section>` : "";
   const displayTitle = taskDisplayTitle(task);
-  const description = task.task_type === "repository_init"
+  const description = isRepositoryLifecycleTask(task)
     ? ""
     : `<p>${escapeHtml(task.description || "尚未填写需求说明")}</p>`;
   const workspaceTask = { ...task, display_title: displayTitle };
   $("#task-detail").innerHTML = `<div class="detail-top"><div class="detail-title-row"><button class="drawer-close" id="drawer-close" type="button" aria-label="返回 Task 列表">返回</button><span class="task-key">${escapeHtml(task.key)}</span><h1>${escapeHtml(displayTitle)}</h1>${taskContextHelp(task)}</div>${description}</div>
     <div class="detail-meta">${statusPill(task.status, task)}<span>负责人：${escapeHtml(task.owner)}</span><span>当前处理人：${escapeHtml(task.current_assignee || task.owner)}</span><span>${task.completed_at ? `完成于 ${escapeHtml(formatDate(task.completed_at))}` : `创建于 ${escapeHtml(formatDate(task.created_at))}`}</span></div>
-    ${workflowNote}${reviewHandoff}${task.task_type === "repository_init" ? "" : commandList}
+    ${workflowNote}${reviewHandoff}${isRepositoryLifecycleTask(task) ? "" : commandList}
     <section class="detail-section"><div class="detail-section-head"><h2>Repositories · ${task.repositories.length}</h2><span class="protocol-badge">peer worktrees</span></div><div class="detail-repos">${task.repositories.map(detailRepository).join("")}</div></section>
     <section class="detail-section"><div class="detail-section-head"><h2>工程文档</h2>${task.runtime_task_id && task.runtime_has_worktree ? `<button class="text-button review-changes" type="button" data-open-worktree-changes>查看变更</button>` : ""}</div><p class="detail-section-note">Platform 通过你的 Runner 自动解析当前 worktree 中的 .alignyard/；点击文档进入完整 worktree 浏览页。</p><div id="worktree-knowledge"><div class="detail-empty">${task.runtime_task_id && task.runtime_has_worktree ? "正在从当前 Runner worktree 解析 .alignyard/…" : "启动 Agent 后，这里会自动展示对应 worktree 中的工程文档。"}</div></div></section>
     <div class="detail-actions">${taskNextAction(task)}</div>`;
@@ -1126,6 +1205,7 @@ async function loadData({ silent = false } = {}) {
     state.members = members;
     renderAll();
     runnerOnboarding.setRunners(runners);
+    void refreshRepositoryProtocolsAutomatically();
     const selectedKey = state.selectedTask?.key;
     if (selectedKey && !$("#task-drawer").hidden && state.tasks.some((task) => task.key === selectedKey)) {
       openTaskDetail(selectedKey, { refreshChangeRequest: false });
@@ -1322,7 +1402,8 @@ setView(location.hash.slice(1) || "tasks", { updateHash: false });
 if (await initializeAuthentication()) await loadData();
 setInterval(() => {
   if (runnerOnboarding.enabled()) void runnerOnboarding.refresh();
-  if (state.currentUser && state.tasks.some((task) => task.task_type === "repository_init" && task.pr_state !== "merged")) {
+  void refreshRepositoryProtocolsAutomatically();
+  if (state.currentUser && state.tasks.some((task) => isRepositoryLifecycleTask(task) && task.pr_state !== "merged")) {
     loadData({ silent: true });
   }
 }, 4000);

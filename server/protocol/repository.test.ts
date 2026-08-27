@@ -4,10 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  ALIGNYARD_FRAMEWORK_VERSION,
   createRepositoryDocument,
   indexRepositoryProtocol,
   initializeRepositoryProtocol,
   parseRepositoryManifest,
+  updateRepositoryFramework,
   validateRepositoryProtocol,
 } from "./repository.ts";
 
@@ -57,6 +59,10 @@ test("ay init scaffold is idempotent and requires a shared overview baseline", (
     const first = initializeRepositoryProtocol(root);
     const second = initializeRepositoryProtocol(root);
     assert.ok(first.created.includes(".alignyard/repository.yaml"));
+    assert.equal(
+      parseRepositoryManifest(fs.readFileSync(path.join(root, ".alignyard/repository.yaml"), "utf8")).manifest?.framework_version,
+      ALIGNYARD_FRAMEWORK_VERSION,
+    );
     assert.equal(second.created.length, 0);
     assert.equal(validateRepositoryProtocol(root).ok, false);
     createRepositoryDocument(root, {
@@ -73,6 +79,45 @@ test("ay init scaffold is idempotent and requires a shared overview baseline", (
     assert.match(skill, /intent-coverage review/);
     assert.match(skill, /not truth, sufficiency, or concision/);
     assert.match(skill, /Simplified Chinese/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("ay update replaces managed framework files while preserving repository knowledge and scopes", () => {
+  const root = temporaryRepository();
+  try {
+    initializeRepositoryProtocol(root);
+    createRepositoryDocument(root, {
+      kind: "doc", slug: "overview", scope: "shared", title: "仓库概览",
+    });
+    const overviewPath = path.join(root, ".alignyard/docs/shared/overview.md");
+    const overview = fs.readFileSync(overviewPath, "utf8").replace("# 概述", "# 概述\n\n保留的仓库知识。");
+    fs.writeFileSync(overviewPath, overview, "utf8");
+    fs.writeFileSync(
+      path.join(root, ".alignyard/repository.yaml"),
+      "version: 1\npreset: basic\nscopes:\n  - id: shared\n    title: Shared\n  - id: web\n    title: Web\n",
+      "utf8",
+    );
+    fs.writeFileSync(path.join(root, ".alignyard/skills/alignyard-knowledge/SKILL.md"), "old skill\n", "utf8");
+
+    const preview = updateRepositoryFramework(root, { check: true });
+    assert.equal(preview.check, true);
+    assert.equal(preview.from.protocol_version, 1);
+    assert.equal(preview.from.framework_version, 0);
+    assert.ok(preview.changes.some((change) => change.path === ".alignyard/repository.yaml"));
+    assert.equal(fs.readFileSync(path.join(root, ".alignyard/skills/alignyard-knowledge/SKILL.md"), "utf8"), "old skill\n");
+
+    const updated = updateRepositoryFramework(root);
+    assert.equal(updated.to.framework_version, ALIGNYARD_FRAMEWORK_VERSION);
+    const manifest = parseRepositoryManifest(fs.readFileSync(path.join(root, ".alignyard/repository.yaml"), "utf8")).manifest;
+    assert.equal(manifest?.version, 2);
+    assert.equal(manifest?.framework_version, ALIGNYARD_FRAMEWORK_VERSION);
+    assert.deepEqual(manifest?.scopes.map((scope) => scope.id), ["shared", "web"]);
+    assert.match(fs.readFileSync(path.join(root, ".alignyard/skills/alignyard-knowledge/SKILL.md"), "utf8"), /Framework update/);
+    assert.equal(fs.readFileSync(overviewPath, "utf8"), overview);
+    assert.equal(updateRepositoryFramework(root, { check: true }).changes.length, 0);
+    assert.equal(validateRepositoryProtocol(root).ok, true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

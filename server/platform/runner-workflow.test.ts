@@ -5,6 +5,7 @@ import { initSchema } from "../core/schema.ts";
 import {
   createPlatformRepository,
   createRepositoryInitializationTask,
+  createRepositoryUpdateTask,
   createPlatformTask,
   getPlatformTask,
   setPlatformRepositoryProtocolState,
@@ -204,6 +205,22 @@ test("ordinary Task produces a reviewed design baseline and stops before PR crea
     createChangeRequestOnRunner(env, task.key, author),
     /普通 Task 已形成设计基线/,
   );
+});
+
+test("Repository update starts an Agent with the framework update workflow", async () => {
+  const { db, repository, calls, env } = fixture();
+  setPlatformRepositoryProtocolState(db, repository.id, "outdated", "v0 可更新至 v1", {
+    protocol_version: 2,
+    framework_version: 0,
+  });
+  const task = createRepositoryUpdateTask(db, repository.id, "Author", 1);
+
+  const started = await startTaskOnRunner(env, task.key, { id: 1, name: "Author" }, "codex");
+  assert.equal(started.task.task_type, "repository_update");
+  const start = calls.filter((call) => call.method === "execution.start").at(-1)!;
+  assert.match(start.params.prompt, /ay update --check/);
+  assert.match(start.params.prompt, /不能成为重写 Repository 知识的借口/);
+  assert.match(start.params.prompt, /不修改业务源码/);
 });
 
 test("ordinary Task submission depends on Runner validation and commit preparation", async () => {

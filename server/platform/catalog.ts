@@ -12,8 +12,8 @@ export const PLATFORM_TASK_STATUSES = [
 ] as const;
 
 export type PlatformTaskStatus = typeof PLATFORM_TASK_STATUSES[number];
-export const PLATFORM_TASK_TYPES = ["change", "repository_init"] as const;
-export const REPOSITORY_PROTOCOL_STATES = ["uninitialized", "initializing", "ready", "invalid"] as const;
+export const PLATFORM_TASK_TYPES = ["change", "repository_init", "repository_update"] as const;
+export const REPOSITORY_PROTOCOL_STATES = ["uninitialized", "initializing", "ready", "outdated", "invalid"] as const;
 export type PlatformTaskType = typeof PLATFORM_TASK_TYPES[number];
 export type RepositoryProtocolState = typeof REPOSITORY_PROTOCOL_STATES[number];
 export type RepositoryMode = "editable" | "reference";
@@ -27,6 +27,8 @@ export interface PlatformRepository {
   protocol_initialized: boolean;
   protocol_state: RepositoryProtocolState;
   protocol_error: string | null;
+  protocol_version: number | null;
+  framework_version: number;
   created_by: string;
   created_by_user_id: number | null;
   created_at: string;
@@ -159,7 +161,7 @@ function branchSlug(value: string): string {
 
 export function listPlatformRepositories(db: DB): PlatformRepository[] {
   const rows = db.prepare(
-    "SELECT id,name,git_url,default_branch,protocol_initialized,protocol_state,protocol_error," +
+    "SELECT id,name,git_url,default_branch,protocol_initialized,protocol_state,protocol_error,protocol_version,framework_version," +
       "created_by,created_by_user_id,created_at,updated_at " +
       "FROM platform_repositories ORDER BY updated_at DESC,id DESC",
   ).all() as PlatformRepositoryRow[];
@@ -168,7 +170,7 @@ export function listPlatformRepositories(db: DB): PlatformRepository[] {
 
 export function getPlatformRepository(db: DB, id: number): PlatformRepository | undefined {
   const row = db.prepare(
-    "SELECT id,name,git_url,default_branch,protocol_initialized,protocol_state,protocol_error," +
+    "SELECT id,name,git_url,default_branch,protocol_initialized,protocol_state,protocol_error,protocol_version,framework_version," +
       "created_by,created_by_user_id,created_at,updated_at " +
       "FROM platform_repositories WHERE id=?",
   ).get(id) as PlatformRepositoryRow | undefined;
@@ -180,11 +182,20 @@ export function setPlatformRepositoryProtocolState(
   id: number,
   state: RepositoryProtocolState,
   error: string | null = null,
+  versions: { protocol_version?: number | null; framework_version?: number | null } = {},
 ): PlatformRepository | undefined {
   const changed = db.prepare(
     "UPDATE platform_repositories SET protocol_initialized=?,protocol_state=?,protocol_error=?," +
+      "protocol_version=?,framework_version=?," +
       "updated_at=datetime('now') WHERE id=?",
-  ).run(state === "ready" ? 1 : 0, state, error, id).changes;
+  ).run(
+    ["ready", "outdated"].includes(state) ? 1 : 0,
+    state,
+    error,
+    versions.protocol_version ?? null,
+    versions.framework_version ?? 0,
+    id,
+  ).changes;
   return changed ? getPlatformRepository(db, id) : undefined;
 }
 
@@ -222,6 +233,7 @@ type TaskRow = Omit<PlatformTask, "key" | "repositories" | "review" | "execution
 function repositoriesForTask(db: DB, taskId: number): PlatformTaskRepository[] {
   const rows = db.prepare(
     "SELECT r.id,r.name,r.git_url,r.default_branch,r.protocol_initialized,r.protocol_state,r.protocol_error," +
+      "r.protocol_version,r.framework_version," +
       "r.created_by,r.created_by_user_id,r.created_at,r.updated_at," +
       "tr.mode,tr.base_branch,tr.base_commit,tr.work_branch,tr.head_commit,tr.design_commit," +
       "tr.design_approved_at,tr.assignee," +
@@ -682,8 +694,9 @@ export function createPlatformTask(db: DB, input: Record<string, unknown>): Plat
   if (!repositories.some((item) => item?.mode === "editable")) {
     throw new PlatformValidationError("至少选择一个 editable Repository");
   }
-  if (taskType === "repository_init" && (repositories.length !== 1 || repositories[0]?.mode !== "editable")) {
-    throw new PlatformValidationError("Repository 初始化 Task 必须且只能关联一个 editable Repository");
+  if (["repository_init", "repository_update"].includes(taskType)
+    && (repositories.length !== 1 || repositories[0]?.mode !== "editable")) {
+    throw new PlatformValidationError("Repository 初始化或更新 Task 必须且只能关联一个 editable Repository");
   }
 
   const normalized = repositories.map((item) => {
@@ -733,7 +746,8 @@ export function createPlatformTask(db: DB, input: Record<string, unknown>): Plat
         protocol_state: RepositoryProtocolState;
       } | undefined;
       if (!repository) throw new PlatformValidationError(`Repository #${item.repository_id} 不存在`);
-      if (taskType === "change" && item.mode === "editable" && repository.protocol_state !== "ready") {
+      if (taskType === "change" && item.mode === "editable"
+        && !["ready", "outdated"].includes(repository.protocol_state)) {
         throw new PlatformValidationError(
           `Repository #${item.repository_id} 尚未完成 Alignyard 初始化，请先运行 Initialize`,
         );
@@ -772,7 +786,9 @@ export function createRepositoryInitializationTask(
 ): PlatformTask {
   const repository = getPlatformRepository(db, repositoryId);
   if (!repository) throw new PlatformValidationError("Repository 不存在");
-  if (repository.protocol_state === "ready") throw new PlatformValidationError("Repository 已完成初始化");
+  if (["ready", "outdated"].includes(repository.protocol_state)) {
+    throw new PlatformValidationError("Repository 已完成初始化");
+  }
 
   const existing = db.prepare(
     "SELECT t.task_key FROM platform_tasks t " +
@@ -792,6 +808,43 @@ export function createRepositoryInitializationTask(
     description:
       `为 ${repository.name} 建立版本化工程知识：运行 ay init，按 alignyard-knowledge Skill ` +
       "盘点仓库事实并梳理 scopes、架构、稳定接口与维护流程等基础 Docs；提交 Review 时由 Runner 执行 ay validate，随后推送工作分支并进入人工审核。",
+    owner,
+    owner_user_id: ownerUserId,
+    repositories: [{ repository_id: repository.id, mode: "editable", base_branch: repository.default_branch }],
+  });
+}
+
+/** Create (or return) the single active framework Update Task for one Repository. */
+export function createRepositoryUpdateTask(
+  db: DB,
+  repositoryId: number,
+  ownerValue: unknown,
+  ownerUserId: number | null = null,
+): PlatformTask {
+  const repository = getPlatformRepository(db, repositoryId);
+  if (!repository) throw new PlatformValidationError("Repository 不存在");
+  if (repository.protocol_state !== "outdated") {
+    throw new PlatformValidationError("Repository 当前没有可用的 Alignyard 框架更新");
+  }
+
+  const existing = db.prepare(
+    "SELECT t.task_key FROM platform_tasks t " +
+      "JOIN platform_task_repositories tr ON tr.task_id=t.id " +
+      "WHERE tr.repository_id=? AND t.task_type='repository_update' " +
+      "AND t.status IN ('draft','review','approved') ORDER BY t.id DESC LIMIT 1",
+  ).get(repositoryId) as { task_key: string } | undefined;
+  if (existing) {
+    const task = getPlatformTask(db, existing.task_key);
+    if (task) return task;
+  }
+
+  const owner = typeof ownerValue === "string" && ownerValue.trim() ? ownerValue.trim() : "当前用户";
+  return createPlatformTask(db, {
+    task_type: "repository_update",
+    title: `Update Alignyard · ${repository.name}`,
+    description:
+      `将 ${repository.name} 的 Alignyard 知识框架从 v${repository.framework_version} 更新到最新版：` +
+      "由 ay update 合并协议并替换 Skill、README 和模板，再由 Agent 按新版框架整理现有知识；知识正文只通过人工 Review 决定是否改变。",
     owner,
     owner_user_id: ownerUserId,
     repositories: [{ repository_id: repository.id, mode: "editable", base_branch: repository.default_branch }],
@@ -852,10 +905,10 @@ export function updatePlatformTaskStatus(db: DB, key: string, status: unknown): 
     if (task.pr_state !== "merged") {
       throw new PlatformValidationError("Task 只有在合并请求已合入后才能完成");
     }
-    if (task.task_type === "repository_init") {
+    if (["repository_init", "repository_update"].includes(task.task_type)) {
       const editable = task.repositories.find((repository) => repository.mode === "editable");
       if (editable?.protocol_state !== "ready") {
-        throw new PlatformValidationError("初始化 Task 只有在 Repository 就绪后才能完成");
+        throw new PlatformValidationError("Repository 框架 Task 只有在 Repository 就绪后才能完成");
       }
     }
   }
@@ -863,7 +916,9 @@ export function updatePlatformTaskStatus(db: DB, key: string, status: unknown): 
   const transitions: Record<PlatformTaskStatus, readonly PlatformTaskStatus[]> = {
     draft: ["review"],
     review: ["draft", "approved"],
-    approved: task.task_type === "repository_init" && task.pr_state === "open" ? ["draft", "completed"] : ["completed"],
+    approved: ["repository_init", "repository_update"].includes(task.task_type) && task.pr_state === "open"
+      ? ["draft", "completed"]
+      : ["completed"],
     completed: [],
   };
   if (!transitions[task.status].includes(status as PlatformTaskStatus)) {
@@ -873,7 +928,7 @@ export function updatePlatformTaskStatus(db: DB, key: string, status: unknown): 
     "UPDATE platform_tasks SET status=?,completed_at=CASE WHEN ?='completed' THEN COALESCE(completed_at,datetime('now')) ELSE completed_at END," +
       "updated_at=datetime('now') WHERE task_key=?",
   ).run(status, status, key.toUpperCase()).changes;
-  if (changed && task.task_type === "repository_init" && status === "draft") {
+  if (changed && ["repository_init", "repository_update"].includes(task.task_type) && status === "draft") {
     db.prepare(
       "UPDATE platform_task_repositories SET design_commit=NULL,design_approved_at=NULL " +
         "WHERE task_id=? AND mode='editable'",

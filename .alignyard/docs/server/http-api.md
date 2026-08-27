@@ -46,7 +46,8 @@ relations:
 | `DELETE /api/platform/repositories/:id` | 无 Task 引用时由创建者删除 |
 | `GET /api/platform/repositories/:id/branches` | 经当前用户在线 Runner 查询分支 |
 | `POST /api/platform/repositories/:id/initialize` | 创建 Repository Init Task |
-| `POST /api/platform/repositories/:id/refresh` | 经 Runner 读取默认分支必需工程知识 |
+| `POST /api/platform/repositories/:id/update` | 为检测为 `outdated` 的 Repository 创建框架 Update Task |
+| `POST /api/platform/repositories/:id/refresh` | 经 Runner 读取默认分支必需文件并检测协议与框架版本 |
 | `GET/POST /api/platform/tasks` | 查询或创建 Task；当前只允许一个 editable Repository |
 | `GET/PATCH/DELETE /api/platform/tasks/:key` | 查询、允许的状态变更或清理 |
 | `POST /api/platform/tasks/:key/run` | 启动/恢复 Author execution |
@@ -54,7 +55,7 @@ relations:
 | `GET /api/platform/tasks/:key/knowledge` | 经请求者自己的 Runner 临时解析当前 worktree 文档；不写入 Platform 数据库 |
 | `POST /api/platform/tasks/:key/review/run` | 在 Reviewer 自己的 Runner 启动 Review execution |
 | `POST /api/platform/tasks/:key/review/decision` | approve 或 changes requested |
-| `POST /api/platform/tasks/:key/pull-request` | Repository Init 经 Author Runner 创建/刷新 PR/MR；普通 Task 设计通过后停在可开始实现 |
+| `POST /api/platform/tasks/:key/pull-request` | Repository Init/Update 经 Author Runner 创建/刷新 PR/MR；普通 Task 设计通过后停在可开始实现 |
 | `POST /api/platform/tasks/:key/merge` | 经 Author Runner 合并并刷新协议状态 |
 
 Repository、Task 和 Review 变更必须通过当前登录用户的 owner/reviewer 校验。路由层只映射输入和状态码，状态机由 `platform/runner-workflow.ts` 与 catalog 承担。

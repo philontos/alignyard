@@ -10,6 +10,7 @@ relations:
   - doc.server.overview
   - doc.server.http-api
   - doc.server.cli-configuration
+  - spec.server.framework-update
   - adr.shared.node-local-ownership
   - adr.shared.platform-runner-separation
 ---
@@ -32,7 +33,7 @@ Web 创建一次性 pairing code，并展示从当前 Platform origin 下载 boo
 | `~/.alignyard/logs` | LaunchAgent 日志 |
 | `~/Library/LaunchAgents/com.alignyard.runner.plist` | 登录后常驻和自动重启 |
 
-安装包始终使用包内 Node，避免系统 Node 版本与 `node-pty` ABI 漂移。首版只支持 macOS；当前没有签名、notarization 或自动升级。
+安装包始终使用包内 Node，避免系统 Node 版本与 `node-pty` ABI 漂移。首版只支持 macOS；`alignyard-runner upgrade` 会检查 Platform 当前架构的 stable manifest、校验 SHA-256、安装新版本并重启 LaunchAgent，但当前没有签名、notarization、后台静默升级或自动回滚。
 
 ## 配对、握手与在线状态
 
@@ -65,6 +66,8 @@ Web 创建一次性 pairing code，并展示从当前 Platform origin 下载 boo
 
 当前一个 Task 只支持一个 editable Repository。这个限制换取清晰的分支、Review 与 PR/MR 语义；多 Repository 写入必须先设计跨仓库提交与失败补偿，不能只放宽数组校验。
 
+`repository.refresh-protocol` 只从默认分支读取 manifest 和当前协议要求的有界基线文件，返回协议版本、知识框架版本及 `uninitialized`、`invalid`、`outdated`、`ready` 状态。最新版框架来自当前 Runner 制品；旧 Runner 不会凭空获得新协议，因此 Platform 同时提示 Runner 制品更新。
+
 ## 凭据边界
 
 - 设备 token 只用于 `/runner`，从不注入 Agent。
@@ -83,6 +86,7 @@ Web 创建一次性 pairing code，并展示从当前 Platform origin 下载 boo
 ## 发布与演进
 
 - 破坏性协议变化提升 `RUNNER_PROTOCOL_VERSION`；旧客户端必须明确显示 `upgrade_required`。
+- Runner 使用独立 `server/runner/VERSION` 发布，不跟随 Platform npm package version；构建会缓存 Node archive，并按 Runner 源码指纹复用完全相同的制品。源码变化未提升 Runner version 时构建必须失败，避免同版本产生不同内容。
 - 新能力先增加具体 RPC，不增加通用命令执行后门。
 - 发布前必须增加签名 manifest、Apple Developer ID/notarization、原子升级、健康回滚和至少一个版本的兼容窗口。
 - SHA-256 只能检测下载损坏，不能证明发布者身份。

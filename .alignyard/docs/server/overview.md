@@ -10,6 +10,7 @@ relations:
   - doc.server.cli-configuration
   - doc.server.runner-protocol
   - doc.server.knowledge-protocol
+  - spec.server.framework-update
   - adr.shared.node-local-ownership
   - adr.shared.platform-runner-separation
 ---
@@ -40,7 +41,7 @@ Runner 启动顺序：
 | `auth/` | Google identity、Platform session 与 service token 认证 |
 | `platform/catalog.ts` | Platform Repository/Task/Review/execution 持久化规则 |
 | `platform/runner-workflow.ts` | Author、Review、PR/MR、merge 的跨 Runner 状态机 |
-| `platform/prompts.ts` | Repository Init、知识设计 Author 与 Reviewer Prompt 组合 |
+| `platform/prompts.ts` | Repository Init/Update、知识设计 Author 与 Reviewer Prompt 组合 |
 | `runner/registry.ts` | pairing、设备 token 与归属查询 |
 | `runner/gateway.ts` | Runner 在线状态、RPC correlation/timeout、终端通道 |
 | `runner/operations.ts` | allowlist RPC 到本机执行内核的适配与幂等 binding |
@@ -57,6 +58,7 @@ Runner 启动顺序：
 - 一个当前 Task execution 使用一个稳定 execution ID；重试不创建第二个 worktree。
 - Author execution 与 Reviewer execution 分开记录；Review 结束后恢复原 Author 指针。
 - 提交 Review 时由 Runner 执行 `ay validate`、检查 clean worktree 与新提交，并 push 工作分支。
+- Repository 框架版本由 Runner 从默认分支检测；更新只在 Update Task worktree 中执行，Platform 不改写或保存知识。
 - Review approve 后为每个 editable Repository 固化 `design_commit`；普通 Task 到此成为可开始实现的设计交付，不创建 PR/MR。
 - Task 只有远端 PR/MR 为 `merged` 后才能完成。
 - 所有 Task/Repository 变更都校验 owner 或当前 reviewer；设备只能由其用户撤销。

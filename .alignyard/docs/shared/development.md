@@ -10,6 +10,7 @@ relations:
   - doc.server.runner-protocol
   - doc.server.knowledge-protocol
   - doc.web.overview
+  - spec.server.framework-update
   - adr.shared.platform-runner-separation
 ---
 
@@ -56,19 +57,21 @@ dist/runner/stable/darwin-<arch>/
   manifest.json
 ```
 
-制品包含 Node runtime、锁定的 npm 依赖、Runner/`ay` launcher 和所需源码。系统已安装 Node 时仍使用包内 runtime，以保证 Node/native module ABI 一致。构建脚本需要联网下载对应 Node archive；产物不提交 Git。
+制品包含 Node runtime、锁定的 npm 依赖、Runner/`ay` launcher 和所需源码。系统已安装 Node 时仍使用包内 runtime，以保证 Node/native module ABI 一致。Runner 使用独立的 `server/runner/VERSION`，不因 Platform-only 修改被迫升级。
+
+构建脚本把 Node archive 缓存在用户 cache，并对 Runner 所需源码、lockfile、launcher 和构建脚本计算稳定指纹。版本、源码指纹和 archive SHA-256 都一致时直接复用已有制品；同一版本下源码指纹改变则构建失败，发布者必须先提升 Runner version。首次构建或 Node 版本变化需要联网下载，产物不提交 Git。
 
 ## Platform 部署
 
-仓库只提供通用 Docker/Compose 能力：
+仓库提供通用 Docker/Compose 部署脚本，以及从开发机打包当前 Git revision、上传并在既有 GCP VM 切换 release 的辅助脚本：
 
 1. 从 `.env.example` 创建部署环境文件，只在目标机保存秘密值。
-2. 构建两种 Mac 架构制品，并把 `dist/runner` 挂载为只读下载目录。
+2. 在相应架构上构建 Runner 制品，并把 `dist/runner` 挂载为只读下载目录。
 3. 执行 `./scripts/deploy-platform.sh`。
 4. 用 Caddy、Nginx 或云负载均衡终止 HTTPS，并转发普通 HTTP 与 WebSocket upgrade。
 5. 备份 `/data`，保持单实例运行。
 
-本机可另写一个不提交的 GCP 辅助工具负责创建 VM、SSH、同步仓库与环境文件、调用通用部署脚本。它不能把项目 ID、实例名、域名或密钥写回仓库。
+`scripts/deploy-gcp-vm.sh` 只接受 clean、已提交的 HEAD：本地复用或构建 Runner 制品，通过 `git archive` 生成 release bundle，上传既有 VM，在 VM 上构建容器、健康检查后切换 `current`。部署目标可由环境变量覆盖；密钥和 `.env` 只保留在目标机 shared 目录。脚本不创建云资源、不提交 Git，也不把运行凭据写入制品。
 
 ## 目录与拆分规则
 
