@@ -1,6 +1,6 @@
 {
   "name": "alignyard",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "description": "Cloud collaboration platform with owner-local coding agent runners",

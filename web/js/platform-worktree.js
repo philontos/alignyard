@@ -2,6 +2,7 @@
 // relays these requests; file contents and Git diffs are computed by the Task
 // participant's local Runner and are never persisted in Platform.
 const $ = (selector, root = document) => root.querySelector(selector);
+const ALL_CHANGES = "__all_changes__";
 
 let requestApi = null;
 let reportError = null;
@@ -155,9 +156,24 @@ function renderChanges() {
   const target = $("#worktree-browser-tree");
   target.replaceChildren();
   if (!changesPayload) return treeState("正在读取变更…");
-  if (!changesPayload.files.length) return treeState("当前 worktree 没有变更");
   const list = document.createElement("div");
   list.className = "worktree-tree-list";
+  const summary = document.createElement("button");
+  summary.type = "button";
+  summary.className = `worktree-tree-row worktree-change-summary${selectedPath === ALL_CHANGES ? " selected" : ""}`;
+  summary.title = `当前 worktree 相对 ${changesPayload.revision.label} 的全部变更`;
+  const summaryStatus = document.createElement("span");
+  summaryStatus.className = "worktree-change-status summary";
+  summaryStatus.textContent = "Σ";
+  const summaryLabel = document.createElement("span");
+  summaryLabel.className = "worktree-tree-label";
+  summaryLabel.textContent = "全部变更";
+  const count = document.createElement("span");
+  count.className = "worktree-change-count";
+  count.textContent = String(changesPayload.files.length);
+  summary.append(summaryStatus, summaryLabel, count);
+  summary.addEventListener("click", () => void selectAllChanges());
+  list.append(summary);
   for (const change of changesPayload.files) {
     const row = document.createElement("button");
     row.type = "button";
@@ -285,9 +301,9 @@ function renderFile(payload) {
   renderSource(payload.content, payload.path);
 }
 
-function renderDiff(payload) {
+function renderDiff(payload, label = payload.path) {
   selectedPayload = payload;
-  setPath(payload.path);
+  setPath(label);
   if (payload.binary) return stateBox("二进制文件已发生变化，无法显示文本 Diff");
   if (payload.content == null) return stateBox(payload.truncated ? "Diff 过大，无法在浏览器中显示" : "没有可显示的文本 Diff");
   const target = $("#worktree-browser-content");
@@ -345,6 +361,24 @@ async function selectChange(path) {
   }
 }
 
+async function selectAllChanges() {
+  selectedPath = ALL_CHANGES;
+  renderNavigation();
+  $("#worktree-browser").classList.add("detail");
+  const label = `全部变更 · 相对 ${changesPayload?.revision?.label || "基准分支"}`;
+  setPath(label);
+  stateBox("正在生成整体 Diff…");
+  try {
+    const payload = await inspect("diff");
+    revision(payload);
+    renderDiff(payload, label);
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    stateBox(error.message, "error");
+    banner(error.message, "error");
+  }
+}
+
 async function loadFiles(initialPath = null) {
   treePayload = null;
   tree = null;
@@ -366,16 +400,21 @@ async function loadFiles(initialPath = null) {
 async function loadChanges(initialPath = null) {
   changesPayload = null;
   treeState("正在读取变更…");
-  stateBox("请从左侧选择变更文件");
+  stateBox("正在生成整体 Diff…");
   const payload = await inspect("changes");
   changesPayload = payload;
   revision(payload);
   $("#worktree-tab-changes").textContent = `变更 · ${payload.files.length}`;
   renderNavigation();
-  const target = initialPath && payload.files.some((file) => file.path === initialPath)
+  const target = initialPath && initialPath !== ALL_CHANGES && payload.files.some((file) => file.path === initialPath)
     ? initialPath
-    : payload.files[0]?.path;
-  if (target) await selectChange(target);
+    : null;
+  if (target) return selectChange(target);
+  if (payload.files.length) return selectAllChanges();
+  selectedPath = ALL_CHANGES;
+  renderNavigation();
+  setPath(`全部变更 · 相对 ${payload.revision.label}`);
+  stateBox(`当前 worktree 相对 ${payload.revision.label} 没有变更`);
 }
 
 async function loadCurrent(initialPath = null) {
@@ -384,6 +423,7 @@ async function loadCurrent(initialPath = null) {
   selectedPath = null;
   selectedPayload = null;
   $("#worktree-browser").classList.remove("detail");
+  setPath("");
   try {
     if (tab === "changes") await loadChanges(initialPath);
     else await loadFiles(initialPath);
@@ -417,9 +457,19 @@ export function openTaskWorktreeBrowser(nextTask, options = {}) {
   $("#worktree-browser-repository").textContent = repository
     ? `${repository.name} · ${repository.work_branch || repository.base_branch || ""}`
     : "";
+  tab = options.tab === "changes" ? "changes" : "files";
+  for (const button of document.querySelectorAll("[data-worktree-tab]")) {
+    button.classList.toggle("active", button.dataset.worktreeTab === tab);
+  }
+  $("#worktree-tab-changes").textContent = "变更";
+  $("#worktree-browser").classList.remove("detail");
+  revision(null);
+  banner();
+  treeState(tab === "changes" ? "正在读取变更…" : "正在读取文件树…");
+  stateBox(tab === "changes" ? "正在生成整体 Diff…" : "正在读取文件…");
   $("#worktree-browser").hidden = false;
   document.body.classList.add("worktree-browser-open");
-  void setTab(options.tab === "changes" ? "changes" : "files", options.path || null);
+  void loadCurrent(options.path || null);
 }
 
 export function closeTaskWorktreeBrowser() {

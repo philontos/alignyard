@@ -5,7 +5,11 @@ body.worktree-browser-open { overflow: hidden; }
   z-index: 155;
   inset: 0;
   display: grid;
-  grid-template-rows: 58px 43px auto minmax(0,1fr);
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
+  grid-template-rows: 58px 43px minmax(0,1fr);
   color: var(--ink);
   background: var(--canvas);
 }
@@ -67,10 +71,10 @@ body.worktree-browser-open { overflow: hidden; }
 }
 .worktree-browser-tabs button.active { color: var(--primary); }
 .worktree-browser-tabs button.active::after { position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: var(--primary); content: ""; }
-.worktree-browser-banner { padding: 7px 18px; border-bottom: 1px solid var(--line); color: var(--amber); background: var(--amber-soft); font-size: 10px; }
+.worktree-browser-banner { position: absolute; z-index: 4; top: 101px; right: 0; left: 0; box-sizing: border-box; padding: 7px 18px; border-bottom: 1px solid var(--line); color: var(--amber); background: var(--amber-soft); box-shadow: 0 5px 14px color-mix(in srgb,var(--ink) 7%,transparent); font-size: 10px; }
 .worktree-browser-banner.error { color: var(--red); background: color-mix(in srgb,var(--red) 7%,var(--paper)); }
-.worktree-browser-body { display: grid; min-height: 0; grid-template-columns: var(--wt-sidebar) minmax(0,1fr); }
-.worktree-browser-tree { overflow: auto; min-width: 0; padding: 8px; border-right: 1px solid var(--line); background: var(--paper); overscroll-behavior: contain; }
+.worktree-browser-body { display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; grid-template-columns: var(--wt-sidebar) minmax(0,1fr); contain: layout paint; }
+.worktree-browser-tree { box-sizing: border-box; height: 100%; overflow: auto; min-width: 0; min-height: 0; padding: 8px; border-right: 1px solid var(--line); background: var(--paper); overscroll-behavior: contain; contain: layout paint; }
 .worktree-tree-list { display: grid; gap: 1px; }
 .worktree-tree-row {
   display: flex;
@@ -97,14 +101,17 @@ body.worktree-browser-open { overflow: hidden; }
 .worktree-change-status.add { color: var(--success); background: var(--success-soft); }
 .worktree-change-status.delete { color: var(--red); background: color-mix(in srgb,var(--red) 8%,var(--paper)); }
 .worktree-change-status.modify { color: var(--amber); background: var(--amber-soft); }
-.worktree-browser-main { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: var(--canvas); }
+.worktree-change-status.summary { color: var(--primary); background: color-mix(in srgb,var(--primary) 9%,var(--paper)); }
+.worktree-change-summary { margin-bottom: 4px; border-bottom-color: var(--line); border-radius: 5px; font-weight: 650; }
+.worktree-change-count { flex: 0 0 auto; color: var(--subtle); font: 9px/1 "SFMono-Regular",Consolas,monospace; }
+.worktree-browser-main { display: flex; height: 100%; min-width: 0; min-height: 0; overflow: hidden; flex-direction: column; background: var(--canvas); }
 .worktree-browser-path { display: flex; min-height: 39px; padding: 6px 14px; flex: 0 0 auto; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); background: var(--paper); }
 .worktree-path-label { overflow: hidden; min-width: 0; flex: 1; color: var(--muted); font: 10px/1.45 "SFMono-Regular",Consolas,monospace; text-overflow: ellipsis; white-space: nowrap; }
 .worktree-view-toggle { display: inline-flex; flex: 0 0 auto; padding: 2px; gap: 1px; border: 1px solid var(--line); border-radius: 6px; background: var(--soft); }
 .worktree-view-toggle button { width: auto; min-height: 23px; padding: 2px 8px; border: 0; border-radius: 4px; color: var(--subtle); background: transparent; font-size: 9px; }
 .worktree-view-toggle button.active { color: var(--primary); background: var(--paper); }
-.worktree-browser-content { overflow: auto; min-height: 0; flex: 1; overscroll-behavior: contain; }
-.worktree-browser-state { display: grid; min-height: 100%; padding: 40px; place-items: center; color: var(--subtle); font-size: 11px; text-align: center; }
+.worktree-browser-content { height: 0; overflow: auto; min-height: 0; flex: 1; overscroll-behavior: contain; }
+.worktree-browser-state { display: grid; box-sizing: border-box; width: 100%; height: 100%; min-height: 0; padding: 40px; place-items: center; color: var(--subtle); font-size: 11px; text-align: center; }
 .worktree-browser-state.error { color: var(--red); }
 .worktree-source-layout { display: flex; min-width: 100%; width: max-content; align-items: stretch; font: 11.5px/1.62 "SFMono-Regular",Consolas,monospace; tab-size: 2; }
 .worktree-source-lines,.worktree-source-code { min-height: 100%; margin: 0; padding-top: 14px; padding-bottom: 24px; white-space: pre; font: inherit; }
@@ -124,7 +131,7 @@ body.worktree-browser-open { overflow: hidden; }
 .worktree-diff-line.meta { color: var(--subtle); font-weight: 650; }
 
 @media (max-width: 760px) {
-  .worktree-browser { --wt-sidebar: 100%; grid-template-rows: 58px 43px auto minmax(0,1fr); }
+  .worktree-browser { --wt-sidebar: 100%; grid-template-rows: 58px 43px minmax(0,1fr); }
   .worktree-browser-heading small,#worktree-browser-revision { display: none; }
   .worktree-browser-body { display: block; position: relative; }
   .worktree-browser-tree { position: absolute; inset: 0; border-right: 0; }

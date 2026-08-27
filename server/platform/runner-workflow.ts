@@ -190,7 +190,7 @@ export async function taskWorktreeOnRunner(
   if (!request || !["tree", "file", "changes", "diff"].includes(request.operation)) {
     throw new PlatformWorkflowError(400, "worktree 浏览请求无效");
   }
-  if (["file", "diff"].includes(request.operation) && typeof request.path !== "string") {
+  if (request.operation === "file" && typeof request.path !== "string") {
     throw new PlatformWorkflowError(400, "请选择要读取的文件");
   }
   return callExecution(env, execution, "execution.inspect-worktree", {

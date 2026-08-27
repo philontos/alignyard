@@ -225,6 +225,50 @@ function untrackedPatch(relative: string, content: string): string {
   return patch;
 }
 
+async function completeDiff(
+  runner: LocalExecutor,
+  task: Task,
+  changed: Awaited<ReturnType<typeof changes>>,
+): Promise<WorktreePayload> {
+  const tracked = await gitCapped(runner, task.worktree_path, [
+    "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--find-renames", "--unified=3",
+    changed.revision.commit, "--",
+  ], MAX_WORKTREE_DIFF_BYTES);
+  let content = tracked.text;
+  let truncated = tracked.truncated;
+  for (const change of changed.files.filter((file) => file.status === "?")) {
+    if (truncated) break;
+    await requireGitVisible(runner, task, change.path);
+    const read = readLocalFile(task.worktree_path, change.path);
+    const decoded = read.buffer ? decodeText(read.buffer) : null;
+    let patch: string;
+    if (read.unavailable === "tooLarge") {
+      patch = `diff --git a/${change.path} b/${change.path}\nnew file is too large to preview\n`;
+    } else if (read.unavailable || decoded == null) {
+      patch = `diff --git a/${change.path} b/${change.path}\nBinary files /dev/null and b/${change.path} differ\n`;
+    } else {
+      patch = untrackedPatch(change.path, decoded);
+    }
+    const separator = content && !content.endsWith("\n") ? "\n" : "";
+    const remaining = MAX_WORKTREE_DIFF_BYTES - content.length - separator.length;
+    if (patch.length > remaining) {
+      content += separator + patch.slice(0, Math.max(0, remaining));
+      truncated = true;
+    } else {
+      content += separator + patch;
+    }
+  }
+  return {
+    kind: "diff",
+    path: "",
+    content,
+    truncated,
+    binary: false,
+    revision: changed.revision,
+    generated_at: generatedAt(),
+  };
+}
+
 export async function inspectTaskWorktree(
   runner: LocalExecutor,
   task: Task,
@@ -247,6 +291,11 @@ export async function inspectTaskWorktree(
     };
   }
   if (request.operation === "changes") return changes(runner, task);
+
+  if (request.operation === "diff" && !request.path) {
+    const changed = await changes(runner, task);
+    return completeDiff(runner, task, changed);
+  }
 
   const relative = visiblePath(request.path);
   if (request.operation === "file") {

@@ -269,7 +269,11 @@ test("worktree files and diffs are inspected on the requesting participant's Run
     /只有 Task 参与者/,
   );
   await assert.rejects(
-    taskWorktreeOnRunner(env, task.key, author, { operation: "diff" }),
+    taskWorktreeOnRunner(env, task.key, author, { operation: "file" }),
     /请选择要读取的文件/,
   );
+  await taskWorktreeOnRunner(env, task.key, author, { operation: "diff" });
+  const completeDiff = calls.filter((item) => item.method === "execution.inspect-worktree").at(-1)!;
+  assert.equal(completeDiff.params.operation, "diff");
+  assert.equal(completeDiff.params.path, undefined);
 });

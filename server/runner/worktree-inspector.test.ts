@@ -120,6 +120,16 @@ test("worktree browser diffs committed, deleted and untracked files against immu
     ]);
     assert.equal(changes.revision.commit, current.base);
 
+    const complete = await inspectTaskWorktree(runner, current.task, { operation: "diff" });
+    assert.equal(complete.kind, "diff");
+    if (complete.kind === "diff") {
+      assert.equal(complete.path, "");
+      assert.equal(complete.revision.commit, current.base);
+      assert.match(complete.content || "", /更新内容/);
+      assert.match(complete.content || "", /README\.md/);
+      assert.match(complete.content || "", /\+# 新文档/);
+    }
+
     const committed = await inspectTaskWorktree(runner, current.task, {
       operation: "diff",
       path: ".alignyard/docs/overview.md",
