@@ -21,6 +21,16 @@ export interface WorktreeInspectRequest {
   diff_base_label?: string;
 }
 
+/** Keep the authenticated Platform comparison baseline across the Runner RPC boundary. */
+export function worktreeInspectRequest(input: Record<string, unknown>): WorktreeInspectRequest {
+  return {
+    operation: input.operation as WorktreeOperation,
+    ...(typeof input.path === "string" ? { path: input.path } : {}),
+    ...(typeof input.diff_base_commit === "string" ? { diff_base_commit: input.diff_base_commit } : {}),
+    ...(typeof input.diff_base_label === "string" ? { diff_base_label: input.diff_base_label } : {}),
+  };
+}
+
 interface WorktreeRevision {
   label: string;
   commit: string;

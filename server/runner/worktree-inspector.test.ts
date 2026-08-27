@@ -8,7 +8,7 @@ import path from "node:path";
 import type { Task } from "../core/db.ts";
 import type { ExecOpts } from "../core/command-runner.ts";
 import type { LocalExecutor } from "../core/local-executor.ts";
-import { inspectTaskWorktree } from "./worktree-inspector.ts";
+import { inspectTaskWorktree, worktreeInspectRequest } from "./worktree-inspector.ts";
 
 const pexec = promisify(execFile);
 
@@ -32,6 +32,21 @@ class TestExecutor implements LocalExecutor {
 }
 
 const runner = new TestExecutor();
+
+test("Runner RPC adapter preserves the Platform-owned review Diff baseline", () => {
+  assert.deepEqual(worktreeInspectRequest({
+    operation: "diff",
+    path: ".alignyard/repository.yaml",
+    diff_base_commit: "a".repeat(40),
+    diff_base_label: "main",
+    ignored: "value",
+  }), {
+    operation: "diff",
+    path: ".alignyard/repository.yaml",
+    diff_base_commit: "a".repeat(40),
+    diff_base_label: "main",
+  });
+});
 
 async function git(cwd: string, ...args: string[]) {
   return (await runner.exec("git", args, { cwd })).trim();

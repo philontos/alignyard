@@ -24,7 +24,7 @@ import {
   type ChangeRequestInput,
 } from "../platform/forge.js";
 import type { RunnerRpcMethod } from "./protocol.js";
-import { inspectTaskWorktree } from "./worktree-inspector.js";
+import { inspectTaskWorktree, worktreeInspectRequest } from "./worktree-inspector.js";
 import {
   ALIGNYARD_FRAMEWORK_VERSION,
   ALIGNYARD_MANIFEST,
@@ -247,10 +247,7 @@ async function readExecutionKnowledge(params: Record<string, any>) {
 async function inspectExecutionWorktree(params: Record<string, any>) {
   const task = getOwnedTask(db, Number(params.runner_task_id));
   if (!task?.worktree_path) throw new Error("Runner Task worktree 不存在");
-  return inspectTaskWorktree(localExecutor, task, {
-    operation: params.operation,
-    ...(typeof params.path === "string" ? { path: params.path } : {}),
-  });
+  return inspectTaskWorktree(localExecutor, task, worktreeInspectRequest(params));
 }
 
 function changeRequestInput(params: Record<string, any>): ChangeRequestInput & Record<string, any> {
