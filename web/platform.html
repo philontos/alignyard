@@ -85,11 +85,43 @@
         <label class="full"><span>Task 标题</span><input name="title" required autocomplete="off" placeholder="例如：统一登录态续期策略" /></label>
         <label class="full"><span>需求说明 <small>可选</small></span><textarea name="description" rows="3" placeholder="说明目标、范围和验收条件"></textarea></label>
         <label class="full"><span>负责人</span><input name="owner" required readonly autocomplete="off" /></label>
+        <div class="form-field full task-agent-field"><span>Agent</span>
+          <div class="agent-picker" data-agent-picker>
+            <input type="hidden" name="agent" data-author-agent value="codex" />
+            <button class="agent-picker-trigger" type="button" data-agent-picker-trigger aria-haspopup="listbox" aria-expanded="false"><span data-agent-picker-label>Codex</span><i aria-hidden="true"></i></button>
+            <div class="agent-picker-menu" data-agent-picker-menu role="listbox" aria-label="选择 Agent" hidden>
+              <button class="selected" type="button" role="option" aria-selected="true" data-agent-value="codex"><span>Codex</span><i aria-hidden="true">✓</i></button>
+              <button type="button" role="option" aria-selected="false" data-agent-value="claude"><span>Claude Code</span><i aria-hidden="true">✓</i></button>
+              <button type="button" role="option" aria-selected="false" data-agent-value="kimi"><span>Kimi CLI</span><i aria-hidden="true">✓</i></button>
+            </div>
+          </div>
+          <small>Runner 会使用所选 Agent 创建 worktree 并直接启动。</small>
+        </div>
       </div>
       <div class="repo-selection-head"><div><strong>Repository</strong><small>选择一个已就绪的 Repository</small></div><button type="button" class="text-button" data-add-repository>＋ 添加</button></div>
       <div id="task-repository-options" class="task-repository-options"></div>
       <div class="form-error" id="task-form-error" role="alert"></div>
-      <div class="dialog-actions"><button class="button secondary" type="button" data-close-dialog>取消</button><button class="button primary" id="create-task-submit" type="submit">创建 Task</button></div>
+      <div class="dialog-actions"><button class="button secondary" type="button" data-close-dialog>取消</button><button class="button primary" id="create-task-submit" type="submit">创建并启动</button></div>
+    </form>
+  </div>
+
+  <div class="dialog-backdrop" id="repository-task-launch-dialog" hidden>
+    <form class="dialog-card repository-task-launch-dialog" id="repository-task-launch-form">
+      <div class="dialog-head"><div><p class="eyebrow" id="repository-task-launch-eyebrow">REPOSITORY INIT</p><h2 id="repository-task-launch-title">初始化 Repository</h2></div><button class="close-button" type="button" data-close-repository-task-launch aria-label="关闭">×</button></div>
+      <p class="dialog-intro" id="repository-task-launch-copy">选择 Agent 后，Runner 会直接创建工作分支、worktree 和 Agent session。</p>
+      <div class="form-field task-agent-field"><span>Agent</span>
+        <div class="agent-picker" data-agent-picker>
+          <input type="hidden" name="agent" data-author-agent value="codex" />
+          <button class="agent-picker-trigger" type="button" data-agent-picker-trigger aria-haspopup="listbox" aria-expanded="false"><span data-agent-picker-label>Codex</span><i aria-hidden="true"></i></button>
+          <div class="agent-picker-menu" data-agent-picker-menu role="listbox" aria-label="选择 Agent" hidden>
+            <button class="selected" type="button" role="option" aria-selected="true" data-agent-value="codex"><span>Codex</span><i aria-hidden="true">✓</i></button>
+            <button type="button" role="option" aria-selected="false" data-agent-value="claude"><span>Claude Code</span><i aria-hidden="true">✓</i></button>
+            <button type="button" role="option" aria-selected="false" data-agent-value="kimi"><span>Kimi CLI</span><i aria-hidden="true">✓</i></button>
+          </div>
+        </div>
+      </div>
+      <p class="form-error" id="repository-task-launch-error"></p>
+      <div class="dialog-actions"><button class="button secondary" type="button" data-close-repository-task-launch>取消</button><button class="button primary" id="repository-task-launch-submit" type="submit">创建并启动</button></div>
     </form>
   </div>
 

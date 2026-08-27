@@ -219,8 +219,21 @@ async function prepareReview(params: Record<string, any>) {
 async function readExecutionKnowledge(params: Record<string, any>) {
   const task = getOwnedTask(db, Number(params.runner_task_id));
   if (!task?.worktree_path) throw new Error("Runner Task worktree 不存在");
-  const indexed = indexRepositoryProtocol(task.worktree_path);
   const requestedId = typeof params.document_id === "string" ? params.document_id.trim() : "";
+  const headCommit = (await localExecutor.exec("git", ["rev-parse", "HEAD"], {
+    cwd: task.worktree_path,
+  })).trim();
+  let indexed: ReturnType<typeof indexRepositoryProtocol>;
+  try {
+    indexed = indexRepositoryProtocol(task.worktree_path);
+  } catch (error) {
+    if (requestedId) throw error;
+    return {
+      documents: [],
+      head_commit: headCommit,
+      protocol_error: String((error as any)?.message || error),
+    };
+  }
   if (requestedId) {
     const document = indexed.documents.find((item) => item.id === requestedId);
     if (!document) throw new Error("工程文档不存在");
@@ -228,9 +241,6 @@ async function readExecutionKnowledge(params: Record<string, any>) {
     return { document: visibleDocument };
   }
   const documents = indexed.documents.map(({ content: _content, content_hash: _contentHash, ...document }) => document);
-  const headCommit = (await localExecutor.exec("git", ["rev-parse", "HEAD"], {
-    cwd: task.worktree_path,
-  })).trim();
   return { documents, head_commit: headCommit };
 }
 

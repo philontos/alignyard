@@ -78,6 +78,15 @@ export function openPlatformAgentWorkspace(task) {
   element("task-drawer").classList.add("task-workspace-mode");
   document.body.classList.add("agent-workspace-open");
 
+  const executionKey = task?.runner_execution_id;
+  if (active && executionKey && active.taskId === executionKey && active.session === task.runtime_session) {
+    // Polling may briefly observe stale execution metadata while the live PTY
+    // is already connected. Never throw away the user's terminal output for a
+    // control-plane refresh; the socket's own close event is authoritative.
+    requestAnimationFrame(fit);
+    return;
+  }
+
   if (!task?.runner_execution_id || !task.runtime_task_id || !task.runtime_session || !task.runtime_alive) {
     disposeActiveTerminal();
     emptyTask = task;
@@ -107,12 +116,6 @@ export function openPlatformAgentWorkspace(task) {
   host.hidden = false;
   empty.hidden = true;
   controls.hidden = false;
-  const executionKey = task.runner_execution_id;
-  if (active?.taskId === executionKey && active.session === task.runtime_session) {
-    requestAnimationFrame(fit);
-    return;
-  }
-
   disposeActiveTerminal();
   setConnectionState("正在连接…", "connecting");
 
@@ -168,10 +171,12 @@ export function openPlatformAgentWorkspace(task) {
       requestAnimationFrame(() => { fit(); term.focus(); });
     },
     onData: (data) => { if (active === terminalState) term.write(data); },
-    onClose: () => {
+    onClose: (event) => {
       if (active !== terminalState) return;
-      setConnectionState("连接已断开", "closed");
-      term.write("\r\n\x1b[90mAgent 连接已断开，关闭后可重新进入。\x1b[0m\r\n");
+      const normal = event?.code === 1000;
+      setConnectionState(normal ? "Agent 会话已结束" : "连接已断开", "closed");
+      const reason = event?.reason ? `（${event.reason}）` : "";
+      term.write(`\r\n\x1b[90m${normal ? "Agent 会话已结束" : "Agent 连接已断开"}${reason}；当前输出已保留。\x1b[0m\r\n`);
     },
   });
   try {

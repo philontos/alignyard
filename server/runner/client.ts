@@ -15,6 +15,7 @@ import {
   parsePlatformRunnerMessage,
   type PlatformRunnerMessage,
   type RunnerExecutionEvent,
+  type RunnerRpcMethod,
 } from "./protocol.js";
 
 interface LocalTerminal { term: pty.IPty }
@@ -34,6 +35,20 @@ function eventFromResult(params: any, result: any): RunnerExecutionEvent | null 
     work_branch: result.work_branch,
     base_commit: result.base_commit,
     head_commit: result.head_commit,
+  };
+}
+
+export function executionFailureEvent(
+  method: RunnerRpcMethod,
+  params: any,
+  detail: string,
+): RunnerExecutionEvent | null {
+  if (!["execution.start", "execution.resume"].includes(method) || !params?.execution_id) return null;
+  return {
+    type: "execution.event",
+    execution_id: params.execution_id,
+    status: "failed",
+    error: detail,
   };
 }
 
@@ -115,13 +130,8 @@ export class RunnerClient {
       } catch (error: any) {
         const detail = String(error?.message || error);
         send(socket, { type: "rpc.result", id: message.id, ok: false, error: detail });
-        const executionId = (message.params as any)?.execution_id;
-        if (executionId) send(socket, {
-          type: "execution.event",
-          execution_id: executionId,
-          status: "failed",
-          error: detail,
-        });
+        const event = executionFailureEvent(message.method, message.params, detail);
+        if (event) send(socket, event);
       }
       return;
     }

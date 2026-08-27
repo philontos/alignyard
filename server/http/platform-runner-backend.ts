@@ -26,7 +26,9 @@ export const platformRunnerBackend: PlatformRouteBackend = {
       return { runtime_alive: false, runtime_has_worktree: false };
     }
     const active = ["queued", "starting", "running", "waiting"].includes(task.runtime_status || "");
-    const hasWorktree = task.runtime_task_id != null && !["failed", "cleaned"].includes(task.runtime_status || "");
+    // A failed Agent/session does not remove the Runner-owned worktree. Keep it
+    // browsable and resumable until cleanup explicitly reports `cleaned`.
+    const hasWorktree = task.runtime_task_id != null && task.runtime_status !== "cleaned";
     return {
       runtime_alive: runnerGateway.isOnline(task.runner_id) && active,
       runtime_has_worktree: hasWorktree,

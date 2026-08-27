@@ -29,6 +29,8 @@ const state = {
 const taskBranchRequests = new Map();
 const repositoryProtocolChecks = new Map();
 let automaticProtocolRefreshActive = false;
+let stateMutationEpoch = 0;
+let repositoryTaskLaunch = null;
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -417,66 +419,41 @@ function openTaskDialog(preselectId, defaults = {}) {
   form.elements.owner.value = currentUserName();
   form.elements.title.value = defaults.title || "";
   form.elements.description.value = defaults.description || "";
+  resetAgentPicker(form, "codex");
+  $("#create-task-submit").textContent = runnerOnboarding.enabled() ? "创建并启动" : "创建 Task";
   $("#task-form-error").textContent = "";
   taskRepositoryOptions(preselectId);
   $("#create-task-dialog").hidden = false;
   setTimeout(() => form.elements.title.focus(), 0);
 }
 
-async function initializeRepository(repositoryId, button) {
+function openRepositoryTaskLaunch(repositoryId, operation, button) {
   const repository = state.repositories.find((item) => item.id === repositoryId);
   if (!repository) return;
-  button.disabled = true;
-  showGlobalLoading("正在创建初始化 Task…", "正在准备初始化流程，请稍候。");
-  try {
-    const result = await api(`/api/platform/repositories/${repositoryId}/initialize`, {
-      method: "POST",
-      body: "{}",
-    });
-    const taskIndex = state.tasks.findIndex((task) => task.key === result.task.key);
-    if (taskIndex >= 0) state.tasks[taskIndex] = result.task;
-    else state.tasks.unshift(result.task);
-    const repositoryIndex = state.repositories.findIndex((item) => item.id === repositoryId);
-    if (repositoryIndex >= 0 && result.repository) state.repositories[repositoryIndex] = result.repository;
-    renderAll();
-    setView("tasks");
-    openTaskDetail(result.task.key);
-    toast(`${result.task.key} 已创建，请选择 Agent 启动`);
-  } catch (error) {
-    toast(error.message, "error");
-    await loadData({ silent: true });
-  } finally {
-    hideGlobalLoading();
-    if (button.isConnected) button.disabled = false;
-  }
+  repositoryTaskLaunch = { repositoryId, operation, previousFocus: button };
+  const updating = operation === "update";
+  $("#repository-task-launch-eyebrow").textContent = updating ? "FRAMEWORK UPDATE" : "REPOSITORY INIT";
+  $("#repository-task-launch-title").textContent = `${updating ? "更新" : "初始化"} ${repository.name}`;
+  $("#repository-task-launch-copy").textContent = `基于 ${repository.default_branch} 创建或复用 Task；Runner 会直接准备 worktree 并启动所选 Agent。`;
+  $("#repository-task-launch-error").textContent = "";
+  resetAgentPicker($("#repository-task-launch-form"), "codex");
+  $("#repository-task-launch-dialog").hidden = false;
+  setTimeout(() => $("#repository-task-launch-form [data-agent-picker-trigger]").focus(), 0);
 }
 
-async function updateRepository(repositoryId, button) {
-  const repository = state.repositories.find((item) => item.id === repositoryId);
-  if (!repository) return;
-  button.disabled = true;
-  showGlobalLoading("正在创建框架更新 Task…", "正在准备 Alignyard 框架更新流程，请稍候。");
-  try {
-    const result = await api(`/api/platform/repositories/${repositoryId}/update`, {
-      method: "POST",
-      body: "{}",
-    });
-    const taskIndex = state.tasks.findIndex((task) => task.key === result.task.key);
-    if (taskIndex >= 0) state.tasks[taskIndex] = result.task;
-    else state.tasks.unshift(result.task);
-    const repositoryIndex = state.repositories.findIndex((item) => item.id === repositoryId);
-    if (repositoryIndex >= 0 && result.repository) state.repositories[repositoryIndex] = result.repository;
-    renderAll();
-    setView("tasks");
-    openTaskDetail(result.task.key);
-    toast(`${result.task.key} 已创建，请选择 Agent 启动`);
-  } catch (error) {
-    toast(error.message, "error");
-    await loadData({ silent: true });
-  } finally {
-    hideGlobalLoading();
-    if (button.isConnected) button.disabled = false;
-  }
+function closeRepositoryTaskLaunch() {
+  const launch = repositoryTaskLaunch;
+  repositoryTaskLaunch = null;
+  $("#repository-task-launch-dialog").hidden = true;
+  if (launch?.previousFocus?.isConnected) launch.previousFocus.focus();
+}
+
+function initializeRepository(repositoryId, button) {
+  openRepositoryTaskLaunch(repositoryId, "initialize", button);
+}
+
+function updateRepository(repositoryId, button) {
+  openRepositoryTaskLaunch(repositoryId, "update", button);
 }
 
 async function deleteRepository(repositoryId, button) {
@@ -659,6 +636,75 @@ function closeRepositoryDetails() {
   if (previousFocus?.isConnected) previousFocus.focus();
 }
 
+async function startTaskRuntime(task, agent) {
+  const result = await api(`/api/platform/tasks/${encodeURIComponent(task.key)}/run`, {
+    method: "POST",
+    body: JSON.stringify({ agent }),
+  });
+  replacePlatformTask(result.task);
+  return result;
+}
+
+async function refreshTaskAfterFailedStart(task) {
+  try {
+    const updated = await api(`/api/platform/tasks/${encodeURIComponent(task.key)}`);
+    replacePlatformTask(updated);
+    return updated;
+  } catch {
+    return task;
+  }
+}
+
+function presentStartedTask(task) {
+  renderAll();
+  setView("tasks");
+  openTaskDetail(task.key);
+}
+
+async function submitRepositoryTaskLaunch(event) {
+  event.preventDefault();
+  const launch = repositoryTaskLaunch;
+  if (!launch) return;
+  const form = event.currentTarget;
+  const agent = form.elements.agent.value || "codex";
+  const submit = $("#repository-task-launch-submit");
+  const updating = launch.operation === "update";
+  let task = null;
+  submit.disabled = true;
+  $("#repository-task-launch-error").textContent = "";
+  showGlobalLoading(
+    updating ? "正在创建并启动更新 Task…" : "正在创建并启动初始化 Task…",
+    "Runner 正在刷新基准分支、准备 worktree 并启动 Agent，请稍候。",
+  );
+  try {
+    const result = await api(`/api/platform/repositories/${launch.repositoryId}/${launch.operation}`, {
+      method: "POST",
+      body: "{}",
+    });
+    task = result.task;
+    replacePlatformTask(task);
+    const repositoryIndex = state.repositories.findIndex((item) => item.id === launch.repositoryId);
+    if (repositoryIndex >= 0 && result.repository) state.repositories[repositoryIndex] = result.repository;
+    const started = await startTaskRuntime(task, agent);
+    task = started.task;
+    closeRepositoryTaskLaunch();
+    presentStartedTask(task);
+    toast(`${task.key} 已创建，Agent 已启动`);
+  } catch (error) {
+    if (!task) {
+      $("#repository-task-launch-error").textContent = error.message;
+    } else {
+      task = await refreshTaskAfterFailedStart(task);
+      closeRepositoryTaskLaunch();
+      presentStartedTask(task);
+      toast(`${task.key} 已保留，但 Agent 启动失败：${error.message}`, "error");
+    }
+  } finally {
+    hideGlobalLoading();
+    if (submit.isConnected) submit.disabled = false;
+  }
+}
+
 async function submitTask(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -685,23 +731,35 @@ async function submitTask(event) {
     description: form.elements.description.value.trim(),
     repositories,
   };
+  const agent = form.elements.agent?.value || "codex";
   const submit = $("#create-task-submit");
+  let task = null;
   submit.disabled = true;
-  submit.textContent = "创建中…";
+  submit.textContent = runnerOnboarding.enabled() ? "正在创建并启动…" : "创建中…";
   $("#task-form-error").textContent = "";
+  if (runnerOnboarding.enabled()) {
+    showGlobalLoading("正在创建并启动 Task…", "Runner 正在刷新基准分支、准备 worktree 并启动 Agent，请稍候。");
+  }
   try {
-    const task = await api("/api/platform/tasks", { method: "POST", body: JSON.stringify(payload) });
-    state.tasks.unshift(task);
+    task = await api("/api/platform/tasks", { method: "POST", body: JSON.stringify(payload) });
+    replacePlatformTask(task);
+    if (runnerOnboarding.enabled()) task = (await startTaskRuntime(task, agent)).task;
     closeTaskDialog();
-    renderAll();
-    setView("tasks");
-    toast(`${task.key} 已创建`);
-    openTaskDetail(task.key);
+    presentStartedTask(task);
+    toast(runnerOnboarding.enabled() ? `${task.key} 已创建，Agent 已启动` : `${task.key} 已创建`);
   } catch (error) {
-    $("#task-form-error").textContent = error.message;
+    if (!task) {
+      $("#task-form-error").textContent = error.message;
+    } else {
+      task = await refreshTaskAfterFailedStart(task);
+      closeTaskDialog();
+      presentStartedTask(task);
+      toast(`${task.key} 已保留，但 Agent 启动失败：${error.message}`, "error");
+    }
   } finally {
+    hideGlobalLoading();
     submit.disabled = false;
-    submit.textContent = "创建 Task";
+    submit.textContent = runnerOnboarding.enabled() ? "创建并启动" : "创建 Task";
   }
 }
 
@@ -930,6 +988,22 @@ function closeAgentPicker(picker) {
   trigger?.setAttribute("aria-expanded", "false");
 }
 
+function resetAgentPicker(root, value = "codex") {
+  const picker = $("[data-agent-picker]", root);
+  if (!picker) return;
+  const selected = $(`[data-agent-value="${value}"]`, picker) || $("[data-agent-value]", picker);
+  const input = $("[data-author-agent]", picker);
+  const label = $("[data-agent-picker-label]", picker);
+  if (input) input.value = selected?.dataset.agentValue || value;
+  if (label && selected) label.textContent = $("span", selected).textContent;
+  $$('[data-agent-value]', picker).forEach((option) => {
+    const active = option === selected;
+    option.classList.toggle("selected", active);
+    option.setAttribute("aria-selected", String(active));
+  });
+  closeAgentPicker(picker);
+}
+
 function wireAgentPicker(root) {
   const picker = $("[data-agent-picker]", root);
   if (!picker) return;
@@ -1037,6 +1111,7 @@ function closeTaskDetail() {
 }
 
 function replacePlatformTask(updated) {
+  stateMutationEpoch++;
   const index = state.tasks.findIndex((task) => task.key === updated.key);
   if (index >= 0) state.tasks[index] = updated;
   else state.tasks.unshift(updated);
@@ -1080,14 +1155,12 @@ async function runInitTask(key, button) {
   button.disabled = true;
   showGlobalLoading("正在准备 Agent…", "正在创建或恢复 worktree 和 Agent session，请稍候。");
   try {
-    const result = await api(`/api/platform/tasks/${encodeURIComponent(key)}/run`, {
-      method: "POST",
-      body: JSON.stringify({ agent }),
-    });
-    replacePlatformTask(result.task);
+    const task = state.tasks.find((item) => item.key === key);
+    if (!task) throw new Error("Task 不存在");
+    const result = await startTaskRuntime(task, agent);
     renderAll();
     openTaskDetail(key);
-    toast(result.runtime_created ? "初始化 Agent 已启动" : "初始化 Agent 已继续");
+    toast(result.runtime_created ? "Agent 已启动" : "Agent 已继续");
   } catch (error) {
     toast(error.message, "error");
     await loadData({ silent: true });
@@ -1193,6 +1266,7 @@ function wireDynamicButtons(root = document) {
 async function loadData({ silent = false } = {}) {
   if (state.loading) return;
   state.loading = true;
+  const loadEpoch = stateMutationEpoch;
   try {
     const [repositories, tasks, members, runners] = await Promise.all([
       api("/api/platform/repositories"),
@@ -1200,6 +1274,7 @@ async function loadData({ silent = false } = {}) {
       api("/api/platform/members"),
       runnerOnboarding.enabled() ? api("/api/runners") : Promise.resolve([]),
     ]);
+    if (loadEpoch !== stateMutationEpoch) return;
     state.repositories = repositories;
     state.tasks = tasks;
     state.members = members;
@@ -1341,17 +1416,20 @@ function bindEvents() {
     renderTaskList();
   }));
   $("#create-task-form").addEventListener("submit", submitTask);
+  $("#repository-task-launch-form").addEventListener("submit", submitRepositoryTaskLaunch);
   $("#add-repository-form").addEventListener("submit", submitRepository);
   runnerOnboarding.bind();
   $("#review-form").addEventListener("submit", submitReview);
   $("#changes-requested-form").addEventListener("submit", submitChangesRequested);
   $$('[data-close-dialog]').forEach((button) => button.addEventListener("click", closeTaskDialog));
+  $$('[data-close-repository-task-launch]').forEach((button) => button.addEventListener("click", closeRepositoryTaskLaunch));
   $$('[data-close-repo-dialog]').forEach((button) => button.addEventListener("click", closeRepositoryDialog));
   $("#repository-detail-close").addEventListener("click", closeRepositoryDetails);
   $$('[data-close-repository-detail]').forEach((button) => button.addEventListener("click", closeRepositoryDetails));
   $$('[data-close-review-dialog]').forEach((button) => button.addEventListener("click", closeReviewDialog));
   $$('[data-close-changes-requested]').forEach((button) => button.addEventListener("click", closeChangesRequestedDialog));
   $("#create-task-dialog").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeTaskDialog(); });
+  $("#repository-task-launch-dialog").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeRepositoryTaskLaunch(); });
   $("#add-repository-dialog").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeRepositoryDialog(); });
   $("#repository-detail-dialog").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeRepositoryDetails(); });
   $("#review-dialog").addEventListener("click", (event) => { if (event.target === event.currentTarget) closeReviewDialog(); });
@@ -1384,12 +1462,15 @@ function bindEvents() {
     else if (!$("#confirm-dialog").hidden) closeConfirmDialog(false);
     else if (!$("#repository-detail-dialog").hidden) closeRepositoryDetails();
     else if (!$("#add-repository-dialog").hidden) closeRepositoryDialog();
+    else if (!$("#repository-task-launch-dialog").hidden) closeRepositoryTaskLaunch();
     else if (!$("#changes-requested-dialog").hidden) closeChangesRequestedDialog();
     else if (!$("#review-dialog").hidden) closeReviewDialog();
     else if (!$("#create-task-dialog").hidden) closeTaskDialog();
     else if (!$("#task-drawer").hidden) closeTaskDetail();
   });
   wireDynamicButtons();
+  wireAgentPicker($("#create-task-form"));
+  wireAgentPicker($("#repository-task-launch-form"));
   initPlatformAgentWorkspace({
     onError: (message) => toast(message, "error"),
     onStartReview: startReviewAgent,

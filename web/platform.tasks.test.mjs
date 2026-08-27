@@ -9,6 +9,7 @@ const worktreeStyles = fs.readFileSync(new URL("./css/platform-worktree.css", im
 const agent = fs.readFileSync(new URL("./js/platform-agent.js", import.meta.url), "utf8");
 const styles = fs.readFileSync(new URL("./css/platform.css", import.meta.url), "utf8");
 const platformRoutes = fs.readFileSync(new URL("../server/http/platform-routes.ts", import.meta.url), "utf8");
+const platformRunnerBackend = fs.readFileSync(new URL("../server/http/platform-runner-backend.ts", import.meta.url), "utf8");
 const platformApp = fs.readFileSync(new URL("../server/platform/app.ts", import.meta.url), "utf8");
 const platformMain = fs.readFileSync(new URL("../server/platform/main.ts", import.meta.url), "utf8");
 
@@ -49,14 +50,17 @@ test("Repositories surface detects protocol state and creates lifecycle Tasks", 
   assert.match(script, /repositoryProtocolState/);
   assert.match(script, /state-\$\{escapeHtml\(protocolState\)\}/);
   assert.match(script, /data-init-repository/);
-  assert.match(script, /\/api\/platform\/repositories\/\$\{repositoryId\}\/initialize/);
+  assert.match(script, /openRepositoryTaskLaunch\(repositoryId, "initialize", button\)/);
   assert.match(script, /task\.task_type === "repository_init"/);
   assert.match(script, /outdated: "可更新"/);
   assert.match(script, /data-update-repository/);
-  assert.match(script, /\/api\/platform\/repositories\/\$\{repositoryId\}\/update/);
+  assert.match(script, /openRepositoryTaskLaunch\(repositoryId, "update", button\)/);
   assert.match(script, /task\.task_type === "repository_update"/);
   assert.match(script, /refreshRepositoryProtocolsAutomatically/);
-  assert.match(script, /已创建，请选择 Agent 启动/);
+  assert.match(html, /id="repository-task-launch-dialog"[\s\S]*name="agent"[\s\S]*创建并启动/);
+  assert.match(script, /\$\{launch\.repositoryId\}\/\$\{launch\.operation\}/);
+  assert.match(script, /const started = await startTaskRuntime\(task, agent\)/);
+  assert.doesNotMatch(script, /已创建，请选择 Agent 启动/);
   const initializeRoute = platformRoutes.match(/app\.post\("\/api\/platform\/repositories\/:id\/initialize"[\s\S]*?app\.post\("\/api\/platform\/repositories\/:id\/refresh"/)?.[0] || "";
   assert.match(initializeRoute, /createRepositoryInitializationTask/);
   assert.match(initializeRoute, /createRepositoryUpdateTask/);
@@ -111,7 +115,7 @@ test("Repository lifecycle workspace closes runtime, Review, PR, and merge behin
   assert.match(script, /data-init-review/);
   assert.match(script, /data-init-pr/);
   assert.match(script, /data-init-merge/);
-  assert.match(script, /\/api\/platform\/tasks\/\$\{encodeURIComponent\(key\)\}\/run/);
+  assert.match(script, /\/api\/platform\/tasks\/\$\{encodeURIComponent\(task\.key\)\}\/run/);
   assert.match(script, /"pull-request"/);
   assert.match(script, /"merge"/);
   assert.match(script, /forge_kind === "github" \? "PR"/);
@@ -146,7 +150,7 @@ test("Repository lifecycle workspace closes runtime, Review, PR, and merge behin
   assert.match(agent, /rescaleOverlappingGlyphs:\s*true/);
   assert.match(agent, /classList\.add\("task-workspace-mode"\)/);
   assert.match(agent, /setConnectionState\(canStartReview \? "等待 Reviewer" : "等待启动", "idle"\)/);
-  assert.match(agent, /active\?\.taskId === executionKey && active\.session === task\.runtime_session/);
+  assert.match(agent, /active\.taskId === executionKey && active\.session === task\.runtime_session/);
   assert.match(styles, /--sidebar-width:\s*210px/);
   assert.match(styles, /--topbar-height:\s*52px/);
   assert.match(styles, /\.topbar\s*\{[^}]*height:\s*var\(--topbar-height\)/);
@@ -330,12 +334,31 @@ test("Task items expose protected deletion without opening the detail drawer", (
 
 test("long repository and deletion operations use one blocking global loading state", () => {
   assert.match(html, /id="global-loading"[^>]+role="status"/);
-  assert.match(script, /showGlobalLoading\("正在创建初始化 Task…"/);
-  assert.match(script, /正在准备初始化流程，请稍候/);
+  assert.match(script, /正在创建并启动初始化 Task…/);
+  assert.match(script, /Runner 正在刷新基准分支、准备 worktree 并启动 Agent，请稍候/);
   assert.match(script, /showGlobalLoading\("正在删除 Task…"/);
   assert.match(script, /showGlobalLoading\("正在删除 Repository…"/);
   assert.match(script, /hideGlobalLoading\(\)/);
   assert.match(styles, /\.global-loading\s*\{[^}]*position:\s*fixed[^}]*z-index:\s*140/);
+});
+
+test("Task creation chooses an Agent and starts the Runner worktree in one action", () => {
+  const createDialog = html.match(/id="create-task-dialog"[\s\S]*?id="repository-task-launch-dialog"/)?.[0] || "";
+  assert.match(createDialog, /name="agent"[\s\S]*data-agent-value="codex"[\s\S]*data-agent-value="claude"[\s\S]*data-agent-value="kimi"/);
+  assert.match(createDialog, /id="create-task-submit"[^>]*>创建并启动</);
+  assert.match(script, /task = await api\("\/api\/platform\/tasks"/);
+  assert.match(script, /task = \(await startTaskRuntime\(task, agent\)\)\.task/);
+  assert.match(script, /Runner 正在刷新基准分支、准备 worktree 并启动 Agent/);
+  assert.match(script, /已保留，但 Agent 启动失败/);
+});
+
+test("polling and read-only Runner errors cannot discard a live Agent terminal", () => {
+  assert.match(agent, /active\.taskId === executionKey && active\.session === task\.runtime_session/);
+  assert.match(agent, /Never throw away the user's terminal output/);
+  assert.match(script, /const loadEpoch = stateMutationEpoch/);
+  assert.match(script, /if \(loadEpoch !== stateMutationEpoch\) return/);
+  assert.match(platformRunnerBackend, /task\.runtime_status !== "cleaned"/);
+  assert.doesNotMatch(platformRunnerBackend, /\["failed", "cleaned"\]/);
 });
 
 test("empty Tasks and Repositories use a low-contrast patterned board", () => {
