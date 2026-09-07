@@ -30,9 +30,9 @@ AI-native 团队的主要协作成本逐渐从逐行编码转向需求澄清、�
 - 将普通 change Task 的默认产物改为可评审的知识设计包，而不是代码实现。
 - 明确 `.alignyard/` 只保存会影响 AI 决策方向的核心工程意图、架构边界、重要约束和变化契约；具体实现细节仍以代码、类型与测试为准。
 - 用统一的跨边界语义对齐机制保护业务含义：Task 先识别受影响概念与边界，再判断各边界语义等价、不同或未知，不为具体领域逐项硬编码检查清单。
-- 让 Agent 根据变化性质选择新增或更新 Spec、ADR、Plan、Docs，不强制每个 Task 新建主 Spec，也不为形式完整制造文档。
-- 在 Repository 协议中加入固定的 overview/constitution 入口，以及可选的 `plan` 技术方案。
-- 让技术方案显式引用原始需求来源和必须遵守的 Constitution、Docs、Specs、ADRs，并说明修改范围、保持不变的行为、实施步骤与验证方式。
+- 让 Agent 根据变化性质选择新增或更新 Spec、ADR、Plan、Docs，不强制每个 Task 新建主 Spec，也不为形式完整制造文档；达到 Plan gate 的改动例外，编码前必须形成任务账本。
+- 在 Repository 协议中保留固定的 overview/Constitution 入口和 `plan` 技术方案，并在 v3 增加细粒度任务结构。
+- 让技术方案显式引用原始需求来源和必须遵守的 Constitution、Docs、Specs、ADRs，并说明修改范围、保持不变的行为、分 Phase 实施任务与验证方式。
 - 继续在正常 `.alignyard/docs/` 路径起草目标状态 Docs；默认分支表示已发布事实，Task 分支表示待发布状态，不创建临时 Docs 副本。
 - 使用本地完整校验、远端工作分支、commit 与 Review 流程审核设计包；Platform 只保存流转元数据，不保存工程知识、摘要或 diff。
 - 人工 Review 通过后记录不可变 `design_commit`，把普通 Task 交还发起人并标记为可开始实现，不自动进入 PR/MR 阶段。
@@ -51,7 +51,7 @@ AI-native 团队的主要协作成本逐渐从逐行编码转向需求澄清、�
 
 # 设计
 
-## 协议 v2
+## 协议 v2 与 v3
 
 `repository.yaml` 使用 `version: 2`，保留 `preset: basic` 和 scopes，并增加固定入口：
 
@@ -63,7 +63,7 @@ entrypoints:
 
 `.alignyard/docs/shared/constitution.md` 仍是 `doc`，记录产品意图、架构边界、需人工确认的关键不确定性和可机器执行的约束。Agent 启动时总是先读取 overview 和 constitution，再按 scope、relations 与 Task 目标选择其余知识。
 
-新增 `plan` kind 与 `.alignyard/plans/<scope>/*.md`。Plan 是 Task 级、可选、可版本化的技术方案；实现完成后可以保留为历史，但当前事实必须回到 Docs，长期取舍必须进入 ADR。模板必含“背景与目标、依据与约束、实现设计、修改范围、保持不变、实施步骤、验证方案、文档更新、未决问题”。
+v2 新增 `plan` kind 与 `.alignyard/plans/<scope>/*.md`。v3 将 Plan 扩展为达到门槛时必须创建、可版本化的技术方案与实施账本；实现完成后可以保留为历史，但当前事实必须回到 Docs，长期取舍必须进入 ADR。模板必含“背景与目标、依据与约束、实现设计、修改范围、保持不变、实施任务、验证方案、文档更新、未决问题”，实施任务必须按 Phase 使用唯一编号 checkbox，并记录依赖、产出、完成标准、验证与验证结果。
 
 所有文档支持可选 `sources` 和 `governing`：
 
@@ -71,13 +71,15 @@ entrypoints:
 - `governing` 是当前 snapshot 内必须遵守的文档 ID，只能指向 constitution、Docs、Specs 或 ADRs，不能指向 Plan 本身。
 - `relations` 保持现有同仓库 ID 数组语义，避免在本版同时引入通用类型化关系迁移。
 
-服务端同时读取 v1 和 v2；`ay init` 默认生成 v2。v1 保持原有三种 kind 和最小基线，只有 v2 强制 constitution、plan 模板及新字段校验。Runner 后续可在 capability 中声明支持的知识协议版本，但本版不改变多 Repository 调度。
+服务端同时读取 v1、v2 和 v3；`ay init` 默认生成 v3。v1 保持原有三种 kind 和最小基线，v2 保持 Constitution、Plan 模板及 frontmatter 校验，v3 新增 Plan 任务账本结构与必要 governing 校验。Runner 后续可在 capability 中声明支持的知识协议版本，但本版不改变多 Repository 调度。
 
 ## 普通 Task 设计包
 
 普通 Task Agent 默认执行：读取 Task 与原始需求、读取固定入口和相关约束、判断应新增或更新哪些 Spec/ADR/Plan/Docs、主动询问关键不确定性、运行 `ay validate`、提交必要知识改动并保持 worktree clean。明确的新功能或边界变化通常需要 Spec；已有 Spec 已覆盖、小修正或纯文档整理可以只更新现有文档。除非 Task 明确要求实现，否则不修改业务源码。
 
-设计包遵循“最小充分”原则：只记录未来 Agent 缺少后可能做出错误整体决策的信息。函数级实现、普通字段传递、可由类型和测试直接表达的行为不写入长期文档。Spec 聚焦目标、边界与验收，ADR 聚焦一项长期取舍及原因；Plan 仅在具体技术设计能显著减少实现漂移时创建。
+设计包遵循“最小充分”原则：只记录未来 Agent 缺少后可能做出错误整体决策的信息。函数级实现、普通字段传递、可由类型和测试直接表达的行为不写入长期文档。Spec 聚焦目标、边界与验收，ADR 聚焦一项长期取舍及原因；中大型、跨模块、公共契约、状态流、数据结构或多 Phase 改动在编码前必须创建 Plan，小修、单文件修改、typo 和简单配置仍可省略。
+
+Plan 只引用而不复制 Spec、ADR、Constitution 与适用 Docs 中的契约。每项任务必须能独立实现、测试和 Review；实现过程中即时更新 checkbox 和验证结果，未完成且受阻时保留阻塞原因，供下一 session 从 Plan 直接恢复进度。
 
 Task 在选择文档之前先完成一次轻量分析：列出本次真正受影响的业务概念，以及它们经过的模块、服务、Repository、API 或持久化边界，并通过对应 scope 与 relations 读取两侧知识。每个概念在各边界的语义被判断为等价、不同或未知。字段同名、类型相同或产品语言中的简写不能单独证明等价；表示不同时，设计包必须通过 `governing` 引用权威 Docs/ADRs，给出归一化或映射规则、保持不变的含义和代表性示例；现有知识不足时继续检查仓库证据，仍未知且会改变结果时直接向用户确认。
 
@@ -103,8 +105,8 @@ Review 批准时，把每个 editable Repository 当前已推送的 Review HEAD 
 
 # 验收标准
 
-- v1 Repository 继续通过校验；`ay init` 新建 v2 Repository，并生成 constitution、四份模板和更新后的 Skill。
-- `ay new plan` 能创建合法技术方案；v2 校验 sources、governing、必需章节、固定入口和悬空引用。
+- v1/v2 Repository 继续按原语义通过校验；`ay init` 新建 v3 Repository，并生成 Constitution、四份模板和更新后的 Skill。
+- `ay new plan` 生成分 Phase 的 checkbox 任务骨架；v3 校验 sources、governing、必需章节、任务结构、固定入口和悬空引用。
 - `ay` 不提供知识上传命令；Platform schema 不保存工程知识、摘要或 content hash。
 - Reviewer 能在自己的 Runner 拉取远端工作分支，通过 Git diff 和 Agent 阅读、修改完整设计包，包括被删除的文件；Task 页面可按需读取 Reviewer 自己 worktree 的协议文档且不持久化。
 - 普通 Task Prompt 以知识设计为默认目标，明确不确定时直接询问用户，并明确不默认编码。

@@ -12,6 +12,7 @@ relations:
   - doc.server.http-api
   - spec.shared.knowledge-first-task
   - spec.server.framework-update
+  - spec.server.plan-task-ledger
 ---
 
 # 概述
@@ -32,19 +33,20 @@ Alignyard 工程知识协议把核心工程意图与架构约束版本化在 `.a
   plans/<scope>/*.md
 ```
 
-服务端兼容 `version: 1` 和 `version: 2`，`ay init` 默认创建 v2；两者都使用 `preset: basic` 并至少声明 `shared`。`version` 表示文档结构与校验契约，独立的 `framework_version` 表示 Skill、模板、README 和固定骨架的发布版本；旧 Repository 缺失时按 legacy v0 读取。v2 还必须声明 `entrypoints.overview: doc.shared.overview` 与 `entrypoints.constitution: doc.shared.constitution`。scope ID 使用小写字母、数字和连字符；可选 `source` 必须是仓库内安全相对路径，而且 `ay validate` 会检查路径存在。scope 表示有意义的应用或服务边界，不应机械复制所有目录。
+服务端兼容 `version: 1`、`version: 2` 和 `version: 3`，`ay init` 默认创建 v3；所有版本都使用 `preset: basic` 并至少声明 `shared`。`version` 表示文档结构与校验契约，独立的 `framework_version` 表示 Skill、模板、README 和固定骨架的发布版本；旧 Repository 缺失时按 legacy v0 读取。v2 及之后还必须声明 `entrypoints.overview: doc.shared.overview` 与 `entrypoints.constitution: doc.shared.constitution`。scope ID 使用小写字母、数字和连字符；可选 `source` 必须是仓库内安全相对路径，而且 `ay validate` 会检查路径存在。scope 表示有意义的应用或服务边界，不应机械复制所有目录。
 
-v1 Repository 被平台判定为完成初始化时，默认分支必须包含 manifest、README、三份模板、Skill 和 shared overview；v2 还必须包含 Plan 模板与 `.alignyard/docs/shared/constitution.md`。Runner refresh 根据 manifest version 选择有界基线文件；详细内容仍以 `ay validate` 与人工 Review 为准。
+v1 Repository 被平台判定为完成初始化时，默认分支必须包含 manifest、README、三份模板、Skill 和 shared overview；v2/v3 还必须包含 Plan 模板与 `.alignyard/docs/shared/constitution.md`。Runner refresh 根据 manifest version 选择有界基线文件；详细内容仍以 `ay validate` 与人工 Review 为准。
 
 ## 文档语义
 
 - Docs 记录当前有效、会影响后续设计方向的架构事实、模块边界、稳定接口和关键数据流；初始化必须有 `doc.shared.overview`，但 overview 只做全貌和导航。
 - Specs 是一次变化的意图契约，记录目标、允许改变与不能破坏的边界及验收标准。明确的新能力通常需要 Spec；小修正、纯文档整理或已有 Spec 已覆盖时不强制新建。
 - ADRs 一份只记录一项有明确替代方案或长期影响的决策、原因及后果，不保存讨论过程。
-- Plans 是可选的 Task 级技术方案，负责把权威需求和长期知识转成可执行设计，必含背景与目标、依据与约束、实现设计、修改范围、保持不变、实施步骤、验证方案、文档更新和未决问题。
-- v2 Constitution 是保留 ID `doc.shared.constitution` 的固定入口 Doc，记录 Repository 级产品意图、工程边界、人工确认规则与已有机器检查。
+- Plans 是达到门槛时必须创建的 Task 级技术方案与实施账本，负责把权威需求和长期知识转成可执行设计，但不重复声明业务契约。中大型、跨模块、公共契约、状态流、数据结构或多 Phase 改动必须在编码前有 Plan；typo、简单配置和明确边界的单文件小修可以省略。
+- v3 Plan 必含背景与目标、依据与约束、实现设计、修改范围、保持不变、实施任务、验证方案、文档更新和未决问题。“实施任务”按 `P<n>` Phase 划分，每项使用唯一 `P<n>.<m>` checkbox，并记录依赖、产出、完成标准、验证和验证结果；受阻的未完成项记录阻塞原因。
+- v2/v3 Constitution 是保留 ID `doc.shared.constitution` 的固定入口 Doc，记录 Repository 级产品意图、工程边界、人工确认规则与已有机器检查。
 
-文档必须有 `id`、`title`、`kind`、`scope`，并可使用 `relations`、`sources` 与 `governing` 字符串数组。历史 `owners` 字段继续兼容，但不作为作者追溯机制；作者、修改者与审核人使用 Git commit、Git blame、PR/MR 和 Alignyard Review 追溯。`sources` 记录仅供参考的外部来源；`governing` 记录当前文档必须遵守的 snapshot 文档 ID，不能指向自身或 Plan。Plan 必须受 constitution 约束，并只引用实际约束本次实现的 Docs、Specs 与 ADRs；新能力通常需要 Spec，但已有知识已经清楚表达意图时不强制创建。文件位于对应 kind 与 scope 目录，ID 采用 `<kind>.<scope>.<slug>`；`relations`、`governing` 只能引用当前快照内存在的文档 ID。初始化任务中的 title、正文和每个 Markdown 章节标题必须含中文；代码标识符、命令、路径、API 和产品名保持原样。
+文档必须有 `id`、`title`、`kind`、`scope`，并可使用 `relations`、`sources` 与 `governing` 字符串数组。历史 `owners` 字段继续兼容，但不作为作者追溯机制；作者、修改者与审核人使用 Git commit、Git blame、PR/MR 和 Alignyard Review 追溯。`sources` 记录仅供参考的外部来源；`governing` 记录当前文档必须遵守的 snapshot 文档 ID，不能指向自身或 Plan。Plan 必须受 Constitution 约束，并至少再引用一份实际约束本次实现的 Doc、Spec 或 ADR；新能力通常引用对应 Spec，已有知识已经清楚表达意图时可以引用适用 Doc/ADR。文件位于对应 kind 与 scope 目录，ID 采用 `<kind>.<scope>.<slug>`；`relations`、`governing` 只能引用当前快照内存在的文档 ID。初始化任务中的 title、正文和每个 Markdown 章节标题必须含中文；代码标识符、命令、路径、API 和产品名保持原样。
 
 所有内容遵守最小充分原则：如果一条信息缺失不会让 Agent 做出错误的整体设计决定，就不应为了“完整”写入 `.alignyard/`。具体函数调用、局部算法、普通字段流转和实现日志留在代码、测试、注释或 Task 会话中。
 
@@ -59,7 +61,7 @@ Alignyard 不为每个业务领域分别建立规则清单，而是统一处理�
 - 含义未知且会影响设计结果时，Agent 在当前会话向用户确认，再把结论写回 Doc、Spec 或 ADR；
 - 持续变化的运行数据不进入 `.alignyard/`；只有它的权威来源、解释方式、生命周期或兜底策略会约束设计时，才记录长期规则。
 
-这套机制不增加新的文档类型。Docs 保存当前语义，Spec 描述本次变化和映射，ADR 解释长期选择，Plan 可选地展开实现。Agent Harness、hooks 和 CI 可以读取这些文档 ID 并执行相应检查，但只负责工作方式和机器执行，不成为项目知识的第二真源；Alignyard 也不管理 Harness 自身的安装、版本或同步。
+这套机制不增加新的文档类型。Docs 保存当前语义，Spec 描述本次变化和映射，ADR 解释长期选择，Plan 在达到门槛时展开实现并维护任务进度。Agent Harness、hooks 和 CI 可以读取这些文档 ID 并执行相应检查，但只负责工作方式和机器执行，不成为项目知识的第二真源；Alignyard 也不管理 Harness 自身的安装、版本或同步。
 
 ## 创建与校验
 
@@ -72,7 +74,7 @@ ay new adr <slug> --scope <scope> --title '<中文标题>'
 ay new plan <slug> --scope <scope> --title '<中文标题>'
 ```
 
-`ay validate .` 检查 manifest、固定入口、scope source、模板变量、Skill、符号链接、frontmatter、kind/path/scope/ID 一致性、必需章节、重复 ID 与悬空 relations/governing，并要求 shared overview；v2 还要求 constitution。它不判断事实是否准确、是否足够精简，也不会替代人工内容 Review。
+`ay validate .` 检查 manifest、固定入口、scope source、模板变量、Skill、符号链接、frontmatter、kind/path/scope/ID 一致性、必需章节、重复 ID 与悬空 relations/governing，并要求 shared overview；v2/v3 还要求 Constitution。protocol v3 进一步校验 Plan 的 Phase、checkbox、任务编号唯一性与归属、必要任务字段、占位符、完成项验证结果和 governing 最小集合。它不判断事实是否准确、任务语义是否足够细，也不会替代人工内容 Review。
 
 ## 框架版本更新
 
@@ -84,7 +86,7 @@ ay update .
 ay validate .
 ```
 
-`--check` 只返回待创建、替换或合并的路径。`ay update` 将 manifest 合并到当前协议与框架版本，替换 Alignyard 管理的 README、默认模板和 Skill，并补齐缺失的 Constitution 和 scope 目录；它不覆盖已有 Docs、Specs、ADRs、Plans，也不改文档 ID 与关系。Update Agent 必须按实际 Git diff 核对管理文件替换、manifest 合并和固定结构补齐，默认不精简、复核或重写知识正文；只有协议兼容性明确要求或用户明确提出时才做最小语义修改。完成前再次运行 `ay update --check` 并确认无待应用变化。知识维护通过普通 Task 单独发起。重复运行无变化；Repository 声明的框架版本高于当前 `ay` 时必须先升级 Runner，不能用旧工具降级。
+`--check` 只返回待创建、替换或合并的路径。`ay update` 将 manifest 合并到当前协议与框架版本，替换 Alignyard 管理的 README、默认模板和 Skill，并补齐缺失的 Constitution 和 scope 目录；它不覆盖已有 Docs、Specs、ADRs、Plans，也不改文档 ID 与关系。Update Agent 必须按实际 Git diff 核对管理文件替换、manifest 合并和固定结构补齐，默认不精简、复核或重写知识正文；升级到 protocol v3 时，已有 Plan 必须显式改成任务账本结构并进入 Review。完成前再次运行 `ay update --check` 并确认无待应用变化。知识维护通过普通 Task 单独发起。重复运行无变化；Repository 声明的框架版本高于当前 `ay` 时必须先升级 Runner，不能用旧工具降级。
 
 Runner 从默认分支执行 `repository.refresh-protocol`，比较 Repository 与自身内置的框架版本。Platform 只记录版本和 `uninitialized`、`invalid`、`outdated`、`ready` 状态元数据；Web 自动刷新并为 `outdated` Repository 提供 Update Task。真正的更新发生在用户 Runner 创建的 Task worktree，沿用 Agent、Review、PR/MR 和合并链路，Platform 不保存升级后的知识副本。
 
@@ -111,4 +113,4 @@ Task 页面可以经当前用户自己的 execution 调用 `execution.knowledge`
 4. 检查产品意图、系统边界、稳定接口、长期取舍和明确不可改变行为是否有足够约束，同时删除可由源码直接推导的重复细节。
 5. 运行 `ay validate .`，复查 overview 导航，提交 `.alignyard/` 并确保 worktree clean；用户确认后由 Platform 的提交 Review 动作完成复检和 push。
 
-普通 Task 先读取 overview、constitution 和相关约束，识别受影响的业务概念与边界，再按变化性质决定新增或更新 Spec、ADR、Plan、Docs。明确的新功能通常形成 Spec，但平台不强制每个 Task 创建主文档；目标是最小充分且能直接约束后续实现。关键不确定性直接在当前 Agent 会话向用户确认，结论进入最终文档，不创建独立决策实体。人工 Review 通过后记录 Repository 级 `design_commit`；普通 Task 停在可开始实现，Repository Init 才继续 PR/MR 合并闭环。已有文档 ID 应保持稳定。
+普通 Task 先读取 overview、Constitution 和相关约束，识别受影响的业务概念与边界，再按变化性质决定新增或更新 Spec、ADR、Plan、Docs。明确的新功能通常形成 Spec，但平台不强制每个 Task 创建主文档；目标是最小充分且能直接约束后续实现。进入编码前执行 Plan gate：中大型、跨模块、公共契约、状态流、数据结构或多 Phase 改动必须有 Plan，小修可以省略。实施过程中即时更新任务 checkbox、验证结果和阻塞原因，使 Plan 成为跨 session 交接入口。关键不确定性直接在当前 Agent 会话向用户确认，结论进入最终文档，不创建独立决策实体。人工 Review 通过后记录 Repository 级 `design_commit`；普通 Task 停在可开始实现，Repository Init 才继续 PR/MR 合并闭环。已有文档 ID 应保持稳定。

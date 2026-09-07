@@ -53,6 +53,25 @@ test("ay new refuses undeclared scopes and existing paths", async () => {
   }
 });
 
+test("ay new plan renders phased checkbox task scaffolding", async () => {
+  const root = temporaryRepository();
+  const result = output();
+  try {
+    await runAy(["init", root], result.io);
+    assert.equal(await runAy([
+      "new", "plan", "login-flow", "--scope", "shared", "--title", "Login Plan", "--repository", root,
+    ], result.io), 0);
+    const plan = fs.readFileSync(path.join(root, ".alignyard/plans/shared/login-flow.md"), "utf8");
+    assert.match(plan, /# 实施任务/);
+    assert.match(plan, /## P0 契约与基础结构/);
+    assert.match(plan, /- \[ \] P0\.1/);
+    assert.match(plan, /## P1 核心实现/);
+    assert.match(plan, /- 验证结果：待执行/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("ay update check previews framework drift before applying an idempotent update", async () => {
   const root = temporaryRepository();
   const result = output();
