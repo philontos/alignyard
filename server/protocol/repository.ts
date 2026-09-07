@@ -5,9 +5,9 @@ import YAML from "yaml";
 
 export const ALIGNYARD_DIR = ".alignyard";
 export const ALIGNYARD_MANIFEST = `${ALIGNYARD_DIR}/repository.yaml`;
-export const ALIGNYARD_PROTOCOL_VERSION = 2 as const;
-export const ALIGNYARD_PROTOCOL_VERSIONS = [1, 2] as const;
-export const ALIGNYARD_FRAMEWORK_VERSION = 3 as const;
+export const ALIGNYARD_PROTOCOL_VERSION = 3 as const;
+export const ALIGNYARD_PROTOCOL_VERSIONS = [1, 2, 3] as const;
+export const ALIGNYARD_FRAMEWORK_VERSION = 4 as const;
 export type AlignyardProtocolVersion = typeof ALIGNYARD_PROTOCOL_VERSIONS[number];
 
 export const KNOWLEDGE_KINDS = ["doc", "spec", "adr", "plan"] as const;
@@ -24,7 +24,7 @@ const COMMON_BOOTSTRAP_FILES = [
 export type KnowledgeKind = typeof KNOWLEDGE_KINDS[number];
 
 export function requiredBootstrapFiles(version: AlignyardProtocolVersion): readonly string[] {
-  return version === 2
+  return version >= 2
     ? [...COMMON_BOOTSTRAP_FILES, ".alignyard/templates/plan.md", ".alignyard/docs/shared/constitution.md"]
     : COMMON_BOOTSTRAP_FILES;
 }
@@ -133,6 +133,20 @@ const REQUIRED_SECTIONS: Record<KnowledgeKind, RequiredSection[]> = {
   ],
 };
 
+const PLAN_V3_REQUIRED_SECTIONS: RequiredSection[] = [
+  { label: "背景与目标", headings: ["背景与目标", "Context and Goals"] },
+  { label: "依据与约束", headings: ["依据与约束", "Sources and Constraints"] },
+  { label: "实现设计", headings: ["实现设计", "Implementation Design"] },
+  { label: "修改范围", headings: ["修改范围", "Change Scope"] },
+  { label: "保持不变", headings: ["保持不变", "Preserve"] },
+  { label: "实施任务", headings: ["实施任务", "Implementation Tasks"] },
+  { label: "验证方案", headings: ["验证方案", "Validation"] },
+  { label: "文档更新", headings: ["文档更新", "Documentation Updates"] },
+  { label: "未决问题", headings: ["未决问题", "Open Questions"] },
+];
+
+const PLAN_TASK_FIELDS = ["依赖", "产出", "完成标准", "验证", "验证结果"] as const;
+
 const SCOPE_ID = /^[a-z][a-z0-9-]*$/;
 const DOCUMENT_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DOCUMENT_ID = /^(doc|spec|adr|plan)\.([a-z][a-z0-9-]*)\.([a-z0-9]+(?:[.-][a-z0-9]+)*)$/;
@@ -155,7 +169,11 @@ export function knowledgeDirectory(kind: KnowledgeKind): string {
 }
 
 export function knowledgeKindsForVersion(version: AlignyardProtocolVersion): readonly KnowledgeKind[] {
-  return version === 2 ? KNOWLEDGE_KINDS : V1_KNOWLEDGE_KINDS;
+  return version >= 2 ? KNOWLEDGE_KINDS : V1_KNOWLEDGE_KINDS;
+}
+
+function requiredSections(kind: KnowledgeKind, version: AlignyardProtocolVersion): RequiredSection[] {
+  return kind === "plan" && version >= 3 ? PLAN_V3_REQUIRED_SECTIONS : REQUIRED_SECTIONS[kind];
 }
 
 export function parseRepositoryManifest(text: string): { manifest?: RepositoryProtocolManifest; errors: string[] } {
@@ -168,7 +186,7 @@ export function parseRepositoryManifest(text: string): { manifest?: RepositoryPr
   }
   if (!isRecord(raw)) return { errors: ["repository.yaml: 根节点必须是对象"] };
   const version = raw.version as AlignyardProtocolVersion;
-  if (!ALIGNYARD_PROTOCOL_VERSIONS.includes(version)) errors.push("repository.yaml: version 必须是 1 或 2");
+  if (!ALIGNYARD_PROTOCOL_VERSIONS.includes(version)) errors.push("repository.yaml: version 必须是 1、2 或 3");
   let frameworkVersion = 0;
   if (raw.framework_version != null) {
     if (!Number.isInteger(raw.framework_version) || Number(raw.framework_version) < 0) {
@@ -206,9 +224,9 @@ export function parseRepositoryManifest(text: string): { manifest?: RepositoryPr
   if (!seen.has("shared")) errors.push("repository.yaml: 必须声明 shared scope");
 
   let entrypoints: RepositoryProtocolManifest["entrypoints"];
-  if (version === 2) {
+  if (version >= 2) {
     if (!isRecord(raw.entrypoints)) {
-      errors.push("repository.yaml: version 2 必须声明 entrypoints");
+      errors.push(`repository.yaml: version ${version} 必须声明 entrypoints`);
     } else {
       const overview = typeof raw.entrypoints.overview === "string" ? raw.entrypoints.overview.trim() : "";
       const constitution = typeof raw.entrypoints.constitution === "string" ? raw.entrypoints.constitution.trim() : "";
@@ -293,10 +311,119 @@ function stringListField(
   return values;
 }
 
+function validatePlanTaskLedger(
+  body: string,
+  filePath: string,
+  errors: string[],
+  options: { allowPlaceholders?: boolean } = {},
+): void {
+  const lines = body.split(/\r?\n/);
+  const sectionStart = lines.findIndex((line) => /^#\s+(实施任务|Implementation Tasks)\s*$/.test(line));
+  if (sectionStart < 0) return;
+  const sectionEndOffset = lines.slice(sectionStart + 1).findIndex((line) => /^#\s+/.test(line));
+  const sectionEnd = sectionEndOffset < 0 ? lines.length : sectionStart + 1 + sectionEndOffset;
+  const sectionLines = lines.slice(sectionStart + 1, sectionEnd);
+  const phases = new Map<string, number>();
+  const taskIds = new Set<string>();
+  let currentPhase: string | undefined;
+  let currentTask: { id: string; completed: boolean; title: string; fields: Map<string, string> } | undefined;
+
+  const finishTask = () => {
+    if (!currentTask) return;
+    if (!options.allowPlaceholders && /\bTODO\b/i.test(currentTask.title)) {
+      errors.push(`${filePath}: 任务 ${currentTask.id} 的标题不能保留 TODO 占位符`);
+    }
+    for (const field of PLAN_TASK_FIELDS) {
+      const value = currentTask.fields.get(field);
+      if (!value) {
+        errors.push(`${filePath}: 任务 ${currentTask.id} 缺少非空「${field}」字段`);
+      } else if (!options.allowPlaceholders && /\bTODO\b/i.test(value)) {
+        errors.push(`${filePath}: 任务 ${currentTask.id} 的「${field}」不能保留 TODO 占位符`);
+      }
+    }
+    const blocker = currentTask.fields.get("阻塞");
+    if (blocker !== undefined && (!blocker || (!options.allowPlaceholders && /\bTODO\b/i.test(blocker)))) {
+      errors.push(`${filePath}: 任务 ${currentTask.id} 的「阻塞」必须记录具体原因`);
+    }
+    const validationResult = currentTask.fields.get("验证结果") || "";
+    if (currentTask.completed && /^(?:待执行|未执行|TODO)(?:\s|$)/i.test(validationResult)) {
+      errors.push(`${filePath}: 已完成任务 ${currentTask.id} 必须记录实际验证结果`);
+    }
+    currentTask = undefined;
+  };
+
+  for (const line of sectionLines) {
+    const phaseMatch = line.match(/^##\s+(P\d+)\s+(.+?)\s*$/);
+    if (phaseMatch) {
+      finishTask();
+      const [, phaseId, title] = phaseMatch;
+      if (phases.has(phaseId)) errors.push(`${filePath}: Phase 编号「${phaseId}」重复`);
+      if (!options.allowPlaceholders && /\bTODO\b/i.test(title)) {
+        errors.push(`${filePath}: Phase ${phaseId} 的标题不能保留 TODO 占位符`);
+      }
+      phases.set(phaseId, 0);
+      currentPhase = phaseId;
+      continue;
+    }
+    if (/^##\s+/.test(line)) {
+      finishTask();
+      errors.push(`${filePath}: 实施任务中的 Phase 必须使用「## P<n> <阶段标题>」格式`);
+      currentPhase = undefined;
+      continue;
+    }
+
+    const taskMatch = line.match(/^-\s+\[([ xX])\]\s+(P\d+\.\d+)\s+(.+?)\s*$/);
+    if (taskMatch) {
+      finishTask();
+      const [, checkbox, taskId, title] = taskMatch;
+      if (!currentPhase) {
+        errors.push(`${filePath}: 任务 ${taskId} 必须位于 Phase 标题下`);
+      } else {
+        phases.set(currentPhase, (phases.get(currentPhase) || 0) + 1);
+        if (taskId.split(".")[0] !== currentPhase) {
+          errors.push(`${filePath}: 任务 ${taskId} 必须属于 Phase ${currentPhase}`);
+        }
+      }
+      if (taskIds.has(taskId)) errors.push(`${filePath}: 任务编号「${taskId}」重复`);
+      taskIds.add(taskId);
+      currentTask = { id: taskId, completed: checkbox.toLowerCase() === "x", title, fields: new Map() };
+      continue;
+    }
+
+    if (/^-\s+P\d+\.\d+\b/.test(line)) {
+      finishTask();
+      errors.push(`${filePath}: 实施任务必须使用「- [ ] P<n>.<m> <任务标题>」checkbox 格式`);
+      currentTask = undefined;
+      continue;
+    }
+    if (/^-\s+\[[^\]]*\]\s+/.test(line)) {
+      finishTask();
+      errors.push(`${filePath}: checkbox 任务必须使用「- [ ] P<n>.<m> <任务标题>」格式，完成时使用 [x]`);
+      currentTask = undefined;
+      continue;
+    }
+
+    const fieldMatch = line.match(/^\s{2,}-\s+(依赖|产出|完成标准|验证|验证结果|阻塞)：\s*(.*?)\s*$/);
+    if (fieldMatch && currentTask) {
+      const [, field, value] = fieldMatch;
+      if (currentTask.fields.has(field)) errors.push(`${filePath}: 任务 ${currentTask.id} 的「${field}」字段重复`);
+      currentTask.fields.set(field, value);
+    }
+  }
+  finishTask();
+
+  if (phases.size === 0) errors.push(`${filePath}: 「实施任务」至少需要一个「## P<n> <阶段标题>」`);
+  for (const [phaseId, taskCount] of phases) {
+    if (taskCount === 0) errors.push(`${filePath}: Phase ${phaseId} 至少需要一个 checkbox 任务`);
+  }
+  if (taskIds.size === 0) errors.push(`${filePath}: 「实施任务」至少需要一个编号 checkbox 任务`);
+}
+
 function validateDocument(
   root: string,
   file: string,
   kind: KnowledgeKind,
+  protocolVersion: AlignyardProtocolVersion,
   scopes: Set<string>,
   errors: string[],
 ): ProtocolDocument | undefined {
@@ -329,7 +456,7 @@ function validateDocument(
     if (idMatch[2] !== scope) errors.push(`${filePath}: id 中的 scope 必须是 ${scope}`);
   }
 
-  for (const section of REQUIRED_SECTIONS[kind]) {
+  for (const section of requiredSections(kind, protocolVersion)) {
     const present = section.headings.some((heading) => {
       const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       return new RegExp(`^#{1,2}\\s+${escaped}\\s*$`, "mi").test(parsed.body);
@@ -338,12 +465,13 @@ function validateDocument(
       errors.push(`${filePath}: 缺少「${section.label}」章节`);
     }
   }
+  if (kind === "plan" && protocolVersion >= 3) validatePlanTaskLedger(parsed.body, filePath, errors);
   return id && title && scope && declaredKind === kind
     ? { id, kind, scope, title, path: filePath, owners, relations, sources, governing }
     : undefined;
 }
 
-function validateTemplate(root: string, kind: KnowledgeKind, errors: string[]) {
+function validateTemplate(root: string, kind: KnowledgeKind, protocolVersion: AlignyardProtocolVersion, errors: string[]) {
   const relative = `${ALIGNYARD_DIR}/templates/${kind}.md`;
   const target = path.join(root, relative);
   if (!fs.existsSync(target)) {
@@ -358,7 +486,7 @@ function validateTemplate(root: string, kind: KnowledgeKind, errors: string[]) {
   for (const token of ["{{id}}", "{{title}}", "{{kind}}", "{{scope}}"] as const) {
     if (!text.includes(token)) errors.push(`${relative}: 缺少模板变量 ${token}`);
   }
-  for (const section of REQUIRED_SECTIONS[kind]) {
+  for (const section of requiredSections(kind, protocolVersion)) {
     const present = section.headings.some((heading) => {
       const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       return new RegExp(`^#{1,2}\\s+${escaped}\\s*$`, "mi").test(text);
@@ -366,6 +494,9 @@ function validateTemplate(root: string, kind: KnowledgeKind, errors: string[]) {
     if (!present) {
       errors.push(`${relative}: 缺少「${section.label}」章节`);
     }
+  }
+  if (kind === "plan" && protocolVersion >= 3) {
+    validatePlanTaskLedger(text, relative, errors, { allowPlaceholders: true });
   }
 }
 
@@ -392,7 +523,7 @@ export function validateRepositoryProtocol(repositoryRoot: string): ProtocolVali
   }
 
   const supportedKinds = knowledgeKindsForVersion(parsed.manifest.version);
-  for (const kind of supportedKinds) validateTemplate(root, kind, errors);
+  for (const kind of supportedKinds) validateTemplate(root, kind, protocolVersion, errors);
   const skillPath = path.join(root, ALIGNYARD_DIR, "skills/alignyard-knowledge/SKILL.md");
   if (!fs.existsSync(skillPath)) errors.push(`缺少 ${ALIGNYARD_DIR}/skills/alignyard-knowledge/SKILL.md`);
   else if (fs.lstatSync(skillPath).isSymbolicLink()) errors.push(`${ALIGNYARD_DIR}/skills/alignyard-knowledge/SKILL.md: 不允许符号链接`);
@@ -408,7 +539,7 @@ export function validateRepositoryProtocol(repositoryRoot: string): ProtocolVali
       continue;
     }
     for (const file of markdownFiles(kindRoot, errors)) {
-      const document = validateDocument(root, file, kind, scopes, errors);
+      const document = validateDocument(root, file, kind, protocolVersion, scopes, errors);
       if (document) documents.push(document);
     }
   }
@@ -437,6 +568,12 @@ export function validateRepositoryProtocol(repositoryRoot: string): ProtocolVali
       if (!document.governing.includes("doc.shared.constitution")) {
         errors.push(`${document.path}: Plan 的 governing 必须包含 doc.shared.constitution`);
       }
+      if (protocolVersion >= 3 && !document.governing.some((governing) => {
+        const target = documentsById.get(governing);
+        return governing !== "doc.shared.constitution" && target && target.kind !== "plan";
+      })) {
+        errors.push(`${document.path}: Plan 的 governing 除 Constitution 外还必须关联至少一份对应的 Doc、Spec 或 ADR`);
+      }
     }
   }
 
@@ -446,12 +583,12 @@ export function validateRepositoryProtocol(repositoryRoot: string): ProtocolVali
   )) {
     errors.push(`缺少 ${ALIGNYARD_DIR}/docs/shared/overview.md；初始化需要一份 shared overview`);
   }
-  if (protocolVersion === 2 && !documents.some((document) =>
+  if (protocolVersion >= 2 && !documents.some((document) =>
     document.kind === "doc"
       && document.id === "doc.shared.constitution"
       && document.path === `${ALIGNYARD_DIR}/docs/shared/constitution.md`
   )) {
-    errors.push(`缺少 ${ALIGNYARD_DIR}/docs/shared/constitution.md；protocol v2 需要固定 constitution 入口`);
+    errors.push(`缺少 ${ALIGNYARD_DIR}/docs/shared/constitution.md；protocol v${protocolVersion} 需要固定 constitution 入口`);
   }
 
   return { ok: errors.length === 0, initialized: true, manifest: parsed.manifest, documents, errors };
@@ -461,14 +598,14 @@ const DEFAULT_TEMPLATES: Record<KnowledgeKind, string> = {
   doc: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 概述\n\n<!-- 同一业务概念跨边界存在不同表示时，记录概念定义、各边界表示、必须保持的语义不变量和权威来源；只写长期有效规则，不罗列实现细节。 -->\n`,
   spec: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景\n\n# 目标\n\n# 非目标\n\n# 设计\n\n<!-- 通过 governing 引用真正约束本次变化的 Docs/ADRs。识别受影响的业务概念与系统边界，说明沿用或改变哪些语义不变量；存在不同表示时，给出明确映射和代表性示例。 -->\n\n# 验收标准\n`,
   adr: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景\n\n# 决策\n\n<!-- 只有业务概念、边界契约或表示选择具有长期替代方案和后果时，才在这里记录为什么。 -->\n\n# 影响\n`,
-  plan: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景与目标\n\n# 依据与约束\n\n<!-- 引用真正约束实现的文档；涉及跨边界语义时，明确权威定义、表示差异和映射顺序。 -->\n\n# 实现设计\n\n# 修改范围\n\n# 保持不变\n\n# 实施步骤\n\n# 验证方案\n\n<!-- 用可执行测试覆盖已确认的语义不变量、边界映射和代表性示例。 -->\n\n# 文档更新\n\n# 未决问题\n`,
+  plan: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景与目标\n\n# 依据与约束\n\n<!-- 通过 governing 引用真正约束实现的 Constitution、Spec、ADR 或 Doc；不要在 Plan 重复业务契约。 -->\n\n# 实现设计\n\n# 修改范围\n\n# 保持不变\n\n# 实施任务\n\n<!-- 每项必须是可独立实现、测试和 Review 的逻辑单元。实施过程中持续更新 checkbox 与验证结果；未完成且受阻时增加“阻塞”字段。 -->\n\n## P0 契约与基础结构\n\n- [ ] P0.1 TODO：描述第一个可独立交付的任务\n  - 依赖：TODO\n  - 产出：TODO\n  - 完成标准：TODO\n  - 验证：TODO\n  - 验证结果：待执行\n\n## P1 核心实现\n\n- [ ] P1.1 TODO：描述下一个可独立交付的任务\n  - 依赖：P0.1\n  - 产出：TODO\n  - 完成标准：TODO\n  - 验证：TODO\n  - 验证结果：待执行\n\n# 验证方案\n\n<!-- 汇总覆盖语义不变量、边界映射和代表性示例的可执行测试，并与任务中的验证命令保持一致。 -->\n\n# 文档更新\n\n# 未决问题\n`,
 };
 
 const DEFAULT_README = `# Alignyard 工程意图
 
 这个目录是 Repository 中随代码版本管理的核心工程意图与架构约束真源。它只记录未来 AI 不知道时可能造成整体设计漂移的信息；具体函数、局部算法和普通字段传递仍以代码、类型和测试为准。同一业务概念在不同边界中的定义、表示差异与必须保持的语义不变量，如果无法从局部实现可靠还原，也属于工程知识；持续变化的运行数据本身不属于。
 
-\`repository.yaml\` 声明协议、知识框架版本、固定入口与逻辑 scopes；Docs 记录当前有效的稳定架构事实，Specs 描述一次变化的意图与边界，ADRs 保存长期取舍，Plans 提供可选的可执行技术方案。文档作者和审核轨迹优先使用 Git commit 与 PR/MR/Alignyard Review，不额外维护一套作者字段。
+\`repository.yaml\` 声明协议、知识框架版本、固定入口与逻辑 scopes；Docs 记录当前有效的稳定架构事实，Specs 描述一次变化的意图与边界，ADRs 保存长期取舍，Plans 为达到门槛的改动提供可执行技术方案与实施任务账本。文档作者和审核轨迹优先使用 Git commit 与 PR/MR/Alignyard Review，不额外维护一套作者字段。
 
 使用 \`ay new\` 创建文档，在 Review 前运行 \`ay validate\` 并提交全部改动。\`ay update --check\` 可预览框架升级，\`ay update\` 只更新 Alignyard 管理的 Skill、模板和协议结构，不覆盖 Repository 的知识正文。工程文档始终保存在 Repository 和 worktree 中；Platform 不保存副本。Agent Harness、skills、hooks 和 CI 负责工作方式与机器检查，可以引用这里的文档 ID，但不复制或重新定义 Repository 的业务结论。
 `;
@@ -517,7 +654,7 @@ Apply this review whenever a Task combines, transfers, compares, or reinterprets
 1. Identify the affected business concepts and every boundary they cross. Separate the authoritative meaning of each concept from its representation at each boundary.
 2. Classify source and target semantics as equivalent, different, or unknown. Matching field names, primitive types, or product shorthand are not evidence of equivalence.
 3. When representations differ, define the normalization or mapping rule and representative boundary examples before implementation. When meaning is unknown, establish it from repository evidence or ask the user; do not silently choose an interpretation.
-4. Store the current semantic invariant and boundary contract in Docs, the intended change and examples in a Spec, the reason for a durable choice in an ADR, and optional implementation detail in a Plan. Put executable mappings and regression checks in code/tests or the Harness; do not duplicate them as prose.
+4. Store the current semantic invariant and boundary contract in Docs, the intended change and examples in a Spec, the reason for a durable choice in an ADR, and implementation design plus the task ledger in a Plan when the Plan gate applies. Put executable mappings and regression checks in code/tests or the Harness; do not duplicate them as prose.
 
 ## Repository bootstrap
 
@@ -529,7 +666,7 @@ Apply this review whenever a Task combines, transfers, compares, or reinterprets
 
 ### 2. Plan a minimal, sufficient baseline
 
-1. Always create the shared repository overview. Use it as a concise map and navigation entry, not as a catch-all document. For protocol v2, also complete the generated Constitution from verified repository constraints and user-confirmed intent; never leave it as a generic placeholder.
+1. Always create the shared repository overview. Use it as a concise map and navigation entry, not as a catch-all document. For protocol v2 and later, also complete the generated Constitution from verified repository constraints and user-confirmed intent; never leave it as a generic placeholder.
 2. Cover only durable information that can change an Agent's design direction: product intent, architecture and dependency boundaries, stable public contracts, data/security/permission boundaries, explicit invariants, important technical choices, and non-obvious semantic differences for the same business concept across boundaries. Keep implementation details in code, types, tests, or local comments when they are directly recoverable there.
 3. Use this test before creating or expanding a document: if a future Agent did not know this fact, could it produce a locally correct implementation that violates the intended system design? If not, omit it. Give a topic its own Doc only when it has enough verified substance and evolves independently.
 4. Classify existing knowledge: current verified behavior belongs in Docs, an intended but unfinished change belongs in Specs, an explicit durable decision belongs in ADRs, and a concrete optional implementation design belongs in a Plan. Do not infer an ADR merely from code shape. Bootstrap Specs and Plans are optional; empty or speculative Specs, ADRs, and Plans are prohibited.
@@ -555,18 +692,21 @@ Apply this review whenever a Task combines, transfers, compares, or reinterprets
 2. Map the affected business concepts and boundaries. For each affected boundary, route through its scope Docs and relations. When a concept is combined, transferred, compared, or reinterpreted, establish the authoritative meaning, each representation, their compatibility, and any required mapping before proposing a design. If existing knowledge is insufficient, inspect repository evidence and then ask the user when the meaning remains uncertain.
 3. Decide which existing or new documents the change actually needs. A material new capability or boundary change normally needs a concise Spec; a small correction, documentation-only Task, or change already covered by an accepted Spec may only update existing Docs. Do not create a primary document merely to satisfy a workflow shape.
 4. Ask the user directly when missing facts could change product intent, public interfaces, architecture boundaries, compatibility, change scope, or the meaning of a concept across boundaries. Do not invent a decision. Incorporate the confirmed answer into the final Spec, ADR, Plan, or Doc.
-5. Create an ADR only for a durable decision with meaningful alternatives or consequences. Create a Plan only when a concrete implementation design materially reduces ambiguity; Plans are optional.
-6. Use \`governing\` on a Spec or Plan to cite only the Docs and ADRs that actually define its affected concepts, boundaries, and constraints. A Plan must also govern itself with the Constitution and may cite its accepted Spec. A Spec is typical for new behavior or boundary changes, but is not mandatory when existing knowledge already states the intent. State what may change and what must remain unchanged, and include implementation and validation steps. External sources are traceability references, not governing truth.
-7. Draft target-state Docs at their normal paths on the Task branch. The branch is the proposal; do not create a temporary Docs copy. Reconcile Docs with the actual implementation before publishing them to the default branch.
-8. Unless the Task explicitly requests implementation, stop after producing the reviewable knowledge package. Preserve stable document IDs and use \`relations\` only for meaningful dependencies.
-9. Run \`ay validate\` after knowledge changes. Before requesting Review, commit all changes and make sure \`git status --short\` is empty; the Runner will repeat these checks and push the branch when the user submits Review. When cross-boundary semantic alignment applied, summarize the confirmed concepts, representations, mappings, examples, and unresolved non-blocking risks for the Reviewer.
+5. Create an ADR only for a durable decision with meaningful alternatives or consequences.
+6. Before coding, apply the Plan gate. Create or update a Plan for medium or large changes, cross-module work, public contracts, state flows, data structures, or work requiring multiple implementation phases. A typo, simple configuration adjustment, or clearly bounded single-file fix may proceed without a Plan. When uncertain, use a Plan.
+7. Use \`governing\` on a Spec or Plan to cite only the Docs and ADRs that actually define its affected concepts, boundaries, and constraints. A Plan must govern itself with the Constitution and at least one corresponding Doc, Spec, or ADR; cite the accepted Spec when one defines this change. State what may change and what must remain unchanged without repeating business contracts in the Plan. External sources are traceability references, not governing truth.
+8. In each required Plan, split implementation into ordered \`P<n>\` phases and uniquely numbered checkbox tasks. Each task must be a logical unit that can be implemented, tested, and Reviewed independently, and must record dependencies, output, completion criteria, validation commands, and validation results.
+9. Draft target-state Docs at their normal paths on the Task branch. The branch is the proposal; do not create a temporary Docs copy. Reconcile Docs with the actual implementation before publishing them to the default branch.
+10. Unless the Task explicitly requests implementation, stop after producing the reviewable knowledge package. Preserve stable document IDs and use \`relations\` only for meaningful dependencies.
+11. During implementation, update each Plan checkbox and validation result as soon as that task is completed; do not batch all progress updates at the end. Keep unfinished tasks unchecked, and add a concrete \`阻塞\` field when an unfinished task is blocked so the Plan remains the cross-session handoff entrypoint.
+12. Run \`ay validate\` after knowledge changes. Before requesting Review, commit all changes and make sure \`git status --short\` is empty; the Runner will repeat these checks and push the branch when the user submits Review. When cross-boundary semantic alignment applied, summarize the confirmed concepts, representations, mappings, examples, and unresolved non-blocking risks for the Reviewer.
 
 ## Document semantics
 
 - **Docs:** current accepted system truth. Prefer concise overviews and operational facts that remain useful after the Task closes.
 - **Specs:** the contract for an intended change: context, goals, non-goals, design, and acceptance criteria.
 - **ADRs:** a durable decision and its consequences. Record why, not a chronological meeting transcript.
-- **Plans:** an optional, executable technical design for one intended change. It bridges accepted knowledge to implementation without becoming current system truth.
+- **Plans:** a conditionally required executable technical design and implementation ledger for one intended change. It bridges accepted knowledge to implementation without becoming current system truth or duplicating business contracts.
 - **Constitution:** the reserved \`doc.shared.constitution\` entrypoint. It records repository-wide intent, boundaries, confirmation rules, and enforceable constraints.
 
 Keep every document concise and single-purpose. Record the intent, boundary, rationale, or invariant that must survive implementation; omit function-level mechanics, ordinary field plumbing, meeting transcripts, and implementation logs. Git commits, blame, PR/MR review, and Alignyard Review provide authorship and approval traceability; do not add document owners merely to duplicate that history.
@@ -578,6 +718,7 @@ Keep every document concise and single-purpose. Record the intent, boundary, rat
 - Do not read or reproduce secret values. Refer to environment-variable names only when relevant.
 - Do not edit source paths outside the Task's scope merely to make documentation appear complete.
 - Treat \`ay validate\` as authoritative for structure; use repository evidence and user decisions for substance.
+- Keep required Plan task checkboxes, validation results, and blockers current throughout implementation so another session can resume from the document alone.
 `;
 
 function repositoryTitle(root: string): string {
@@ -595,14 +736,14 @@ export function initializeRepositoryProtocol(repositoryRoot: string): { created:
     if (parsed.manifest) targetVersion = parsed.manifest.version;
   }
   const defaultFiles: Record<string, string> = {
-    "repository.yaml": `version: 2\nframework_version: ${ALIGNYARD_FRAMEWORK_VERSION}\npreset: basic\n\nentrypoints:\n  overview: doc.shared.overview\n  constitution: doc.shared.constitution\n\nscopes:\n  - id: shared\n    title: ${JSON.stringify(title)}\n`,
+    "repository.yaml": `version: ${ALIGNYARD_PROTOCOL_VERSION}\nframework_version: ${ALIGNYARD_FRAMEWORK_VERSION}\npreset: basic\n\nentrypoints:\n  overview: doc.shared.overview\n  constitution: doc.shared.constitution\n\nscopes:\n  - id: shared\n    title: ${JSON.stringify(title)}\n`,
     "README.md": DEFAULT_README,
     "templates/doc.md": DEFAULT_TEMPLATES.doc,
     "templates/spec.md": DEFAULT_TEMPLATES.spec,
     "templates/adr.md": DEFAULT_TEMPLATES.adr,
     "skills/alignyard-knowledge/SKILL.md": DEFAULT_KNOWLEDGE_SKILL,
   };
-  if (targetVersion === 2) {
+  if (targetVersion >= 2) {
     defaultFiles["templates/plan.md"] = DEFAULT_TEMPLATES.plan;
     defaultFiles["docs/shared/constitution.md"] = DEFAULT_CONSTITUTION;
   }
@@ -619,7 +760,7 @@ export function initializeRepositoryProtocol(repositoryRoot: string): { created:
     fs.writeFileSync(target, contents, "utf8");
     created.push(relativePath);
   }
-  const directories = targetVersion === 2
+  const directories = targetVersion >= 2
     ? Object.values(KIND_DIRS)
     : V1_KNOWLEDGE_KINDS.map((kind) => KIND_DIRS[kind]);
   for (const directory of directories) {

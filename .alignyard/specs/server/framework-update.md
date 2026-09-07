@@ -39,12 +39,12 @@ Platform 不能保存或改写 Repository 知识。版本检测和文件更新�
 
 `repository.yaml` 同时声明两个版本：
 
-- `version` 表示文档结构与校验契约；当前支持 v1、v2，`ay update` 会升级到当前协议版本。
-- `framework_version` 表示 Alignyard 管理文件的发布版本；缺失时按 legacy v0 处理，当前最新版为 v3。v3 在不增加文档类型或结构强制项的前提下，明确 Alignyard 与 Agent Harness 的真源边界，并加入通用的跨边界业务语义对齐方法。
+- `version` 表示文档结构与校验契约；当前支持 v1、v2、v3，`ay update` 会升级到当前协议版本。v3 为 Plan 增加分 Phase 的细粒度任务账本结构和校验，v1/v2 在未升级时保持原校验语义。
+- `framework_version` 表示 Alignyard 管理文件的发布版本；缺失时按 legacy v0 处理，当前最新版为 v4。v4 更新 Plan 模板与 Skill，明确 Plan gate、实施期 checkbox/验证结果维护和跨 session 交接约定。
 
 `ay update --check [repository]` 只计算 `create`、`replace`、`merge` 变化，不写文件。`ay update [repository]` 执行同一计划：合并 `repository.yaml`，替换 `.alignyard/README.md`、默认模板与 `alignyard-knowledge` Skill，补齐缺失的 Constitution、kind/scope 目录。它保留 scopes 及扩展字段，不修改已有 Docs、Specs、ADRs、Plans、文档 ID、relations、sources 或 governing；重复运行没有变化。
 
-升级后的 Agent 先阅读新 Skill，再检查 `ay update --check` 的计划和升级后的实际 Git diff，将变化归为管理文件替换、manifest 结构合并或缺失固定结构补齐。已有知识正文默认保持不变；只有协议兼容性明确要求或用户明确提出时才做最小语义修改，涉及产品意图、公共接口、架构边界或兼容性时直接在会话中询问用户。完成前再次运行 `ay update --check` 并确认没有待应用变化。Update Task 只允许修改 `.alignyard/`，运行 `ay validate`、提交并等待人工 Review。
+升级后的 Agent 先阅读新 Skill，再检查 `ay update --check` 的计划和升级后的实际 Git diff，将变化归为管理文件替换、manifest 结构合并或缺失固定结构补齐。已有知识正文默认保持不变；只有协议兼容性明确要求或用户明确提出时才做最小语义修改，涉及产品意图、公共接口、架构边界或兼容性时直接在会话中询问用户。升级到 protocol v3 时，旧 Plan 正文不会被工具自动改写，Agent 必须按新任务账本结构显式迁移并保留未完成项和阻塞原因。完成前再次运行 `ay update --check` 并确认没有待应用变化。Update Task 只允许修改 `.alignyard/`，运行 `ay validate`、提交并等待人工 Review。
 
 Runner 的 `repository.refresh-protocol` 从 Repository 默认分支读取 manifest 与有界的初始化文件，比较 Repository `framework_version` 和当前 Runner 内置版本，返回 `uninitialized`、`invalid`、`outdated` 或 `ready`。Platform 保存 `protocol_version`、`framework_version` 与状态元数据；Web 定期经当前用户 Runner 刷新，`outdated` 时显示 Update 入口。Update Task 使用独立 `repository_update` 类型，但复用现有 Author、Reviewer、change request 与 merge 状态机；合并后必须再次检测为 `ready` 才能完成。
 
@@ -53,7 +53,7 @@ Runner 的 `repository.refresh-protocol` 从 Repository 默认分支读取 manif
 # 验收标准
 
 - `ay init` 新 Repository 写入当前 `framework_version`；旧 manifest 缺少该字段时仍可读取并标记为 legacy v0。
-- `ay update --check` 不修改文件并准确列出变化；`ay update` 可从 v1/v2 legacy 骨架升级且第二次运行无变化。
+- `ay update --check` 不修改文件并准确列出变化；`ay update` 可从 v1/v2/v3 legacy 骨架升级且第二次运行无变化。
 - 更新只替换明确的 Alignyard 管理文件，保留 scopes、扩展字段和全部 Repository 知识正文。
 - Update Agent 按实际 diff 分类核对升级，不会默认精简、复核或重写已有知识正文；完成前第二次 `ay update --check` 无待应用变化。
 - `ay validate` 输出当前协议版本、框架版本、最新版和是否可更新；高于当前工具的版本给出 Runner 升级提示。
