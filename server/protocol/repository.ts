@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
@@ -7,7 +8,7 @@ export const ALIGNYARD_DIR = ".alignyard";
 export const ALIGNYARD_MANIFEST = `${ALIGNYARD_DIR}/repository.yaml`;
 export const ALIGNYARD_PROTOCOL_VERSION = 3 as const;
 export const ALIGNYARD_PROTOCOL_VERSIONS = [1, 2, 3] as const;
-export const ALIGNYARD_FRAMEWORK_VERSION = 4 as const;
+export const ALIGNYARD_FRAMEWORK_VERSION = 5 as const;
 export type AlignyardProtocolVersion = typeof ALIGNYARD_PROTOCOL_VERSIONS[number];
 
 export const KNOWLEDGE_KINDS = ["doc", "spec", "adr", "plan"] as const;
@@ -51,6 +52,7 @@ export interface ProtocolDocument {
   kind: KnowledgeKind;
   scope: string;
   title: string;
+  author?: string;
   path: string;
   owners: string[];
   relations: string[];
@@ -76,6 +78,8 @@ export interface CreateProtocolDocumentInput {
   slug: string;
   scope: string;
   title?: string;
+  constraint?: boolean;
+  author?: string;
 }
 
 export interface FrameworkUpdateChange {
@@ -434,6 +438,7 @@ function validateDocument(
   const title = stringField(parsed.metadata, "title", filePath, errors);
   const declaredKind = stringField(parsed.metadata, "kind", filePath, errors);
   const scope = stringField(parsed.metadata, "scope", filePath, errors);
+  const author = typeof parsed.metadata.author === "string" ? parsed.metadata.author : undefined;
   const owners = stringListField(parsed.metadata, "owners", filePath, errors);
   const relations = stringListField(parsed.metadata, "relations", filePath, errors);
   const sources = stringListField(parsed.metadata, "sources", filePath, errors);
@@ -467,7 +472,7 @@ function validateDocument(
   }
   if (kind === "plan" && protocolVersion >= 3) validatePlanTaskLedger(parsed.body, filePath, errors);
   return id && title && scope && declaredKind === kind
-    ? { id, kind, scope, title, path: filePath, owners, relations, sources, governing }
+    ? { id, kind, scope, title, path: filePath, ...(author === undefined ? {} : { author }), owners, relations, sources, governing }
     : undefined;
 }
 
@@ -595,9 +600,9 @@ export function validateRepositoryProtocol(repositoryRoot: string): ProtocolVali
 }
 
 const DEFAULT_TEMPLATES: Record<KnowledgeKind, string> = {
-  doc: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 概述\n\n<!-- 同一业务概念跨边界存在不同表示时，记录概念定义、各边界表示、必须保持的语义不变量和权威来源；只写长期有效规则，不罗列实现细节。 -->\n`,
+  doc: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 概述\n\n<!-- 同一业务概念跨边界存在不同表示时，记录概念定义、各边界表示、必须保持的语义不变量和权威来源；只写长期有效规则，不罗列实现细节。业务关键约束可通过 ay new doc --constraint 创建，填写当前规则和适用范围；author 仅是可编辑的沟通署名。 -->\n`,
   spec: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景\n\n# 目标\n\n# 非目标\n\n# 设计\n\n<!-- 通过 governing 引用真正约束本次变化的 Docs/ADRs。识别受影响的业务概念与系统边界，说明沿用或改变哪些语义不变量；存在不同表示时，给出明确映射和代表性示例。 -->\n\n# 验收标准\n`,
-  adr: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景\n\n# 决策\n\n<!-- 只有业务概念、边界契约或表示选择具有长期替代方案和后果时，才在这里记录为什么。 -->\n\n# 影响\n`,
+  adr: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景\n\n# 决策\n\n<!-- 业务决策写明选择、理由和取舍；author 仅是可编辑的记录人/联系人，留空不阻止 Review。改变旧决策时说明替代的内容，通过 relations 双向关联，并在旧 ADR 注明替代关系，保留原始理由。 -->\n\n# 影响\n`,
   plan: `---\nid: {{id}}\ntitle: {{title}}\nkind: {{kind}}\nscope: {{scope}}\nrelations: []\nsources: []\ngoverning: []\n---\n\n# 背景与目标\n\n# 依据与约束\n\n<!-- 通过 governing 引用真正约束实现的 Constitution、Spec、ADR 或 Doc；不要在 Plan 重复业务契约。 -->\n\n# 实现设计\n\n# 修改范围\n\n# 保持不变\n\n# 实施任务\n\n<!-- 每项必须是可独立实现、测试和 Review 的逻辑单元。实施过程中持续更新 checkbox 与验证结果；未完成且受阻时增加“阻塞”字段。 -->\n\n## P0 契约与基础结构\n\n- [ ] P0.1 TODO：描述第一个可独立交付的任务\n  - 依赖：TODO\n  - 产出：TODO\n  - 完成标准：TODO\n  - 验证：TODO\n  - 验证结果：待执行\n\n## P1 核心实现\n\n- [ ] P1.1 TODO：描述下一个可独立交付的任务\n  - 依赖：P0.1\n  - 产出：TODO\n  - 完成标准：TODO\n  - 验证：TODO\n  - 验证结果：待执行\n\n# 验证方案\n\n<!-- 汇总覆盖语义不变量、边界映射和代表性示例的可执行测试，并与任务中的验证命令保持一致。 -->\n\n# 文档更新\n\n# 未决问题\n`,
 };
 
@@ -605,7 +610,7 @@ const DEFAULT_README = `# Alignyard 工程意图
 
 这个目录是 Repository 中随代码版本管理的核心工程意图与架构约束真源。它只记录未来 AI 不知道时可能造成整体设计漂移的信息；具体函数、局部算法和普通字段传递仍以代码、类型和测试为准。同一业务概念在不同边界中的定义、表示差异与必须保持的语义不变量，如果无法从局部实现可靠还原，也属于工程知识；持续变化的运行数据本身不属于。
 
-\`repository.yaml\` 声明协议、知识框架版本、固定入口与逻辑 scopes；Docs 记录当前有效的稳定架构事实，Specs 描述一次变化的意图与边界，ADRs 保存长期取舍，Plans 为达到门槛的改动提供可执行技术方案与实施任务账本。文档作者和审核轨迹优先使用 Git commit 与 PR/MR/Alignyard Review，不额外维护一套作者字段。
+\`repository.yaml\` 声明协议、知识框架版本、固定入口与逻辑 scopes；Docs 记录当前有效的稳定架构事实，Specs 描述一次变化的意图与边界，ADRs 保存长期取舍，Plans 为达到门槛的改动提供可执行技术方案与实施任务账本。当前重点是业务关键约束与决策日志：前者用 Doc 写当前规则与适用范围，后者用 ADR 写选择、理由与后果。两者用可选的 \`author\` 署名提供沟通入口，可自动填写、手动修改或留空；署名不表示审批权，Git/MR/Review 继续记录编辑与确认。
 
 使用 \`ay new\` 创建文档，在 Review 前运行 \`ay validate\` 并提交全部改动。\`ay update --check\` 可预览框架升级，\`ay update\` 只更新 Alignyard 管理的 Skill、模板和协议结构，不覆盖 Repository 的知识正文。工程文档始终保存在 Repository 和 worktree 中；Platform 不保存副本。Agent Harness、skills、hooks 和 CI 负责工作方式与机器检查，可以引用这里的文档 ID，但不复制或重新定义 Repository 的业务结论。
 `;
@@ -709,7 +714,23 @@ Apply this review whenever a Task combines, transfers, compares, or reinterprets
 - **Plans:** a conditionally required executable technical design and implementation ledger for one intended change. It bridges accepted knowledge to implementation without becoming current system truth or duplicating business contracts.
 - **Constitution:** the reserved \`doc.shared.constitution\` entrypoint. It records repository-wide intent, boundaries, confirmation rules, and enforceable constraints.
 
-Keep every document concise and single-purpose. Record the intent, boundary, rationale, or invariant that must survive implementation; omit function-level mechanics, ordinary field plumbing, meeting transcripts, and implementation logs. Git commits, blame, PR/MR review, and Alignyard Review provide authorship and approval traceability; do not add document owners merely to duplicate that history.
+Keep every document concise and single-purpose. Record the intent, boundary, rationale, or invariant that must survive implementation; omit function-level mechanics, ordinary field plumbing, meeting transcripts, and implementation logs. Git commits, blame, PR/MR review, and Alignyard Review retain editing and approval history.
+
+## Business constraints and decision records
+
+Focus on two existing kinds; do not add a new document type or repurpose other modules:
+
+- Business constraints are Docs: state the current business rule and its applicable scope, including explicit exceptions. Create one with \`ay new doc <slug> --scope <scope> --constraint\`. Ordinary Docs, Specs, Plans and the existing Constitution remain available and unchanged. Coding rules and Agent operating instructions belong in AGENTS.md/Harness, not in this business-constraint content.
+- Decision records are ADRs: record the business choice, its reasons, alternatives and consequences. Create one with \`ay new adr <slug> --scope <scope>\`. Do not turn it into a meeting transcript or an implementation log.
+- Both creation paths fill a single optional \`author\` signature from the target repository's Git user.name, or from an explicit \`--author <name>\`. It identifies the recorder/contact, not an approver or permanent owner. Names may be edited or removed by hand; missing identity leaves the signature empty and never blocks validation or Review. Never invent a human identity, infer approval from Git authorship, or overwrite an existing signature during editing/update. Existing documents need no bulk backfill. Link related constraints and decisions using \`relations\`.
+
+Use this loop for each relevant requirement:
+
+1. Read the applicable business constraints and ADRs by scope, subject, relations and governing references before proposing the change. A missing governing reference does not exempt the change from a relevant rule.
+2. Before Review, compare the proposed behavior with the original constraints and decisions at the Task base commit, including documents changed or deleted by this Task. Report each conflict or uncertainty with the original file/section, proposed change, concrete impact and signature (or state that it is missing). Do not use an already-edited rule to prove the proposal obeys the original rule. Do not claim uninspected scopes are aligned.
+3. Let the human decide substantive tradeoffs. After confirmation, update the affected Doc to the current rule in the same change. If a meaningful choice changes, create a new ADR explaining which part of the old decision it supersedes; link both records and mark that replacement in the old ADR body while retaining its original rationale. Wording-only edits need no new ADR. Preserve existing signatures unless the user explicitly changes the contact.
+4. Verify the Doc and ADR express the same confirmed outcome, summarize unresolved issues, run \`ay validate\`, and follow the existing Review/merge flow. Subsequent requirements read the updated Doc and follow ADR relations to the current decision. Machine validation checks structure, not business alignment.
+
 
 ## Safety and quality
 
@@ -870,12 +891,26 @@ function defaultTitle(slug: string): string {
   return slug.split("-").map((part) => part ? part[0].toUpperCase() + part.slice(1) : part).join(" ");
 }
 
+function repositoryAuthor(root: string): string {
+  try {
+    return execFileSync("git", ["-C", root, "config", "--get", "user.name"], {
+      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000,
+    }).trim();
+  } catch {
+    // A signature is a convenience, not a prerequisite for creating knowledge.
+    return "";
+  }
+}
+
 export function createRepositoryDocument(
   repositoryRoot: string,
   input: CreateProtocolDocumentInput,
 ): ProtocolDocument {
   const root = path.resolve(repositoryRoot);
   if (!KNOWLEDGE_KINDS.includes(input.kind)) throw new Error(`kind 必须是 ${KNOWLEDGE_KINDS.join("、")}`);
+  if (input.constraint && input.kind !== "doc") throw new Error("--constraint 只适用于业务约束 Doc");
+  const signed = input.constraint || input.kind === "adr";
+  if (input.author !== undefined && !signed) throw new Error("--author 只适用于 --constraint Doc 或 ADR");
   if (!DOCUMENT_SLUG.test(input.slug)) throw new Error("slug 只能包含小写字母、数字和单个连字符");
 
   const manifestPath = path.join(root, ALIGNYARD_MANIFEST);
@@ -909,6 +944,21 @@ export function createRepositoryDocument(
   const unresolved = content.match(/{{[a-z_]+}}/g);
   if (unresolved) throw new Error(`${ALIGNYARD_DIR}/templates/${input.kind}.md 包含未知模板变量 ${unresolved[0]}`);
 
+  let author: string | undefined;
+  if (signed) {
+    content = content.replace(/^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/, (_match, frontmatter: string) => {
+      const metadata = YAML.parseDocument(frontmatter);
+      const templateAuthor = metadata.get("author");
+      author = input.author?.trim() ?? (typeof templateAuthor === "string" && templateAuthor.trim()
+        ? templateAuthor.trim() : repositoryAuthor(root));
+      metadata.set("author", author);
+      return `---\n${metadata.toString()}---`;
+    });
+  }
+  if (input.constraint) {
+    content += "\n# 业务关键约束\n\n<!-- 写当前必须遵守的业务规则。编码规范和 Agent 工作方式留在 AGENTS.md/Harness。 -->\n\n# 适用范围\n\n<!-- 写适用的业务场景与明确例外；相关决策通过 relations 引用 ADR。 -->\n";
+  }
+
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, content, "utf8");
   return {
@@ -917,6 +967,7 @@ export function createRepositoryDocument(
     scope: input.scope,
     title,
     path: relative,
+    ...(author === undefined ? {} : { author }),
     owners: [],
     relations: [],
     sources: [],

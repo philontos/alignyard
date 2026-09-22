@@ -106,6 +106,13 @@ test("Runner workflow completes author, review, pull request and merge without c
   );
   assert.equal(reviewStarted.task.review?.status, "in_progress");
   assert.equal(reviewStarted.task.runner_id, "reviewer-runner");
+  const reviewPrompt = calls.filter((call) => call.method === "execution.start").at(-1)!.params.prompt;
+  assert.match(reviewPrompt, /git diff base-sha\.\.\.HEAD -- \.alignyard/);
+  assert.match(reviewPrompt, /先给出与本次需求相关的业务关键约束和 ADR 对照/);
+  assert.match(reviewPrompt, /本次修改或删除的规则也要检查/);
+  assert.match(reviewPrompt, /不能仅因未被引用就忽略约束/);
+  assert.match(reviewPrompt, /署名缺失.*不阻止 Review/);
+  assert.match(reviewPrompt, /旧 ADR 注明被替代部分且保留理由/);
   const reviewerExecution = db.prepare(
     "SELECT work_branch FROM platform_runner_executions WHERE id=?",
   ).get(reviewStarted.task.runner_execution_id) as { work_branch: string };
@@ -197,6 +204,7 @@ test("ordinary Task produces a reviewed design baseline and stops before PR crea
   assert.match(start.params.prompt, /直接询问用户，不要自行推断/);
   assert.match(start.params.prompt, /先识别受影响的业务概念及其经过的边界/);
   assert.match(start.params.prompt, /不能把实现表示当成业务含义/);
+  assert.match(start.params.prompt, /业务关键约束用 Doc，决策日志用 ADR/);
   assert.doesNotMatch(start.params.prompt, /Plan 是可选的|不要为了流程形式强制创建主 Spec/);
   assert.ok(start.params.prompt.length < 1_200);
 

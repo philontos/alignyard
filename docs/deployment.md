@@ -2,6 +2,46 @@
 
 当前方案面向一台普通 Linux VM，使用 Docker Compose 和 SQLite；没有绑定 GCP。GCP VM、AWS EC2、普通 VPS 或本机 Linux 都使用同一套部署方式。
 
+## 业务约束与决策日志发布
+
+本功能目标版本为 **Runner 0.1.13 / framework v5**，协议保持 v3。发布包含三个采用步骤，源码合入本身不会让业务仓库立即生效。
+
+**发布 Alignyard**：合入包含本功能的分支，在发布 checkout 安装依赖并验证，再构建所需 Mac 架构的制品：
+
+```sh
+npm ci
+npx tsc --noEmit --allowImportingTsExtensions
+npm test
+npm run -s ay -- validate .
+npm run build:runner:macos
+```
+
+把新制品放到部署环境的 `dist/runner/stable/darwin-<arch>/`，部署新版 Platform（见下方“启动或升级”）。Review prompt 随 Platform 发布，CLI、默认模板和 Skill 随 Runner 发布；两边都需要更新。后续修改 Runner 源码时还应提升 `server/runner/VERSION`，不要覆盖同版本制品。
+
+**安装本机工具**：通过 Web 安装引导重新运行新版 Runner 安装命令。已有 `~/.alignyard/runner.json` 时，安装器保留配对并重启服务。当前没有自动更新，Author 与 Reviewer 使用的 Runner 都应升级。检查：
+
+```sh
+alignyard-runner status
+ay new --help
+```
+
+确认 `ay new --help` 出现 `--constraint` 与 `--author`；安装包 manifest 的版本应为 0.1.13 或包含本功能的后续版本。无需更改全局 Git 身份。
+
+**更新业务仓库**：在独立工作分支执行，或使用 Alignyard 页面检测出的 Update Task：
+
+```sh
+ay update --check .
+ay update .
+ay validate .
+ay update --check .
+```
+
+核对 diff：更新 README、模板、Skill 与 manifest，不改旧业务正文或已有署名。若从 protocol v1/v2 升到 v3，还需按现有规则迁移旧 Plan 的任务账本结构；署名本身始终可缺省。将变化提交、Review 并合入业务仓库，最后一次 check 应无待更新项，manifest 的 framework_version 为 5 或更新版本。
+
+后续新任务读取新版 Skill 后，按“读取业务约束/ADR → 对照基线暴露冲突及联系人 → 人确认 → 更新约束并记录必要的新决策”工作。已有工作分支要合入框架更新并重新读取 Skill；正在运行的 Review 会话要重新加载新版提示，不能假定部署会改写已经发出的提示。
+
+验证新建业务约束 Doc 和 ADR 可自动署名、手动修改或留空；不需要为验收在正式知识中留下测试文档。历史文档不批量回填。使用示例见 [业务关键约束与决策日志](../.alignyard/docs/server/business-constraints-and-decisions.md)。
+
 ## 1. 构建 macOS Runner 制品
 
 分别在 Apple Silicon 和 Intel Mac 上运行：

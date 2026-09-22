@@ -34,8 +34,10 @@ Alignyard 只有两个 CLI：`alignyard-runner` 管理用户本地 Runner，`ay`
 |---|---|
 | `ay init [repository]` | 幂等创建最小 `.alignyard/` 骨架，不覆盖已有文件 |
 | `ay update [repository] [--check]` | 预览或应用当前 Runner 内置的知识框架版本；只更新管理文件，不覆盖知识正文 |
-| `ay new <doc|spec|adr|plan> <slug> --scope <scope> [--title TITLE]` | 从模板创建文档或可选技术方案 |
+| `ay new <doc|spec|adr|plan> <slug> --scope <scope> [--title TITLE] [--constraint] [--author NAME]` | 从模板创建文档或可选技术方案 |
 | `ay validate [repository] [--json]` | 校验 manifest、模板、Skill、路径、章节、ID 和 relations，并报告协议/框架版本 |
+
+业务约束用 `ay new doc <slug> --scope <scope> --constraint`，ADR 默认署名；`--author NAME` 可覆盖自动读取的目标仓库 Git user.name。author 仅是记录人和沟通入口，允许空值与手动编辑；普通 Doc/Spec/Plan 不自动署名。
 
 `ay` 只操作当前 Repository，不连接 Platform，也不上传知识或摘要。`ay init` 不覆盖现有骨架；已初始化 Repository 应先用 `ay update --check` 预览，再用 `ay update` 升级管理文件并由 Agent 整理知识。用户提交 Review 时，Runner 会再次运行 `ay validate`、检查 worktree 与提交并 push 当前工作分支。
 

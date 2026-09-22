@@ -204,6 +204,28 @@ test("ay new renders repository templates into stable scoped documents", () => {
   }
 });
 
+test("manual signatures remain optional, indexed and unchanged by framework updates", () => {
+  const root = temporaryRepository();
+  try {
+    initializeRepositoryProtocol(root);
+    createRepositoryDocument(root, { kind: "doc", slug: "overview", scope: "shared" });
+    const adr = createRepositoryDocument(root, { kind: "adr", slug: "choice", scope: "shared", author: "Example" });
+    const target = path.join(root, adr.path);
+    const edited = fs.readFileSync(target, "utf8").replace("author: Example", "author: Changed Contact");
+    fs.writeFileSync(target, edited);
+    fs.writeFileSync(path.join(root, ".alignyard/README.md"), "older framework");
+    updateRepositoryFramework(root);
+    assert.equal(fs.readFileSync(target, "utf8"), edited);
+    assert.equal(indexRepositoryProtocol(root).documents.find((item) => item.id === adr.id)?.author, "Changed Contact");
+    fs.writeFileSync(target, edited.replace(/^author:.*\n/m, ""));
+    assert.equal(validateRepositoryProtocol(root).ok, true);
+    assert.equal(indexRepositoryProtocol(root).documents.find((item) => item.id === adr.id)?.author, undefined);
+    assert.equal(updateRepositoryFramework(root, { check: true }).changes.length, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("protocol v3 creates task-ledger Plans with traceability metadata and validates governing knowledge", () => {
   const root = temporaryRepository();
   try {

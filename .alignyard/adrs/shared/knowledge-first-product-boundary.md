@@ -10,6 +10,7 @@ relations:
   - doc.server.knowledge-protocol
   - doc.web.overview
   - spec.shared.knowledge-first-task
+  - adr.shared.business-signature-contact
   - adr.shared.platform-runner-separation
 sources: []
 governing:
@@ -23,6 +24,8 @@ Alignyard 的核心价值不是记录整个工程，而是把 AI 不能随意重
 现有普通 Task 把“完成实现、测试和知识更新”作为默认目标，容易让工程知识成为编码后的补充材料，也使平台与通用 Agent 编码工具竞争。团队实际需要的是先把设计讨论闭环，再自由选择 Codex、Claude、IDE 或其他环境实现。
 
 # 决策
+
+署名部分后续由 `adr.shared.business-signature-contact` 调整：业务约束 Doc 与 ADR 增加可选沟通署名；以下保留原决策记录，其余边界仍适用。
 
 - Alignyard 默认负责从原始需求到知识设计包的闭环：Spec、必要 ADR、可选技术方案、目标 Docs、人工 Review 和版本化设计基线。
 - `.alignyard/` 只保存会影响 Agent 决策方向的核心工程意图与架构约束；代码、类型、测试和运行行为继续作为具体实现事实的真源，不把可直接从源码获得的细节复制进长期文档。

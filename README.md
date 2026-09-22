@@ -2,6 +2,16 @@
 
 Alignyard 是面向 AI-native 团队的核心工程意图与架构约束协作平台。`.alignyard/` 保存 AI 不能随意重新决定的产品意图、系统边界、长期取舍和变更契约；代码、类型、测试与运行行为继续承载具体实现事实。Platform 只负责用户、Repository/Task/Review 状态和流程框架，不保存工程知识、摘要或 Git diff；Git checkout、worktree、tmux、Agent CLI 与 `gh`/`glab` 始终在用户自己的 Mac 上运行。普通 Task 默认先形成经过审核的最小充分设计包，编码是可接入但非必选的后续能力。
 
+## 业务关键约束与决策日志
+
+- **业务关键约束用 Doc**：写当前必须遵守的业务规则与适用范围。
+- **决策日志用 ADR**：写选择、理由和取舍，关联对应业务约束。
+- 两者自动填写可编辑的 `author` 署名，用于后续联系；缺失不拦流程，署名不代表审批权。仓库 rules 仍由 AGENTS.md/Harness 承担，其他文档模块保留。
+
+需求先读取相关约束与决策 → Review 对照旧规则指出冲突及联系人 → 人确认取舍 → 更新业务约束并关联必要的新 ADR → 合入后供后续需求使用。
+
+详见 [使用说明](.alignyard/docs/server/business-constraints-and-decisions.md) 与 [发布及采用步骤](docs/deployment.md#业务约束与决策日志发布)。
+
 ## 架构
 
 ```text

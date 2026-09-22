@@ -82,7 +82,23 @@ Apply this review whenever a Task combines, transfers, compares, or reinterprets
 - **Plans:** a conditionally required executable technical design and implementation ledger for one intended change. It bridges accepted knowledge to implementation without becoming current system truth or duplicating business contracts.
 - **Constitution:** the reserved `doc.shared.constitution` entrypoint. It records repository-wide intent, boundaries, confirmation rules, and enforceable constraints.
 
-Keep every document concise and single-purpose. Record the intent, boundary, rationale, or invariant that must survive implementation; omit function-level mechanics, ordinary field plumbing, meeting transcripts, and implementation logs. Git commits, blame, PR/MR review, and Alignyard Review provide authorship and approval traceability; do not add document owners merely to duplicate that history.
+Keep every document concise and single-purpose. Record the intent, boundary, rationale, or invariant that must survive implementation; omit function-level mechanics, ordinary field plumbing, meeting transcripts, and implementation logs. Git commits, blame, PR/MR review, and Alignyard Review retain editing and approval history.
+
+## Business constraints and decision records
+
+Focus on two existing kinds; do not add a new document type or repurpose other modules:
+
+- Business constraints are Docs: state the current business rule and its applicable scope, including explicit exceptions. Create one with `ay new doc <slug> --scope <scope> --constraint`. Ordinary Docs, Specs, Plans and the existing Constitution remain available and unchanged. Coding rules and Agent operating instructions belong in AGENTS.md/Harness, not in this business-constraint content.
+- Decision records are ADRs: record the business choice, its reasons, alternatives and consequences. Create one with `ay new adr <slug> --scope <scope>`. Do not turn it into a meeting transcript or an implementation log.
+- Both creation paths fill a single optional `author` signature from the target repository's Git user.name, or from an explicit `--author <name>`. It identifies the recorder/contact, not an approver or permanent owner. Names may be edited or removed by hand; missing identity leaves the signature empty and never blocks validation or Review. Never invent a human identity, infer approval from Git authorship, or overwrite an existing signature during editing/update. Existing documents need no bulk backfill. Link related constraints and decisions using `relations`.
+
+Use this loop for each relevant requirement:
+
+1. Read the applicable business constraints and ADRs by scope, subject, relations and governing references before proposing the change. A missing governing reference does not exempt the change from a relevant rule.
+2. Before Review, compare the proposed behavior with the original constraints and decisions at the Task base commit, including documents changed or deleted by this Task. Report each conflict or uncertainty with the original file/section, proposed change, concrete impact and signature (or state that it is missing). Do not use an already-edited rule to prove the proposal obeys the original rule. Do not claim uninspected scopes are aligned.
+3. Let the human decide substantive tradeoffs. After confirmation, update the affected Doc to the current rule in the same change. If a meaningful choice changes, create a new ADR explaining which part of the old decision it supersedes; link both records and mark that replacement in the old ADR body while retaining its original rationale. Wording-only edits need no new ADR. Preserve existing signatures unless the user explicitly changes the contact.
+4. Verify the Doc and ADR express the same confirmed outcome, summarize unresolved issues, run `ay validate`, and follow the existing Review/merge flow. Subsequent requirements read the updated Doc and follow ADR relations to the current decision. Machine validation checks structure, not business alignment.
+
 
 ## Safety and quality
 
