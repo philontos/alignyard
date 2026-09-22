@@ -13,6 +13,8 @@ relations:
   - spec.shared.knowledge-first-task
   - spec.server.framework-update
   - spec.server.plan-task-ledger
+  - doc.server.business-constraints-and-decisions
+  - spec.server.business-constraint-attribution
 ---
 
 # 概述
@@ -46,9 +48,13 @@ v1 Repository 被平台判定为完成初始化时，默认分支必须包含 ma
 - v3 Plan 必含背景与目标、依据与约束、实现设计、修改范围、保持不变、实施任务、验证方案、文档更新和未决问题。“实施任务”按 `P<n>` Phase 划分，每项使用唯一 `P<n>.<m>` checkbox，并记录依赖、产出、完成标准、验证和验证结果；受阻的未完成项记录阻塞原因。
 - v2/v3 Constitution 是保留 ID `doc.shared.constitution` 的固定入口 Doc，记录 Repository 级产品意图、工程边界、人工确认规则与已有机器检查。
 
-文档必须有 `id`、`title`、`kind`、`scope`，并可使用 `relations`、`sources` 与 `governing` 字符串数组。历史 `owners` 字段继续兼容，但不作为作者追溯机制；作者、修改者与审核人使用 Git commit、Git blame、PR/MR 和 Alignyard Review 追溯。`sources` 记录仅供参考的外部来源；`governing` 记录当前文档必须遵守的 snapshot 文档 ID，不能指向自身或 Plan。Plan 必须受 Constitution 约束，并至少再引用一份实际约束本次实现的 Doc、Spec 或 ADR；新能力通常引用对应 Spec，已有知识已经清楚表达意图时可以引用适用 Doc/ADR。文件位于对应 kind 与 scope 目录，ID 采用 `<kind>.<scope>.<slug>`；`relations`、`governing` 只能引用当前快照内存在的文档 ID。初始化任务中的 title、正文和每个 Markdown 章节标题必须含中文；代码标识符、命令、路径、API 和产品名保持原样。
+文档必须有 `id`、`title`、`kind`、`scope`，并可使用 `relations`、`sources` 与 `governing` 字符串数组。业务关键约束 Doc 与 ADR 可使用单一可选字符串 `author` 表示记录人和沟通入口；创建时可自动填入或显式指定，手动修改、删除、留空均不影响校验或 Review。历史 `owners` 字段继续兼容，不新增责任模型；修改和批准继续使用 Git commit、Git blame、PR/MR 和 Alignyard Review 追溯。`sources` 记录仅供参考的外部来源；`governing` 记录当前文档必须遵守的 snapshot 文档 ID，不能指向自身或 Plan。Plan 必须受 Constitution 约束，并至少再引用一份实际约束本次实现的 Doc、Spec 或 ADR；新能力通常引用对应 Spec，已有知识已经清楚表达意图时可以引用适用 Doc/ADR。文件位于对应 kind 与 scope 目录，ID 采用 `<kind>.<scope>.<slug>`；`relations`、`governing` 只能引用当前快照内存在的文档 ID。初始化任务中的 title、正文和每个 Markdown 章节标题必须含中文；代码标识符、命令、路径、API 和产品名保持原样。
 
 所有内容遵守最小充分原则：如果一条信息缺失不会让 Agent 做出错误的整体设计决定，就不应为了“完整”写入 `.alignyard/`。具体函数调用、局部算法、普通字段流转和实现日志留在代码、测试、注释或 Task 会话中。
+
+## 业务关键约束与决策日志
+
+当前重点：Doc 写当前业务规则与适用范围，ADR 写选择、理由和后果。业务约束使用 `ay new doc <slug> --scope <scope> --constraint` 创建；ADR 默认便捷署名，普通 Doc、Spec、Plan、Constitution 保留原用法。Review 对照基线中的旧约束与当前 diff，指出冲突及署名；人确认后同步更新 Doc，必要时新增并关联替代 ADR。详见 [使用闭环](business-constraints-and-decisions.md)。
 
 ## 业务语义与边界契约
 

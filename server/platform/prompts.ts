@@ -78,6 +78,8 @@ Repository：${repository.name}
 
 本 Task 默认只形成最小充分、可供人工 Review 并指导后续实现的工程知识设计，不修改业务源码。先识别受影响的业务概念及其经过的边界；同一概念在两侧缺少权威等价证据时，必须明确表示差异与映射，或直接询问用户，不能把实现表示当成业务含义。若缺失信息可能影响产品意图、公共接口、架构边界、兼容性或修改范围，同样直接询问用户，不要自行推断。
 
+业务关键约束用 Doc，决策日志用 ADR；按 Skill 自动填写可编辑署名。对照原规则说明冲突与联系人，人确认后同步约束和决策。
+
 完成时运行 ay validate .，只提交必要的 .alignyard/ 变更并确保 git status --short 为空。总结修改的权威文档、关键约束、已确认问题和验证结果，然后等待用户在 Alignyard 提交 Review。
 
 边界：不要 push，不要创建或合并 PR/MR，不要修改 ${repository.base_branch}。Review、push 与设计基线记录由 Alignyard 在人工确认后完成。`;
@@ -90,7 +92,13 @@ export function taskReviewPrompt(task: PlatformTask): string {
 当前工作分支：${repository.work_branch}
 对比基线：${repository.base_branch}（${repository.base_commit || "以平台记录为准"}）
 
-Platform 只保存 Task 流转元数据，不保存工程知识、摘要或 diff。当前 reviewer worktree 是审核内容的唯一工作副本；请先读取其中的 .alignyard/，并使用 git diff ${repository.base_commit || repository.base_branch}...HEAD -- .alignyard 查看完整变化，然后等待 reviewer 提问或下达具体指令，不要自行展开完整审查。
+Platform 只保存 Task 流转元数据，不保存工程知识、摘要或 diff。当前 reviewer worktree 是审核内容的唯一工作副本；请先读取其中的 .alignyard/，并使用 git diff ${repository.base_commit || repository.base_branch}...HEAD -- .alignyard 查看完整变化。先给出与本次需求相关的业务关键约束和 ADR 对照，再等待 reviewer 继续提问；其他模块按需检查。
+
+业务对照要求：
+- 按 scope、业务主题、relations 和 governing 查找相关 Doc 与 ADR，不能仅因未被引用就忽略约束。
+- 对照上述固定基线 commit 中的原文与当前 diff；本次修改或删除的规则也要检查，不能用改后的规则证明没有冲突。
+- 每个冲突或信息不足项写清原文位置、本次变化、具体影响和 author 署名；署名缺失只提示“未署名”，不阻止 Review。无冲突时说明已检查范围，不把未知当作符合。
+- 署名仅是记录人和沟通入口，不等于审批权。实质取舍由人确认；确认后更新 Doc 为当前业务规则，必要时新增 ADR 并双向关联旧决策，旧 ADR 注明被替代部分且保留理由。普通措辞修改不新增 ADR。
 
 你可以按需：
 - 解释 Docs、Specs、ADRs、Plans 的内容及变更原因；

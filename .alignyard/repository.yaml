@@ -1,5 +1,5 @@
 version: 3
-framework_version: 4
+framework_version: 5
 preset: basic
 entrypoints:
   overview: doc.shared.overview

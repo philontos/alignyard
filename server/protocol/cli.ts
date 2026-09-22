@@ -14,12 +14,13 @@ export interface AyCliIO {
   err(message: string): void;
 }
 
-type OptionName = "repository" | "scope" | "title";
+type OptionName = "repository" | "scope" | "title" | "author";
 
 const VALUE_OPTIONS = new Set<OptionName>([
   "repository",
   "scope",
   "title",
+  "author",
 ]);
 
 const USAGE = `Alignyard knowledge protocol
@@ -27,7 +28,7 @@ const USAGE = `Alignyard knowledge protocol
 Usage:
   ay init [repository]
   ay update [repository] [--check]
-  ay new <doc|spec|adr|plan> <slug> --scope <scope> [--title <title>] [--repository <path>]
+  ay new <doc|spec|adr|plan> <slug> --scope <scope> [--title <title>] [--repository <path>] [--constraint] [--author <name>]
   ay validate [repository] [--json]
 
 Commands:
@@ -35,6 +36,11 @@ Commands:
   update     Update Alignyard-managed Skill, templates, and protocol structure without replacing knowledge
   new        Create one document from the repository template
   validate   Validate the manifest, templates, Skill, documents, and relations
+
+Attribution:
+  --constraint  Create a business constraint as a Doc with an editable signature
+  --author      Set the signature on a business constraint Doc or ADR (defaults to Git user.name)
+                Missing signatures never block validation or Review
 `;
 
 interface ParsedArguments {
@@ -42,11 +48,12 @@ interface ParsedArguments {
   values: Partial<Record<OptionName, string>>;
   json: boolean;
   check: boolean;
+  constraint: boolean;
   help: boolean;
 }
 
 function parseArguments(args: string[]): ParsedArguments {
-  const parsed: ParsedArguments = { positionals: [], values: {}, json: false, check: false, help: false };
+  const parsed: ParsedArguments = { positionals: [], values: {}, json: false, check: false, constraint: false, help: false };
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--json") {
@@ -57,6 +64,10 @@ function parseArguments(args: string[]): ParsedArguments {
       parsed.check = true;
       continue;
     }
+    if (argument === "--constraint") {
+      parsed.constraint = true;
+      continue;
+    }
     if (argument === "--help" || argument === "-h") {
       parsed.help = true;
       continue;
@@ -65,7 +76,7 @@ function parseArguments(args: string[]): ParsedArguments {
       const name = argument.slice(2) as OptionName;
       if (!VALUE_OPTIONS.has(name)) throw new Error(`未知选项：${argument}`);
       const value = args[index + 1];
-      if (!value || value.startsWith("--")) throw new Error(`${argument} 需要一个值`);
+      if (value === undefined || (!value && name !== "author") || value.startsWith("--")) throw new Error(`${argument} 需要一个值`);
       parsed.values[name] = value;
       index += 1;
       continue;
@@ -85,12 +96,13 @@ function assertNoExtraPositionals(parsed: ParsedArguments, expected: number) {
   if (parsed.positionals.length > expected) throw new Error(`参数过多：${parsed.positionals.slice(expected).join(" ")}`);
 }
 
-function assertAllowedOptions(parsed: ParsedArguments, allowed: OptionName[], options: { json?: boolean; check?: boolean } = {}) {
+function assertAllowedOptions(parsed: ParsedArguments, allowed: OptionName[], options: { json?: boolean; check?: boolean; constraint?: boolean } = {}) {
   const supported = new Set<OptionName>(allowed);
   const unexpected = Object.keys(parsed.values).find((name) => !supported.has(name as OptionName));
   if (unexpected) throw new Error(`当前命令不支持 --${unexpected}`);
   if (parsed.json && !options.json) throw new Error("当前命令不支持 --json");
   if (parsed.check && !options.check) throw new Error("当前命令不支持 --check");
+  if (parsed.constraint && !options.constraint) throw new Error("当前命令不支持 --constraint");
 }
 
 export async function runAy(
@@ -126,7 +138,7 @@ export async function runAy(
       return 0;
     }
     if (command === "new") {
-      assertAllowedOptions(parsed, ["repository", "scope", "title"]);
+      assertAllowedOptions(parsed, ["repository", "scope", "title", "author"], { constraint: true });
       assertNoExtraPositionals(parsed, 2);
       const [kindValue, slug] = parsed.positionals;
       if (!KNOWLEDGE_KINDS.includes(kindValue as KnowledgeKind) || !slug) {
@@ -140,6 +152,8 @@ export async function runAy(
         slug,
         scope,
         title: parsed.values.title,
+        constraint: parsed.constraint,
+        author: parsed.values.author,
       });
       io.out(JSON.stringify({ ok: true, repository: root, document }));
       return 0;

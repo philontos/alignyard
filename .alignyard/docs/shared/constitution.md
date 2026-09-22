@@ -48,7 +48,7 @@ governing: []
 
 人工 Review 决定设计是否被接受。Reviewer Agent 只能提供证据、解释或按人类指令修改，不能替人批准。普通 Task Review 通过只表示设计已确认并可开始实现；Repository Init 必须合入默认分支后才完成。
 
-文档作者、修改者和审核人使用 Git commit、Git blame、PR/MR Review 与 Alignyard Task Review 追溯。前期不为此增加独立 owner、责任人或原则作者模型；如果修改 governing 文档，提交人必须在 Review 中明确说明改变了什么核心意图，由指定 reviewer 确认。
+文档修改和审核轨迹继续使用 Git commit、Git blame、PR/MR Review 与 Alignyard Task Review。业务关键约束 Doc 与 ADR 可填写 author，作为可编辑、可缺省的记录人和沟通入口，不构成审批身份或权限；不新增 owner 或责任人模型。如果修改 governing 文档，提交人必须在 Review 中明确说明改变了什么核心意图，由指定 reviewer 确认。
 
 ## 机器检查
 
